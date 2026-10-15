@@ -1,0 +1,22 @@
+name: 问题反馈
+description: 报告应用中的错误或异常行为
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      placeholder: 例如 0.2.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 系统版本与主题
+      placeholder: 例如 Windows 11 x64，深色主题
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤与预期结果
+      description: 请描述操作过程、实际结果和预期结果；分享截图前请遮盖个人路径与密钥。
+    validations:
+      required: true

@@ -1,0 +1,770 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   1. Design tokens
+   --------------------------------------------------------------------------
+   Four themes live here. `:root` is light, `.dark` is dark, and `.glass`
+   is the "液态玻璃" theme (optionally stacked with `.dark` for a dimmer
+   glass, which is what `system` + glass resolves to at night).
+
+   !!! The variable *names* are part of the public surface of every component
+   in `src/components/ui` and `src/features/**`. Rename at your peril.
+   ========================================================================== */
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --primary: 262 83% 58%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 262 83% 58%;
+    --radius: 0.6rem;
+
+    /* --- Glass theme control panel ------------------------------------ */
+    /* Alpha is baked in, so `background-color: hsl(var(--glass))` is a
+       finished translucent fill rather than a solid colour. */
+    --glass: 0 0% 100% / 0.55;
+    --glass-strong: 0 0% 100% / 0.72;
+    --glass-soft: 0 0% 100% / 0.3;
+    --glass-border: 255 100% 100% / 0.5;
+    --glass-highlight: 0 0 100% / 0.9;
+    --glass-blur: 18px;
+    --glass-saturate: 170%;
+    /* Coloured (never pure-black) float shadow. */
+    --glass-shadow: hsl(258 55% 30% / 0.34);
+    /* Drives shadows and translucency of plain `.glass` panes. */
+    --glass-border-alpha: 0.18;
+    --glass-fill-alpha: 0.6;
+    --glass-shade: 0 0% 100% / 0.06;
+    /* Tint of the animated background scrim, under the colour blobs. */
+    --glass-scrim: 235 40% 97%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 8% 7%;
+    --card-foreground: 0 0% 98%;
+    --primary: 263 70% 60%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 50.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 18%;
+    --input: 240 3.7% 18%;
+    --ring: 263 70% 60%;
+
+    /* Darker, more translucent glass: light glass on a dark backdrop turns
+       into frosted plastic. */
+    --glass: 240 30% 12% / 0.55;
+    --glass-strong: 240 28% 16% / 0.68;
+    --glass-soft: 240 30% 12% / 0.3;
+    --glass-border: 240 100% 95% / 0.16;
+    --glass-highlight: 240 100% 98% / 0.16;
+    --glass-shadow: hsl(260 70% 4% / 0.5);
+    --glass-border-alpha: 0.1;
+    --glass-fill-alpha: 0.55;
+    --glass-shade: 0 0% 100% / 0.03;
+    --glass-scrim: 248 40% 6%;
+  }
+
+  /* --- 液态玻璃 ------------------------------------------------------
+     `glass` is orthogonal to light/dark: it supplies a vivid, always-effectively
+     dark backdrop because `backdrop-filter` needs a *busy*, saturated layer
+     underneath to be visible at all. Foreground colours here are deliberately
+     light so text stays readable over the blobs. */
+  .glass {
+    --background: 250 42% 9%;
+    --foreground: 240 100% 98%;
+    --card: 250 34% 15% / 0.55;
+    --card-foreground: 240 100% 98%;
+    --primary: 265 85% 68%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 252 30% 22% / 0.6;
+    --secondary-foreground: 240 100% 98%;
+    --muted: 252 28% 22% / 0.55;
+    --muted-foreground: 248 24% 80%;
+    --accent: 258 34% 28% / 0.6;
+    --accent-foreground: 240 100% 98%;
+    --destructive: 0 74% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 250 40% 100% / 0.14;
+    --input: 250 40% 100% / 0.12;
+    --ring: 265 90% 74%;
+    /* Roomier corners: part of what makes a pane read as a droplet. */
+    --radius: 0.95rem;
+
+    --glass: 250 40% 100% / 0.11;
+    --glass-strong: 250 38% 100% / 0.17;
+    --glass-soft: 250 40% 100% / 0.06;
+    --glass-border: 250 100% 100% / 0.28;
+    --glass-highlight: 0 0% 100% / 0.4;
+    --glass-shadow: hsl(266 80% 5% / 0.55);
+    --glass-border-alpha: 0.14;
+    --glass-fill-alpha: 0.5;
+    --glass-shade: 0 0% 100% / 0.05;
+    --glass-scrim: 250 42% 9%;
+  }
+
+  /* Midnight glass: user picked `system` and the OS went dark. Keep the
+     glass identity, drop the brightness. */
+  .glass.dark {
+    --background: 252 45% 6%;
+    --card: 250 34% 10% / 0.5;
+    --muted: 252 28% 16% / 0.55;
+    --accent: 258 32% 20% / 0.6;
+    --border: 250 40% 100% / 0.11;
+    --input: 250 40% 100% / 0.1;
+    --glass: 250 40% 100% / 0.08;
+    --glass-strong: 250 38% 100% / 0.13;
+    --glass-soft: 250 40% 100% / 0.05;
+    --glass-border: 250 100% 100% / 0.2;
+    --glass-highlight: 0 0% 100% / 0.28;
+    --glass-shadow: hsl(266 80% 2% / 0.6);
+    --glass-scrim: 252 45% 5%;
+  }
+}
+
+/* ==========================================================================
+   2. Base
+   ========================================================================== */
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei",
+      sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    /* Small, global touch: colour/BG changes settle instead of snapping. */
+    transition: background-color 220ms ease, color 220ms ease;
+  }
+
+  /* Tauri 桌面应用：禁用文本选择的拖拽干扰，但保留输入框可选 */
+  body {
+    user-select: none;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+  }
+
+  /* Keyboard-only focus ring, shared by every interactive element. */
+  :focus-visible {
+    outline: none;
+  }
+}
+
+/* ==========================================================================
+   3. Animated backdrop for the glass theme
+   --------------------------------------------------------------------------
+   `backdrop-filter` is invisible over a flat colour: it needs something with
+   contrast to blur. `#lg-backdrop` paints four slow, drifting radial
+   gradients (fixed, GPU-composited, `will-change: transform`) and the whole UI
+   floats above it.
+
+   NAMING: these hooks use a `lg-` prefix, *never* `glass-`. Tailwind treats
+   any `glass-*` class in the markup as a utility candidate, fails to find one,
+   and — because bare `.glass` exists in the stylesheet — emits a bogus bare
+   `.glass` rule as a "candidate selector". `tailwind-merge` then strips the
+   caller's real glass classes because it believes they were overridden. The
+   `lg-` namespace is unambiguous and dodges that entirely.
+   ========================================================================== */
+
+html:not(.glass) #lg-backdrop,
+html:not(.glass) #lg-backdrop-image {
+  display: none;
+}
+
+html.glass #lg-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background-color: hsl(var(--glass-scrim));
+}
+
+/* --- 3b. The user's custom wallpaper ------------------------------------
+   Optional, and only ever visible under `.glass`: the block below inherits the
+   `display: none` above through `#lg-backdrop`, so a custom image never leaks
+   into the flat 浅色 / 深色 themes.
+
+   Everything is driven by custom properties that `src/lib/backdrop.ts` writes
+   onto `<html>`, which keeps the module free of any CSS knowledge:
+
+     --lg-bg-image    inline `url("asset://...")`; absent = no custom image
+     --lg-bg-opacity  0–1   (the UI slider is 0–100)
+     --lg-bg-blur     0–60px
+     --lg-bg-fit      a `background-size` keyword (auto when tiling)
+
+   The picture deliberately sits *under* `.lg-hue`: that layer animates
+   `hue-rotate`, which must tint the colour blobs, never the user's wallpaper. */
+
+html.glass #lg-backdrop-image {
+  /* `background-image` is set inline (or not at all). Gating the box on it
+     means "no custom image" costs exactly zero paint work. */
+  display: block;
+  position: absolute;
+  inset: 0;
+  background-image: var(--lg-bg-image, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: var(--lg-bg-fit, cover);
+  background-color: transparent;
+  opacity: var(--lg-bg-opacity, 1);
+  /* One declaration per property rather than a `background` shorthand: this
+     block owns the *defaults*, and `backdrop.ts` overrides `background-image`,
+     `background-size` and `background-repeat` one property at a time, so a
+     shorthand here would only make the two layers fight. `saturate` is kept
+     subtle so the wallpaper stays a photo rather than a colour wash. */
+  filter: blur(var(--lg-bg-blur, 0px)) saturate(108%);
+  /* Slightly over-sized so a blurred image has no transparent edge showing the
+     scrim through it; the overflow is clipped by `#lg-backdrop`. */
+  transform: scale(1.02);
+  transition: opacity 220ms ease;
+}
+
+/* Tiling is the one fit mode that repeats — and it is NOT done here.
+   The module sets `background-repeat` inline on the layer element itself,
+   together with `background-size: auto`, which is both simpler and immune to a
+   cascade trap observed in WebView2: a `.lg-bg-tile #lg-backdrop-image
+   { background-repeat: repeat }` rule kept losing to the `:is(.glass, .glass.dark)`
+   block above even though it is more specific, while the very same declaration
+   with `!important` won. `src/lib/backdrop.ts` records the experiment. */
+
+/* The blobs themselves. Kept as pseudo-elements of a single element so the
+   DOM stays clean and only one layer is promoted per group. */
+.lg-blobs,
+.lg-blobs::before,
+.lg-blobs::after {
+  position: absolute;
+  content: "";
+  border-radius: 9999px;
+  will-change: transform;
+  /* Soft edges: the gradient reaches transparent well before the box. */
+  filter: blur(0px);
+}
+
+.lg-blobs {
+  inset: -25%;
+  background:
+    radial-gradient(
+      38% 38% at 22% 28%,
+      hsl(268 92% 62% / 0.85) 0%,
+      hsl(268 92% 62% / 0.42) 42%,
+      transparent 72%
+    ),
+    radial-gradient(
+      34% 34% at 78% 22%,
+      hsl(196 94% 56% / 0.78) 0%,
+      hsl(196 94% 56% / 0.36) 44%,
+      transparent 74%
+    ),
+    radial-gradient(
+      40% 40% at 68% 78%,
+      hsl(330 92% 62% / 0.72) 0%,
+      hsl(330 92% 62% / 0.32) 46%,
+      transparent 76%
+    ),
+    radial-gradient(
+      30% 30% at 12% 82%,
+      hsl(160 88% 54% / 0.6) 0%,
+      hsl(160 88% 54% / 0.26) 48%,
+      transparent 78%
+    );
+  filter: blur(60px) saturate(120%);
+  animation: blob-drift-a 22s ease-in-out infinite;
+}
+
+/* Two extra orbs, each on its own clock so the motion never looks looped. */
+.lg-blobs::before {
+  inset: 10%;
+  background: radial-gradient(
+    42% 42% at 50% 50%,
+    hsl(248 96% 68% / 0.55) 0%,
+    hsl(248 96% 68% / 0.22) 50%,
+    transparent 76%
+  );
+  filter: blur(52px);
+  animation: blob-drift-b 28s ease-in-out infinite;
+}
+
+.lg-blobs::after {
+  inset: 4%;
+  background: radial-gradient(
+    34% 34% at 40% 60%,
+    hsl(42 96% 62% / 0.42) 0%,
+    hsl(42 96% 62% / 0.16) 52%,
+    transparent 78%
+  );
+  filter: blur(46px);
+  animation: blob-drift-c 34s ease-in-out infinite;
+}
+
+/* Vignette + sheen on top of the blobs: keeps the window edges dark so the
+   glass panels have something to contrast against. */
+.lg-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      120% 120% at 50% 0%,
+      transparent 30%,
+      hsl(var(--glass-scrim) / 0.55) 100%
+    ),
+    linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.05) 0%,
+      transparent 40%,
+      hsl(0 0% 0% / 0.18) 100%
+    );
+}
+
+:is(.glass, .glass.dark) .lg-hue {
+  position: absolute;
+  inset: 0;
+  animation: hue-drift 48s linear infinite;
+}
+
+/* ==========================================================================
+   4. The frosted pane
+   --------------------------------------------------------------------------
+   Only large surfaces (sidebar, cards, dialogs, the app shell) should carry
+   this: every `backdrop-filter` element forces a separate compositing pass,
+   and dozens of them on one screen visibly costs frames in WebView2.
+
+   WHY THIS IS NOT IN `@layer components`:
+   Tailwind content-gates the rules it emits from `@layer components` — a
+   component rule is dropped unless its class name literally appears in a
+   scanned `content` file. That is fine for `.btn`-style classes used with
+   literal strings in JSX, but these hooks are applied from `index.html`
+   (`.lg-blobs`, `.lg-veil`, `.lg-hue`) and, for `.lg-pane*`, are library
+   API that no page happens to use yet. Tailwind silently deleted `.lg-pane`,
+   `.lg-sheen` and `.lg-bar` from the production bundle. Declaring them as
+   ordinary CSS (outside any `@layer`) makes their emission unconditional.
+
+   NAMING: `lg-` prefix, deliberately *not* `glass-`. Every `glass-*` string
+   in the markup is read by Tailwind as a utility candidate; on failure it
+   emits a bogus bare `.glass` rule as a fallback candidate selector, and
+   `tailwind-merge` then strips the caller's real glass classes because it
+   believes they were overridden.
+   ========================================================================== */
+
+.glass {
+  background-color: hsl(var(--glass));
+  /* Inset top highlight = light catching the upper face of the pane;
+     the coloured outer shadow = it floats instead of being printed on. */
+  box-shadow:
+    inset 0 1px 0 0 hsl(var(--glass-highlight)),
+    inset 0 -1px 0 0 hsl(0 0% 0% / 0.06),
+    0 10px 30px -12px var(--glass-shadow);
+}
+
+/* Solidity tiers: `.lg-strong` for dialogs/menus that sit above content,
+   `.lg-soft` for chrome that should almost disappear. */
+.lg-strong {
+  background-color: hsl(var(--glass-strong));
+}
+
+.lg-soft {
+  background-color: hsl(var(--glass-soft));
+}
+
+/* The pane treatment proper. Safe without `backdrop-filter` support: the
+   alpha fill alone still reads as an intentional surface. */
+.lg-pane {
+  background-color: hsl(var(--glass));
+  border: 1px solid hsl(var(--glass-border));
+  border-radius: calc(var(--radius) + 6px);
+  box-shadow:
+    inset 0 1px 0 0 hsl(var(--glass-highlight)),
+    inset 0 -1px 0 0 hsl(0 0% 0% / 0.08),
+    0 12px 36px -14px var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* Heavier variant for anything modal: it must separate from the page
+   underneath, so it blurs more, is more opaque, and sits higher. */
+.lg-pane-strong {
+  background-color: hsl(var(--glass-strong));
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 0 hsl(var(--glass-highlight)),
+    inset 0 -1px 0 0 hsl(0 0% 0% / 0.08),
+    0 24px 60px -20px var(--glass-shadow);
+}
+
+/* A hairline specular streak across the top of a pane. Purely decorative:
+   `pointer-events: none` so it can never swallow a click. */
+.lg-sheen {
+  position: relative;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lg-sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 42%;
+  background: linear-gradient(
+    175deg,
+    hsl(0 0% 100% / 0.14) 0%,
+    hsl(0 0% 100% / 0.04) 45%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* Frosted chrome that should *not* change the layout box: the sidebar, and
+   badges sitting on top of a cover image. */
+.lg-bar {
+  background-color: hsl(var(--glass));
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+  backdrop-filter: blur(20px) saturate(170%);
+}
+
+/* ==========================================================================
+   5. Reaching the shell markup
+   --------------------------------------------------------------------------
+   The glass theme has to reach shell markup that lives in files this task
+   must not edit (`src/App.tsx`). Rather than touching those files, the
+   *ancestor* class does the work:
+
+     .glass  .bg-card        → frosted pane
+     .glass  aside.bg-card   → frosted sidebar (heavier frost)
+     .glass  [role=dialog]   → frosted modal
+
+   Descendant selectors are used rather than `[.glass_&]:` utilities because
+   they apply to markup that does not carry the class at all. Under light/dark
+   none of these rules match, so those themes stay pixel-identical.
+   ========================================================================== */
+
+:is(.glass, .glass.dark) .bg-card {
+  background-color: hsl(var(--glass));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow:
+    inset 0 1px 0 0 hsl(var(--glass-highlight)),
+    0 10px 30px -14px var(--glass-shadow);
+}
+
+:is(.glass, .glass.dark) aside.bg-card,
+:is(.glass, .glass.dark) [role="dialog"],
+:is(.glass, .glass.dark) .lg-panel {
+  background-color: hsl(var(--glass-strong));
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  backdrop-filter: blur(26px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 0 hsl(var(--glass-highlight)),
+    0 20px 50px -20px var(--glass-shadow);
+}
+
+/* Modal scrim: darker + slightly blurred so the panel reads as lifted. */
+:is(.glass, .glass.dark) [role="presentation"]:has(> [role="dialog"]) {
+  background-color: hsl(var(--glass-scrim) / 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* Forms inside glass panes: translucent wells instead of opaque slabs. */
+:is(.glass, .glass.dark) input:not([type="checkbox"]):not([type="radio"]),
+:is(.glass, .glass.dark) textarea,
+:is(.glass, .glass.dark) select {
+  background-color: hsl(var(--glass-soft));
+}
+
+/* On a glass page the muted strip behind segmented controls must stay
+   translucent too, otherwise it punches an opaque hole in the pane. */
+:is(.glass, .glass.dark) .bg-muted {
+  background-color: hsl(var(--glass-soft));
+}
+
+/* ==========================================================================
+   6. Motion utilities
+   --------------------------------------------------------------------------
+   Declared as plain CSS rather than inside `@layer utilities` for the same
+   reason as section 4: Tailwind only emits layer rules whose class name
+   appears in a scanned `content` file, which silently dropped `.tap` and
+   `.lift` from the first production build even though they are used in JSX.
+   Plain rules also win the cascade against `@layer utilities` output, which
+   is what we want: `.tap`/`.lift` are opt-in behaviours, not defaults.
+   ========================================================================== */
+
+/* One persistent selection surface travels between the sidebar rows. */
+.sidebar-slider {
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: hsl(var(--primary));
+  box-shadow: 0 2px 5px hsl(var(--primary) / 0.16);
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 220ms ease, border-color 220ms ease, box-shadow 220ms ease;
+}
+
+.dark .sidebar-slider {
+  background-image: linear-gradient(120deg, hsl(var(--primary) / 0.1), hsl(var(--ring) / 0.45));
+  border-color: hsl(var(--ring) / 0.35);
+  box-shadow: 0 0 14px hsl(var(--primary) / 0.2), inset 0 1px 0 hsl(0 0% 100% / 0.12);
+}
+
+:is(.glass, .glass.dark) .sidebar-slider {
+  border-radius: 999px;
+  background-color: hsl(var(--primary) / 0.5);
+  background-image: linear-gradient(120deg, hsl(var(--ring) / 0.45), hsl(var(--primary) / 0.12));
+  border-color: hsl(var(--glass-border));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: inset 0 1px 0 hsl(var(--glass-highlight)), 0 4px 14px hsl(var(--primary) / 0.25);
+}
+
+/* Homepage artwork and copy travel together, with the old slide retained for
+   the exit animation. Controls remain fixed and respond to rapid clicks. */
+@keyframes home-slide-in {
+  from { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * 7%)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes home-slide-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * -7%)); }
+}
+
+.home-hero-slide-in { animation: home-slide-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.home-hero-slide-out { animation: home-slide-out 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+.home-carousel-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgb(255 255 255 / 0.3);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.1);
+  color: white;
+  backdrop-filter: blur(12px);
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+.home-carousel-arrow:hover:not(:disabled) { background: rgb(255 255 255 / 0.25); }
+.home-carousel-arrow:active:not(:disabled) { transform: scale(0.94); }
+.home-carousel-arrow:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.home-carousel-arrow:disabled { opacity: 0.35; cursor: default; }
+
+/* Route content entering. Applied to the routed page area. */
+.app-sidebar { view-transition-name: app-sidebar; }
+[data-detail-cover] { view-transition-name: game-cover; }
+
+/* The cover travels independently; toolbar coordinates never animate. */
+::view-transition { pointer-events: none; }
+::view-transition-group(game-cover) {
+  animation-duration: 360ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(game-cover),
+::view-transition-new(game-cover) { animation-duration: 240ms; }
+::view-transition-group(app-sidebar),
+::view-transition-new(app-sidebar) { animation: none; }
+::view-transition-old(app-sidebar) { animation: none; opacity: 0; }
+::view-transition-old(root) { animation: game-page-out 160ms ease-out both; }
+::view-transition-new(root) { animation: game-page-in 240ms ease-out both; }
+@keyframes game-page-out { to { opacity: 0; } }
+@keyframes game-page-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes detail-content-open {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.detail-content-enter { animation: detail-content-open 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+.animate-page {
+  animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-page-slow {
+  animation: fade-up 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Skeleton sweep. Two layers: a static base plus a travelling highlight. */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: hsl(var(--muted) / 0.7);
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--foreground) / 0.06) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.shimmer-strong::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--foreground) / 0.12) 50%,
+    transparent 100%
+  );
+}
+
+/* Press feedback for touch-like targets. Only on `:active`, so nothing moves
+   until the user actually commits to a click. */
+.tap {
+  transition-property: transform, background-color, border-color, color,
+    box-shadow, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tap:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Lift for interactive cards. Transform + shadow only — no layout work. */
+.lift {
+  transition-property: transform, box-shadow, border-color, background-color;
+  transition-duration: 180ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.lift:hover {
+  transform: translate3d(0, -3px, 0);
+}
+
+.lift:active {
+  transform: translate3d(0, -1px, 0) scale(0.995);
+}
+
+/* ==========================================================================
+   7. Scrollbars
+   ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+  background-clip: content-box;
+}
+
+:is(.glass, .glass.dark) ::-webkit-scrollbar-thumb {
+  background: hsl(var(--glass-border));
+  background-clip: content-box;
+}
+
+:is(.glass, .glass.dark) ::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--glass-strong));
+  background-clip: content-box;
+}
+
+/* ==========================================================================
+   8. Accessibility: reduced motion
+   --------------------------------------------------------------------------
+   Everything that moves is switched off here. The background is frozen into a
+   static composition (it stays, it just stops drifting), and entrances collapse
+   to a plain opacity fade so nothing ever "jumps" at the user.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-content-enter { animation: none !important; }
+  .home-hero-slide-in,
+  .home-hero-slide-out { transform: none !important; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Keep a *very* short fade for entrances: cutting from opacity 0 to 1 in a
+     single frame is itself jarring, but the drift/scale must go. */
+  .animate-page,
+  .animate-page-slow,
+  .animate-fade-in {
+    animation: fade-in 90ms ease-out both !important;
+    transform: none !important;
+  }
+
+  .animate-dialog-in {
+    animation: fade-in 90ms ease-out both !important;
+    transform: none !important;
+  }
+
+  .lift:hover,
+  .lift:active,
+  .tap:active:not(:disabled) {
+    transform: none !important;
+  }
+
+  /* Stills the blobs but leaves them visible. */
+  .lg-blobs,
+  .lg-blobs::before,
+  .lg-blobs::after,
+  .lg-hue {
+    animation: none !important;
+  }
+
+  /* Skeletons become a flat pulse rather than a travel sweep. */
+  .shimmer::after {
+    animation: fade-in 1.4s ease-in-out infinite alternate !important;
+    transform: none !important;
+    background: hsl(var(--foreground) / 0.05);
+  }
+}

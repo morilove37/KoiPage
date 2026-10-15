@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:ipc
+      - run: pnpm check:release
+      - name: Read release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "body<<KOIPAGE_RELEASE_NOTES" >> $env:GITHUB_OUTPUT
+          Get-Content "docs/releases/v$version.md" -Raw >> $env:GITHUB_OUTPUT
+          "KOIPAGE_RELEASE_NOTES" >> $env:GITHUB_OUTPUT
+      - name: Build signed installers and updater manifest
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v${{ steps.notes.outputs.version }}
+          releaseName: 恋页 KoiPage v${{ steps.notes.outputs.version }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          tauriScript: pnpm tauri
+      - name: Keep runtime for release verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: koipage-windows-runtime
+          path: src-tauri/target/release/galgame-manager.exe
+          retention-days: 3
+          if-no-files-found: error
