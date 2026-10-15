@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "恋页 KoiPage",
+  "version": "0.2.0",
+  "identifier": "com.galgame.manager",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "恋页 KoiPage · Galgame 管理器",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "windows": {
+      "wix": {
+        "language": "zh-CN",
+        "upgradeCode": "6DEDB5F6-B6AD-591D-9E2F-6A962908D12D"
+      },
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ]
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/morilove37/KoiPage/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3QThBNjUxMDRBODQxMUUKUldRZVFhZ0VVYWFvOSs0ZUlJSGhMVzB0RUtOMHZlWGJDVXlFVFgraGNocXd5SE9yU2pFUGZuTTEK"
+    }
+  }
+}

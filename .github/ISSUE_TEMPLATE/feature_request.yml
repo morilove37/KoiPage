@@ -1,0 +1,14 @@
+name: 功能建议
+description: 提出使用中的需求与改进建议
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 希望改善什么体验？
+      description: 请描述使用场景和遇到的问题。
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望如何改进？

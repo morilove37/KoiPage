@@ -1,0 +1,55 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build products and local verification files
+/src-tauri/target/
+/src-tauri/gen/schemas/
+/_verify/
+/_backups/
+/_*.png
+/_*.html
+/VERIFY.md
+/docs/takeover.md
+
+# Local data and credentials
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.key
+*.key.pub
+*.pem
+*.pfx
+*.p12
+*.dpapi
+
+# Installers are published as Release assets
+*.msi
+*.exe
+*.sig

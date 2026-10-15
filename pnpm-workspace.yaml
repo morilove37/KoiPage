@@ -1,0 +1,7 @@
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@tauri-apps/plugin-opener@2.7.2'
+  - '@tauri-apps/plugin-sql@2.6.0'
+  - '@tauri-apps/plugin-http@2.8.3'
