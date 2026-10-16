@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager};
 use super::error::{CmdError, CmdResult};
 use crate::launcher::RunningGames;
 
-/// Wait for any launch registration, then protect active play-session tracking.
+/// Wait for launch registration or session settlement before allowing an update.
 #[tauri::command]
 pub async fn ensure_update_ready(app: AppHandle) -> CmdResult<()> {
     let running = app.state::<RunningGames>();
