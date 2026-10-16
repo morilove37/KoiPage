@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,8 @@ const STATUS_OPTIONS = [
   })),
 ];
 
+const ShareDialog = lazy(() => import("@/features/share/ShareDialog"));
+
 /**
  * Compare two nullable strings/numbers for sorting.
  *
@@ -95,6 +97,7 @@ export default function LibraryPage() {
   const [importTotal, setImportTotal] = useState(0);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [tagsExpanded, setTagsExpanded] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   /**
    * Multi-select for bulk deletion.
@@ -418,6 +421,7 @@ export default function LibraryPage() {
             ))}
           </div>
           <Button onClick={() => setScanOpen(true)}>添加游戏</Button>
+          <Button variant="outline" disabled={loading} onClick={() => setShareOpen(true)}>分享足迹</Button>
           {selectMode ? (
             <Button variant="outline" onClick={exitSelectMode}>
               退出多选
@@ -699,6 +703,7 @@ export default function LibraryPage() {
         onClose={() => setScanOpen(false)}
         onConfirmed={handleConfirmed}
       />
+      {shareOpen ? <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">正在打开分享…</p>}><ShareDialog games={games} onClose={() => setShareOpen(false)} /></Suspense> : null}
 
       {metadataGame ? (
         <MetadataDialog

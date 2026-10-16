@@ -30,6 +30,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm check:ipc
+      - run: pnpm test:share
       - run: pnpm check:release
       - run: cargo test --lib --locked
         working-directory: src-tauri
