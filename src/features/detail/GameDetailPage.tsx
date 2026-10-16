@@ -9,9 +9,11 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input, Textarea } from "@/components/ui/input";
+import { PathInput } from "@/components/ui/path-input";
 import { Select } from "@/components/ui/select";
 import { Tabs } from "@/components/ui/tabs";
 import LaunchDialog from "@/features/launch/LaunchDialog";
+import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 import type { GameExitedPayload } from "@/features/io/io";
 import {
@@ -123,7 +125,7 @@ export default function GameDetailPage() {
   /** Set once metadata was written, so closing the dialog triggers one reload. */
   const [metadataDirty, setMetadataDirty] = useState(false);
   const [confirmMetadata, setConfirmMetadata] = useState(false);
-  const [launchOpen, setLaunchOpen] = useState(false);
+  const launching = useAppStore(state => state.launching[gameId] === true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /**
@@ -205,6 +207,8 @@ export default function GameDetailPage() {
       // explicit action will retry.
     }
   }, [gameId]);
+
+  const launcher = useGameLauncher(() => void refreshQuietly());
 
   /**
    * Play time is accumulated by the Rust side when the launched process exits,
@@ -470,11 +474,12 @@ export default function GameDetailPage() {
 
           <div className="flex shrink-0 items-center gap-2">
             <Button
-              onClick={() => setLaunchOpen(true)}
+              loading={launching}
+              onClick={() => void launcher.launch(game)}
               title={
                 game.exePath?.trim()
                   ? "启动这个游戏"
-                  : "还没有设置 exe 路径，点开可以查看详情"
+                  : "请在「路径与启动」选择可执行文件并保存"
               }
             >
               启动游戏
@@ -506,6 +511,8 @@ export default function GameDetailPage() {
       </div>
 
       <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
+      {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
+      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
       {error ? (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
@@ -680,20 +687,12 @@ export default function GameDetailPage() {
             </CardHeader>
             <CardContent className="grid gap-3 sm:grid-cols-2">
               <Field label="安装路径" className="sm:col-span-2">
-                <Input
-                  value={form.installPath}
-                  onChange={(event) =>
-                    setForm({ ...form, installPath: event.target.value })
-                  }
-                />
+                <PathInput label="安装路径" kind="directory" value={form.installPath} disabled={saving}
+                  onChange={value => setForm(before => before ? { ...before, installPath: value } : before)} />
               </Field>
               <Field label="可执行文件" className="sm:col-span-2">
-                <Input
-                  value={form.exePath}
-                  onChange={(event) =>
-                    setForm({ ...form, exePath: event.target.value })
-                  }
-                />
+                <PathInput label="可执行文件" kind="file" value={form.exePath} disabled={saving}
+                  onChange={value => setForm(before => before ? { ...before, exePath: value } : before)} />
               </Field>
               <Field label="启动参数">
                 <Input
@@ -704,21 +703,14 @@ export default function GameDetailPage() {
                 />
               </Field>
               <Field label="工作目录">
-                <Input
-                  value={form.workdir}
-                  onChange={(event) =>
-                    setForm({ ...form, workdir: event.target.value })
-                  }
-                />
+                <PathInput label="工作目录" kind="directory" value={form.workdir} disabled={saving}
+                  onChange={value => setForm(before => before ? { ...before, workdir: value } : before)} />
               </Field>
               <Field label="存档路径" className="sm:col-span-2">
-                <Input
-                  value={form.savePath}
-                  onChange={(event) =>
-                    setForm({ ...form, savePath: event.target.value })
-                  }
-                />
+                <PathInput label="存档路径" kind="either" value={form.savePath} disabled={saving}
+                  onChange={value => setForm(before => before ? { ...before, savePath: value } : before)} />
               </Field>
+              <p className="text-xs text-muted-foreground sm:col-span-2">路径可直接输入、粘贴或点击按钮选择。修改后点击右上角「保存」生效；工作目录留空时使用可执行文件所在目录。</p>
             </CardContent>
           </Card>
         ) : null}
@@ -857,14 +849,14 @@ export default function GameDetailPage() {
         onClose={closeMetadata}
         onApplied={() => setMetadataDirty(true)}
       />
-      <LaunchDialog
-        open={launchOpen}
-        game={game}
-        onClose={() => setLaunchOpen(false)}
+      {launcher.dialogGame ? <LaunchDialog
+        open
+        game={launcher.dialogGame}
+        onClose={launcher.closeDialog}
         // Silent refresh: a full `load()` would flip `loading` and unmount this
         // very dialog the moment the game starts.
         onLaunched={() => void refreshQuietly()}
-      />
+      /> : null}
     </div>
   );
 }

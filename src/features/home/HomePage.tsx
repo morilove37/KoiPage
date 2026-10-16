@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/card";
 import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
 import LaunchDialog from "@/features/launch/LaunchDialog";
+import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import { gamesList, gamesTagsGet, playSessionsList, tagsList } from "@/lib/db";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
@@ -181,6 +182,7 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
   onLaunch?: () => void;
 }) {
   const { t } = useLocalizedTags();
+  const launching = useAppStore(state => state.launching[game.id] === true);
 
   return (
     <>
@@ -207,7 +209,7 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
         <div className="home-game-actions">
           {active ? (
             <>
-              <button type="button" className="home-game-play" onClick={onLaunch}><GeometryIcon name="play" />{game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</button>
+              <button type="button" className="home-game-play disabled:cursor-wait disabled:opacity-60" disabled={launching} aria-busy={launching} onClick={onLaunch}><GeometryIcon name="play" />{launching ? "启动中…" : game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</button>
               <Link to={`/library/${game.id}`} className="home-game-details">查看详情 <span aria-hidden="true">↗</span></Link>
             </>
           ) : <span className="home-game-play"><GeometryIcon name="play" />{game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</span>}
@@ -231,7 +233,7 @@ export default function HomePage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [selection, setSelection] = useState<Selection>(INITIAL_SELECTION);
-  const [launchTarget, setLaunchTarget] = useState<Game | null>(null);
+  const launcher = useGameLauncher();
 
   useEffect(() => {
     let cancelled = false;
@@ -358,6 +360,8 @@ export default function HomePage() {
       </header>
 
       {error ? <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">首页载入失败：{error}。请点击刷新重试。</div> : null}
+      {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
+      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
 
       {loading && games.length === 0 ? (
         <div role="status" aria-label="正在载入首页" className="home-hero shimmer rounded-xl border border-border" />
@@ -380,7 +384,7 @@ export default function HomePage() {
             </div>
           ) : null}
           <div key={`${current.id}-${selection.revision}`} id="home-game-panel" role="tabpanel" aria-labelledby={`home-game-tab-${current.id}`} className={`home-hero-slide absolute inset-0${selection.revision > 0 ? " home-hero-slide-in" : ""}`} data-home-game-id={current.id}>
-            <HeroGame game={current} tags={gameTags.get(current.id) ?? []} lastPlayedId={lastPlayedId} active onLaunch={() => setLaunchTarget(current)} />
+            <HeroGame game={current} tags={gameTags.get(current.id) ?? []} lastPlayedId={lastPlayedId} active onLaunch={() => void launcher.launch(current)} />
           </div>
           <div className="home-game-picker">
             <GameSelector games={orderedGames} currentIndex={currentIndex} onSelect={selectGame} onMove={move} />
@@ -506,7 +510,7 @@ export default function HomePage() {
           </div>
         </div>
       ) : null}
-      {launchTarget ? <LaunchDialog open game={launchTarget} onClose={() => setLaunchTarget(null)} /> : null}
+      {launcher.dialogGame ? <LaunchDialog open game={launcher.dialogGame} onClose={launcher.closeDialog} /> : null}
     </div>
   );
 }
