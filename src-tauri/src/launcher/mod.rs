@@ -360,18 +360,25 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     let app_for_wait = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            let state = app_for_wait.state::<RunningGames>().poll_exit(game_id, session_id);
-            if matches!(state, Err(_) | Ok(ProcessState::Gone)) { return; }
-            if let Ok(ProcessState::Exited(exit_code)) = state {
-                let _ = finish_session(
-                    &app_for_wait,
-                    game_id,
-                    session_id,
-                    &started_at,
-                    exit_code,
-                )
-                .await;
-                return;
+            {
+                // Serialize removal and database settlement with launches, stops
+                // and updater readiness checks. An empty process map alone does
+                // not mean the last play-session transaction has committed.
+                let running = app_for_wait.state::<RunningGames>();
+                let _session_guard = running.1.lock().await;
+                let state = app_for_wait.state::<RunningGames>().poll_exit(game_id, session_id);
+                if matches!(state, Err(_) | Ok(ProcessState::Gone)) { return; }
+                if let Ok(ProcessState::Exited(exit_code)) = state {
+                    let _ = finish_session(
+                        &app_for_wait,
+                        game_id,
+                        session_id,
+                        &started_at,
+                        exit_code,
+                    )
+                    .await;
+                    return;
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
         }
@@ -466,6 +473,8 @@ async fn finish_session(
 /// Returns `false` when nothing was running for that game.
 #[tauri::command]
 pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
+    let running_state = app.state::<RunningGames>();
+    let _session_guard = running_state.1.lock().await;
     let entry = {
         let running = app.state::<RunningGames>();
         let mut map = running
