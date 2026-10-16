@@ -9,7 +9,7 @@ export const BRAND = {
   latinName: "KoiPage",
   title: "恋页 KoiPage · Galgame 管理器",
   tagline: "收藏相遇，续写下一页。",
-  icon: "/brand/koipage.svg",
+  icon: "/brand/koipage.png",
   githubUsername: GITHUB_USERNAME,
   githubUrl: `https://github.com/${GITHUB_USERNAME}`,
   repositoryUrl: REPOSITORY_URL,

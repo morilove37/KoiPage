@@ -16,6 +16,7 @@ pub mod settings;
 pub mod tags;
 pub mod util;
 pub mod updater;
+pub mod share;
 
 // `CmdError` / `CmdResult` are used by the sibling modules via `super::error`;
 // nothing outside this module needs them, so they are not re-exported here.

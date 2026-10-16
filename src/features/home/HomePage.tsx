@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/card";
 import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
+import LaunchDialog from "@/features/launch/LaunchDialog";
 import { gamesList, gamesTagsGet, playSessionsList, tagsList } from "@/lib/db";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
@@ -43,42 +44,156 @@ interface Selection {
 
 const INITIAL_SELECTION: Selection = { id: null, previousId: null, direction: 1, revision: 0 };
 
-function HeroGame({ game, tags, lastPlayedId, active }: {
+function GameSelector({ games, currentIndex, onSelect, onMove }: {
+  games: Game[];
+  currentIndex: number;
+  onSelect: (index: number) => void;
+  onMove: (direction: 1 | -1) => void;
+}) {
+  const rail = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ pointerId: number; x: number; scrollLeft: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const move = useRef(onMove);
+  const previousIndex = useRef(currentIndex);
+
+  useEffect(() => { move.current = onMove; }, [onMove]);
+
+  useEffect(() => {
+    const container = rail.current;
+    if (!container) return;
+    const updateOverflow = () => { container.dataset.overflow = String(container.scrollWidth > container.clientWidth + 1); };
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(container);
+    updateOverflow();
+    let accumulated = 0;
+    let lastWheelAt = 0;
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (delta === 0) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? container.clientWidth : 1;
+      // The wheel selects games even when every cover fits. Keep ownership at
+      // both ends so wrapping never scrolls the page away from the pointer.
+      event.preventDefault();
+      const now = performance.now();
+      if (now - lastWheelAt > 180 || Math.sign(accumulated) !== Math.sign(delta)) accumulated = 0;
+      lastWheelAt = now;
+      accumulated += delta * unit;
+      // Accumulate fine trackpad movement, but a mouse notch (even a large
+      // one) advances exactly one game rather than skipping several covers.
+      if (Math.abs(accumulated) < 40) return;
+      const direction = accumulated > 0 ? 1 : -1;
+      accumulated = 0;
+      move.current(direction);
+    };
+    container.addEventListener("wheel", wheel, { passive: false });
+    return () => { observer.disconnect(); container.removeEventListener("wheel", wheel); };
+  }, [games.length]);
+
+  const endDrag = (container: HTMLDivElement, pointerId: number) => {
+    if (drag.current?.pointerId !== pointerId) return;
+    drag.current = null;
+    delete container.dataset.dragging;
+    if (container.hasPointerCapture(pointerId)) container.releasePointerCapture(pointerId);
+  };
+  useEffect(() => {
+    const container = rail.current;
+    const selected = container?.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    if (!container || !selected) return;
+    const wrapped = games.length > 2 && Math.abs(currentIndex - previousIndex.current) === games.length - 1;
+    previousIndex.current = currentIndex;
+    // Scroll only the cover strip; changing games must not move the page.
+    const left = selected.offsetLeft - 8;
+    const right = selected.offsetLeft + selected.offsetWidth + 8;
+    const next = left < container.scrollLeft ? left
+      : right > container.scrollLeft + container.clientWidth ? right - container.clientWidth
+      : container.scrollLeft;
+    container.scrollTo({ left: next, behavior: wrapped || window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }, [currentIndex, games]);
+
+  return (
+    <div ref={rail} role="tablist" aria-label="选择首页游戏" aria-orientation="horizontal" className="home-game-selector"
+      aria-description="滚轮可循环切换游戏，点击封面也可切换，拖动可横向浏览。"
+      onDragStart={event => event.preventDefault()}
+      onPointerDown={event => {
+        suppressClick.current = false;
+        if (event.button !== 0 || event.pointerType !== "mouse" || event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) return;
+        drag.current = { pointerId: event.pointerId, x: event.clientX, scrollLeft: event.currentTarget.scrollLeft, moved: false };
+      }}
+      onPointerMove={event => {
+        const gesture = drag.current;
+        if (!gesture || gesture.pointerId !== event.pointerId) return;
+        const distance = event.clientX - gesture.x;
+        if (!gesture.moved && Math.abs(distance) <= 6) return;
+        if (!gesture.moved) {
+          gesture.moved = true;
+          suppressClick.current = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.currentTarget.dataset.dragging = "true";
+        }
+        event.preventDefault();
+        event.currentTarget.scrollLeft = gesture.scrollLeft - distance;
+      }}
+      onPointerUp={event => endDrag(event.currentTarget, event.pointerId)}
+      onPointerCancel={event => endDrag(event.currentTarget, event.pointerId)}
+      onLostPointerCapture={event => endDrag(event.currentTarget, event.pointerId)}
+      onPointerLeave={() => { if (!drag.current?.moved) drag.current = null; }}
+      onClickCapture={event => {
+        if (!suppressClick.current || event.detail === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        suppressClick.current = false;
+      }}
+      onKeyDown={event => {
+        let index: number;
+        if (event.key === "ArrowRight") index = (currentIndex + 1) % games.length;
+        else if (event.key === "ArrowLeft") index = (currentIndex - 1 + games.length) % games.length;
+        else if (event.key === "Home") index = 0;
+        else if (event.key === "End") index = games.length - 1;
+        else return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key === "ArrowRight" || event.key === "ArrowLeft") onMove(event.key === "ArrowRight" ? 1 : -1);
+        else onSelect(index);
+        event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus({ preventScroll: true });
+      }}>
+      {games.map((game, index) => (
+        <button key={game.id} type="button" role="tab" id={`home-game-tab-${game.id}`}
+          aria-label={game.title} aria-selected={index === currentIndex} aria-controls="home-game-panel"
+          tabIndex={index === currentIndex ? 0 : -1} title={game.title}
+          className="home-game-choice" onClick={() => onSelect(index)}>
+          <span className="home-game-thumbnail">
+            <CoverImage path={game.coverPath} alt="" loading={index < 10 ? "eager" : "lazy"}
+              className="h-full w-full object-cover" fallbackClassName="bg-slate-800 text-white/75" fallbackText="暂无封面" />
+          </span>
+          <span className="home-game-caption">{game.title}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
   game: Game;
   tags: Tag[];
   lastPlayedId: number | undefined;
   active: boolean;
+  onLaunch?: () => void;
 }) {
   const { t } = useLocalizedTags();
-  const cover = (
-    <CoverImage
-      path={game.coverPath}
-      alt={game.title}
-      className="h-full w-full object-contain drop-shadow-2xl"
-      fallbackClassName="rounded-xl border border-white/15 bg-white/5 text-white/60"
-      fallbackText="暂无封面"
-    />
-  );
 
   return (
     <>
-      <div aria-hidden="true" className="absolute inset-0 overflow-hidden bg-gradient-to-br from-primary/40 via-slate-900 to-slate-950">
-        <CoverImage path={game.coverPath} alt="" className="h-full w-full scale-110 object-cover opacity-40 blur-md" fallbackText="" />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-950/75 to-slate-950/20" />
+      <div aria-hidden="true" className="home-game-artwork absolute inset-0 overflow-hidden">
+        <CoverImage path={game.coverPath} alt="" loading="eager" className="h-full w-full object-cover" fallbackText="" />
+        <div className="home-game-shade absolute inset-0" />
       </div>
-      <div className="absolute inset-y-6 right-[5%] w-[36%] pb-10">
-        {active ? (
-          <Link to={`/library/${game.id}`} aria-label={`查看「${game.title}」详情`} className="block h-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
-            {cover}
-          </Link>
-        ) : cover}
-      </div>
-      <div className="relative flex h-full w-[59%] flex-col justify-center gap-2 px-6 pb-12 pt-5 text-white lg:px-8">
+      <div className="home-game-copy text-white">
         <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-white/75">
           <span className="h-px w-5 bg-white/50" aria-hidden="true" />
           {game.id === lastPlayedId ? "继续上次的故事" : lastPlayedId === undefined ? "从这里开始" : "下一段故事"}
         </div>
-        <h2 className="line-clamp-2 break-words text-2xl font-semibold leading-tight tracking-tight xl:text-4xl" title={game.title}>{game.title}</h2>
+        <h2 className="home-game-title line-clamp-2 break-words font-semibold leading-tight tracking-tight" title={game.title}>{game.title}</h2>
         <p className="line-clamp-1 text-xs text-white/65">{game.developer || "未知开发商"}{game.releaseDate ? ` · ${game.releaseDate}` : ""}</p>
         <div className="flex gap-1.5 overflow-hidden whitespace-nowrap text-xs [&>*]:shrink-0">
           <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1">{GAME_STATUS_LABELS[game.status]}</span>
@@ -89,12 +204,13 @@ function HeroGame({ game, tags, lastPlayedId, active }: {
           {game.description || "打开游戏详情，看看这段故事。"}
         </p>
         <p className="text-xs text-white/55">{timestamp(game.lastPlayedAt) ? `上次游玩 ${playedAt(game.lastPlayedAt)} · ` : ""}累计 {formatPlayTime(game.playTimeSeconds)}</p>
-        <div className="mt-1">
+        <div className="home-game-actions">
           {active ? (
-            <Link to={`/library/${game.id}`} className="inline-flex h-9 items-center gap-3 rounded-md bg-white px-4 text-sm font-medium text-slate-950 transition-colors hover:bg-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900">
-              查看游戏详情 <span aria-hidden="true">↗</span>
-            </Link>
-          ) : <span className="inline-flex h-9 items-center rounded-md bg-white px-4 text-sm font-medium text-slate-950">查看游戏详情 ↗</span>}
+            <>
+              <button type="button" className="home-game-play" onClick={onLaunch}><GeometryIcon name="play" />{game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</button>
+              <Link to={`/library/${game.id}`} className="home-game-details">查看详情 <span aria-hidden="true">↗</span></Link>
+            </>
+          ) : <span className="home-game-play"><GeometryIcon name="play" />{game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</span>}
         </div>
       </div>
     </>
@@ -115,6 +231,7 @@ export default function HomePage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [selection, setSelection] = useState<Selection>(INITIAL_SELECTION);
+  const [launchTarget, setLaunchTarget] = useState<Game | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -200,6 +317,16 @@ export default function HomePage() {
     });
   };
 
+  const selectGame = (index: number) => {
+    const target = orderedGames[index];
+    if (!target) return;
+    setSelection(state => {
+      const from = Math.max(0, orderedGames.findIndex(game => game.id === state.id));
+      if (orderedGames[from].id === target.id) return state;
+      return { id: target.id, previousId: orderedGames[from].id, direction: index > from ? 1 : -1, revision: state.revision + 1 };
+    });
+  };
+
   const randomGame = () => {
     if (games.length === 0) return;
     const picked = games[Math.floor(Math.random() * games.length)];
@@ -233,12 +360,11 @@ export default function HomePage() {
       {error ? <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">首页载入失败：{error}。请点击刷新重试。</div> : null}
 
       {loading && games.length === 0 ? (
-        <div role="status" aria-label="正在载入首页" className="shimmer h-[360px] rounded-xl border border-border" />
+        <div role="status" aria-label="正在载入首页" className="home-hero shimmer rounded-xl border border-border" />
       ) : current ? (
         <section
-          className="home-hero relative h-[360px] overflow-hidden rounded-xl border border-border bg-slate-950 shadow-sm xl:h-[390px]"
-          aria-label="游戏封面轮播"
-          aria-roledescription="轮播"
+          className="home-hero relative overflow-hidden rounded-xl border border-border bg-slate-950 shadow-sm"
+          aria-label="首页游戏切换"
           tabIndex={0}
           onKeyDown={event => {
             if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -253,8 +379,11 @@ export default function HomePage() {
               <HeroGame game={previous} tags={gameTags.get(previous.id) ?? []} lastPlayedId={lastPlayedId} active={false} />
             </div>
           ) : null}
-          <div key={`${current.id}-${selection.revision}`} className={selection.revision > 0 ? "home-hero-slide home-hero-slide-in absolute inset-0" : "absolute inset-0"} data-home-game-id={current.id}>
-            <HeroGame game={current} tags={gameTags.get(current.id) ?? []} lastPlayedId={lastPlayedId} active />
+          <div key={`${current.id}-${selection.revision}`} id="home-game-panel" role="tabpanel" aria-labelledby={`home-game-tab-${current.id}`} className={`home-hero-slide absolute inset-0${selection.revision > 0 ? " home-hero-slide-in" : ""}`} data-home-game-id={current.id}>
+            <HeroGame game={current} tags={gameTags.get(current.id) ?? []} lastPlayedId={lastPlayedId} active onLaunch={() => setLaunchTarget(current)} />
+          </div>
+          <div className="home-game-picker">
+            <GameSelector games={orderedGames} currentIndex={currentIndex} onSelect={selectGame} onMove={move} />
           </div>
           <div className="absolute bottom-4 left-6 right-6 z-10 flex items-center justify-between gap-4 lg:left-8 lg:right-8">
             <div className="flex items-center gap-3 text-xs text-white/65">
@@ -262,10 +391,6 @@ export default function HomePage() {
               <div aria-hidden="true" className="h-0.5 w-20 overflow-hidden rounded-full bg-white/20">
                 <div className="h-full bg-white/80 transition-[width] duration-300" style={{ width: `${((currentIndex + 1) / orderedGames.length) * 100}%` }} />
               </div>
-            </div>
-            <div className="flex gap-2">
-              <button type="button" aria-label="上一款游戏" disabled={orderedGames.length < 2} onClick={() => move(-1)} className="home-carousel-arrow">←</button>
-              <button type="button" aria-label="下一款游戏" disabled={orderedGames.length < 2} onClick={() => move(1)} className="home-carousel-arrow">→</button>
             </div>
           </div>
         </section>
@@ -381,6 +506,7 @@ export default function HomePage() {
           </div>
         </div>
       ) : null}
+      {launchTarget ? <LaunchDialog open game={launchTarget} onClose={() => setLaunchTarget(null)} /> : null}
     </div>
   );
 }

@@ -27,6 +27,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -70,6 +71,9 @@ pub fn run() {
             commands::settings::settings_get_all,
             commands::settings::settings_delete,
             commands::updater::ensure_update_ready,
+            commands::share::share_cover_read,
+            commands::share::share_image_save,
+            commands::share::share_images_upload,
             // custom backdrop (液态玻璃 theme wallpaper)
             commands::settings::background_asset_grant,
             // scan roots

@@ -551,38 +551,139 @@ html.glass #lg-backdrop-image {
   box-shadow: inset 0 1px 0 hsl(var(--glass-highlight)), 0 4px 14px hsl(var(--primary) / 0.25);
 }
 
-/* Homepage artwork and copy travel together, with the old slide retained for
-   the exit animation. Controls remain fixed and respond to rapid clicks. */
+/* Console-style game picker. The strip stays in place while the artwork and
+   copy crossfade below it; only this region receives the game artwork. */
+.home-hero { height: clamp(500px, 68vh, 570px); isolation: isolate; }
+.home-game-artwork { background: linear-gradient(135deg, hsl(var(--primary) / 0.45), #131827 65%); }
+.home-game-artwork > img { object-position: 72% 36%; }
+.home-game-shade {
+  background:
+    linear-gradient(180deg, rgb(6 9 18 / 0.72), transparent 38%, rgb(6 9 18 / 0.78)),
+    linear-gradient(90deg, rgb(6 9 18 / 0.94), rgb(6 9 18 / 0.64) 42%, rgb(6 9 18 / 0.12) 80%);
+}
+.home-game-picker {
+  position: absolute;
+  z-index: 20;
+  top: 16px;
+  left: 24px;
+  right: 24px;
+}
+.home-game-selector {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+  height: 142px;
+  padding: 8px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  user-select: none;
+}
+.home-game-selector::-webkit-scrollbar { display: none; }
+.home-game-selector[data-overflow="true"] { cursor: grab; }
+.home-game-selector[data-overflow="true"] .home-game-choice { cursor: inherit; }
+.home-game-selector[data-dragging="true"],
+.home-game-selector[data-dragging="true"] * { cursor: grabbing !important; }
+.home-game-choice {
+  display: flex;
+  flex: 0 0 76px;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: white;
+  text-align: center;
+  outline: none;
+  transition: flex-basis 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.home-game-thumbnail {
+  display: block;
+  width: 72px;
+  height: 72px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.25);
+  border-radius: 14px;
+  background: #1b2131;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 0.25);
+  opacity: 0.72;
+  transition: width 280ms cubic-bezier(0.22, 1, 0.36, 1), height 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease, box-shadow 180ms ease;
+}
+.home-game-choice[aria-selected="true"] { flex-basis: 106px; }
+.home-game-choice[aria-selected="true"] .home-game-thumbnail {
+  width: 100px;
+  height: 100px;
+  opacity: 1;
+  border-color: white;
+  box-shadow: 0 0 0 3px rgb(8 12 25 / 0.5), 0 0 0 5px rgb(255 255 255 / 0.88), 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.home-game-choice:hover .home-game-thumbnail { opacity: 1; }
+.home-game-choice:focus-visible .home-game-thumbnail { outline: 3px solid hsl(var(--ring)); outline-offset: 7px; }
+.home-game-caption {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 18px;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.home-game-choice[aria-selected="true"] .home-game-caption,
+.home-game-choice:hover .home-game-caption,
+.home-game-choice:focus-visible .home-game-caption { opacity: 1; }
+.home-game-copy {
+  position: absolute;
+  top: 174px;
+  bottom: 64px;
+  left: 32px;
+  display: flex;
+  width: min(68%, 660px);
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 0.35);
+}
+.home-game-title { font-size: clamp(28px, 3vw, 42px); }
+.home-game-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; text-shadow: none; }
+.home-game-play, .home-game-details {
+  display: inline-flex;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 22px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.home-game-play { background: white; color: #111827; }
+.home-game-play:hover { background: #eeeef4; box-shadow: 0 0 0 3px rgb(255 255 255 / 0.25); }
+.home-game-details { border-color: rgb(255 255 255 / 0.3); background: rgb(255 255 255 / 0.08); color: white; backdrop-filter: blur(10px); }
+.home-game-details:hover { background: rgb(255 255 255 / 0.2); }
+.home-game-play:focus-visible, .home-game-details:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+@media (max-width: 1050px) {
+  .home-game-picker { left: 18px; right: 18px; }
+  .home-game-selector { gap: 10px; }
+  .home-game-copy { left: 24px; width: 78%; }
+}
+
 @keyframes home-slide-in {
-  from { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * 7%)); }
+  from { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * 2%)); }
   to { opacity: 1; transform: translateX(0); }
 }
 
 @keyframes home-slide-out {
   from { opacity: 1; transform: translateX(0); }
-  to { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * -7%)); }
+  to { opacity: 0; transform: translateX(calc(var(--home-slide-direction, 1) * -2%)); }
 }
 
 .home-hero-slide-in { animation: home-slide-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 .home-hero-slide-out { animation: home-slide-out 300ms cubic-bezier(0.22, 1, 0.36, 1) both; }
-
-.home-carousel-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: 1px solid rgb(255 255 255 / 0.3);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 0.1);
-  color: white;
-  backdrop-filter: blur(12px);
-  transition: background-color 160ms ease, transform 160ms ease;
-}
-.home-carousel-arrow:hover:not(:disabled) { background: rgb(255 255 255 / 0.25); }
-.home-carousel-arrow:active:not(:disabled) { transform: scale(0.94); }
-.home-carousel-arrow:focus-visible { outline: 2px solid white; outline-offset: 3px; }
-.home-carousel-arrow:disabled { opacity: 0.35; cursor: default; }
 
 /* Route content entering. Applied to the routed page area. */
 .app-sidebar { view-transition-name: app-sidebar; }

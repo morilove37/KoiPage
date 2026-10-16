@@ -1,6 +1,6 @@
 [package]
 name = "galgame-manager"
-version = "0.2.1"
+version = "0.3.0"
 description = "KoiPage - a Galgame and visual novel library manager"
 authors = ["morilove37"]
 edition = "2024"
@@ -18,7 +18,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "image-png"] }
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -32,7 +33,7 @@ tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 # the *frontend* made HTTP calls, and on top of being unused it couples the Rust
 # crate and the npm package versions, a mismatch that `tauri build` rejects while
 # `cargo check` and `tsc` both stay silent.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 # `tokio::join!` fans a metadata search out across providers.
 tokio = { version = "1", features = ["macros", "rt"] }
 # sqlx / time are also pulled in transitively by tauri-plugin-sql, but Rust
@@ -41,6 +42,7 @@ sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runti
 time = { version = "0.3", features = ["formatting", "parsing"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
