@@ -27,11 +27,13 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::commands::error::{CmdError, CmdResult};
 use crate::commands::games::pool;
 use crate::commands::util::{not_found, now_iso8601};
+pub mod locale;
 
 /// Settings key holding the path of the locale-emulation tool ("转区工具").
 pub const LOCALE_TOOL_PATH_KEY: &str = "locale_tool_path";
 /// Settings key holding `"1"` / `"0"` for whether the locale tool is used.
 pub const LOCALE_TOOL_USE_KEY: &str = "locale_tool_use";
+pub const LOCALE_TOOL_SOURCE_KEY: &str = "locale_tool_source";
 
 // ---------------------------------------------------------------------------
 // Running-process registry
@@ -50,6 +52,7 @@ pub struct RunningGames(
 /// One tracked launch: the child handle plus the session it belongs to.
 pub struct RunningGame {
     pub child: Child,
+    pub terminate_tree: bool,
     pub session_id: i64,
     pub started_at: String,
 }
@@ -262,21 +265,24 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     let args = split_args(target.launch_args.as_deref().unwrap_or(""));
     let workdir = resolve_workdir(&exe_path, target.workdir.as_deref());
 
-    // 转区工具 (locale emulation): when enabled, the tool is launched as
-    // `<tool> <exe> <...args>`. Only this generic form is supported — no
-    // tool-specific private flags are assumed.
-    let locale_tool = setting(&db, LOCALE_TOOL_PATH_KEY).await?;
     let locale_use = flag_is_on(setting(&db, LOCALE_TOOL_USE_KEY).await?.as_deref());
-    let tool_path = locale_tool.filter(|p| Path::new(p).is_file());
-
-    let (program, program_args): (PathBuf, Vec<String>) = match (locale_use, tool_path) {
-        (true, Some(tool)) => {
-            let mut all = Vec::with_capacity(args.len() + 1);
-            all.push(exe_path.to_string_lossy().into_owned());
-            all.extend(args);
-            (PathBuf::from(tool), all)
+    let (program, program_args): (PathBuf, Vec<String>) = if locale_use {
+        if setting(&db, LOCALE_TOOL_SOURCE_KEY).await?.as_deref() == Some("custom") {
+            let tool = setting(&db, LOCALE_TOOL_PATH_KEY).await?
+                .filter(|path| Path::new(path).is_file())
+                .ok_or_else(|| CmdError("转区工具不存在，请在设置中选择工具，或改用内置 LE。".into()))?;
+            let tool = PathBuf::from(tool);
+            let le = tool.file_name().is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("LEProc.exe"));
+            let all = if le { locale::arguments(&exe_path, &args, false) } else {
+                std::iter::once(exe_path.to_string_lossy().into_owned()).chain(args).collect()
+            };
+            (tool, all)
+        } else {
+            locale::validate_game(&exe_path)?;
+            (locale::bundled_path(&app)?, locale::arguments(&exe_path, &args, true))
         }
-        _ => (exe_path.clone(), args),
+    } else {
+        (exe_path.clone(), args)
     };
 
     let mut command = std::process::Command::new(&program);
@@ -332,7 +338,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     let session_id = match session_result {
         Ok(id) => id,
         Err(error) => {
-            let _ = child.kill();
+            let _ = terminate_child(&mut child, locale_use);
             let _ = child.wait();
             return Err(error);
         }
@@ -348,6 +354,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
             game_id,
             RunningGame {
                 child,
+                terminate_tree: locale_use,
                 session_id,
                 started_at: started_at.clone(),
             },
@@ -488,9 +495,9 @@ pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
         return Ok(false);
     };
 
-    // On Windows `kill()` terminates the process; child processes it spawned are
-    // deliberately left alone (job objects are out of scope here).
-    if let Err(error) = entry.child.kill() {
+    // A locale helper waits for the game child; stopping only LE would leave
+    // the game running and prematurely settle its play session.
+    if let Err(error) = terminate_child(&mut entry.child, entry.terminate_tree) {
         if !matches!(entry.child.try_wait(), Ok(Some(_))) {
             // A failed termination must keep the process controllable and
             // tracked by its existing watcher.
@@ -507,6 +514,22 @@ pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
     finish_session(&app, game_id, entry.session_id, &entry.started_at, exit_code).await?;
 
     Ok(true)
+}
+
+fn terminate_child(child: &mut Child, tree: bool) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if tree {
+        use std::os::windows::process::CommandExt;
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let result = std::process::Command::new(PathBuf::from(system_root).join("System32").join("taskkill.exe"))
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000).output()?;
+        return if result.status.success() { Ok(()) } else {
+            Err(std::io::Error::other(String::from_utf8_lossy(&result.stderr).trim().to_owned()))
+        };
+    }
+    let _ = tree;
+    child.kill()
 }
 
 /// Whole seconds between two ISO8601 timestamps, if both parse.
@@ -1012,7 +1035,7 @@ mod tests {
             .creation_flags(0x0800_0000)
             .spawn().unwrap();
         let running = RunningGames::default();
-        running.0.lock().unwrap().insert(1, RunningGame { child, session_id: 42, started_at: now_iso8601() });
+        running.0.lock().unwrap().insert(1, RunningGame { child, terminate_tree: false, session_id: 42, started_at: now_iso8601() });
         let live = matches!(running.poll_exit(1, 42), Ok(ProcessState::Alive));
         let old_watcher_ignored = matches!(running.poll_exit(1, 41), Ok(ProcessState::Gone));
         // Kill and reap the child even when an assertion below would fail.

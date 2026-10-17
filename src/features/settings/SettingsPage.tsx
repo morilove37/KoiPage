@@ -23,8 +23,6 @@ import {
   scanRootsList,
   scanRootUpdate,
   syncAssetScope,
-  settingsGet,
-  settingsSet,
 } from '@/lib/db';
 import type { ScanRoot } from '@/types/game';
 import { cn } from '@/lib/utils';
@@ -59,6 +57,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select } from '@/components/ui/select';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
+import { LocaleLaunchSettings } from '@/features/launch/LocaleLaunchSettings';
+import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
 import { SettingsSectionNav } from './SettingsSectionNav';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
@@ -70,10 +70,6 @@ import {
   exportGames,
   importGames,
 } from '@/features/io/io';
-
-// Settings keys owned by this page. `theme` lives in `@/lib/theme`.
-const LOCALE_TOOL_PATH_KEY = 'locale_tool_path';
-const LOCALE_TOOL_USE_KEY = 'locale_tool_use';
 
 // ---------------------------------------------------------------------------
 // Small shared UI pieces
@@ -192,34 +188,6 @@ function SkeletonScanRoots() {
           <Skeleton className="h-7 w-14 rounded-md" />
         </div>
       ))}
-    </div>
-  );
-}
-
-/** A read-only text field showing a picked path, plus a "choose" button. */function PathField({
-  value,
-  placeholder,
-  onPick,
-  pickLabel = '选择…',
-  disabled,
-}: {
-  value: string;
-  placeholder: string;
-  onPick: () => void | Promise<void>;
-  pickLabel?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <input
-        readOnly
-        value={value}
-        placeholder={placeholder}
-        className="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <Button onClick={() => void onPick()} disabled={disabled}>
-        {pickLabel}
-      </Button>
     </div>
   );
 }
@@ -783,104 +751,9 @@ function ThemePreview({ theme }: { theme: Theme }) {
 // ---------------------------------------------------------------------------
 
 function LaunchSettingsSection() {
-  const [toolPath, setToolPath] = useState('');
-  const [useTool, setUseTool] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const [path, use] = await Promise.all([
-          settingsGet(LOCALE_TOOL_PATH_KEY),
-          settingsGet(LOCALE_TOOL_USE_KEY),
-        ]);
-        if (!alive) return;
-        setToolPath(path ?? '');
-        setUseTool(use === '1' || use === 'true');
-      } catch (e) {
-        if (alive) setError(errorMessage(e));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  async function pickTool() {
-    const picked = await open({
-      multiple: false,
-      directory: false,
-      title: '选择转区工具可执行文件',
-      filters: [{ name: '可执行文件', extensions: ['exe', 'bat', 'cmd'] }],
-    });
-    if (typeof picked !== 'string') return; // cancelled
-    setError(null);
-    try {
-      await settingsSet(LOCALE_TOOL_PATH_KEY, picked);
-      setToolPath(picked);
-      setInfo(`已设置转区工具：${baseName(picked)}`);
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-  }
-
-  async function toggleUse(next: boolean) {
-    setUseTool(next);
-    setInfo(null);
-    setError(null);
-    try {
-      await settingsSet(LOCALE_TOOL_USE_KEY, next ? '1' : '0');
-    } catch (e) {
-      setUseTool(!next); // roll the switch back on failure
-      setError(errorMessage(e));
-    }
-  }
-
   return (
-    <Section
-      id="settings-launch"
-      title="启动设置"
-      description="转区工具用于以日文区域设置启动游戏。启用后将以「工具 + 游戏程序 + 启动参数」的形式调用。"
-    >
-      <div className="space-y-3">
-        <PathField
-          value={toolPath}
-          placeholder={
-            loading ? '加载中…' : '未设置（不使用转区工具，直接启动游戏）'
-          }
-          onPick={pickTool}
-          disabled={loading}
-        />
-
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={useTool}
-            disabled={loading || toolPath.length === 0}
-            onChange={(e) => void toggleUse(e.target.checked)}
-            className="h-4 w-4 accent-[hsl(var(--primary))]"
-          />
-          启用转区工具
-          {toolPath.length === 0 ? (
-            <span className="text-xs text-muted-foreground">
-              （需先选择工具路径）
-            </span>
-          ) : null}
-        </label>
-
-        <p className="text-xs text-muted-foreground">
-          说明：管理器只使用通用的调用形式，不会猜测某个转区工具的私有参数格式。
-          若你的工具需要额外参数，请把参数写在游戏自己的「启动参数」里，或改用该工具的包装脚本。
-        </p>
-
-        {info ? <Status tone="ok">{info}</Status> : null}
-        {error ? <Status tone="error">{error}</Status> : null}
-      </div>
+    <Section id="settings-launch" title="启动设置" description="选择普通启动或通过内置 Locale Emulator 转区启动。">
+      <LocaleLaunchSettings />
     </Section>
   );
 }
@@ -1086,6 +959,9 @@ export default function SettingsPage() {
       <LocalizationSection />
       <LaunchSettingsSection />
       <DataSection />
+      <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
+        <AnnouncementSettings />
+      </Section>
       <Section id="settings-about" title="关于恋页">
         <div className="flex items-center gap-4">
           <img src={BRAND.icon} alt="恋页应用图标" width={64} height={64} className="h-16 w-16 shrink-0" />

@@ -31,6 +31,8 @@ jobs:
       - run: pnpm build
       - run: pnpm check:ipc
       - run: pnpm test:share
+      - run: pnpm test:announcements
+      - run: pnpm test:home-play-time
       - run: pnpm check:release
       - run: cargo test --lib --locked
         working-directory: src-tauri

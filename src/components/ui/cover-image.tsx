@@ -12,6 +12,10 @@ export interface CoverImageProps {
   fallbackClassName?: string;
   fallbackText?: string;
   loading?: "eager" | "lazy";
+  /** Show landscape artwork in full; portrait artwork keeps the caller's fit. */
+  fitLandscape?: boolean;
+  /** Report decoded dimensions; null means the image failed to load. */
+  onDimensions?: (size: { width: number; height: number } | null) => void;
 }
 
 /**
@@ -36,8 +40,11 @@ function CoverImageSource({
   fallbackClassName,
   fallbackText = "无封面",
   loading = "lazy",
+  fitLandscape = false,
+  onDimensions,
 }: Omit<CoverImageProps, "path"> & { src: string | undefined }) {
   const [failed, setFailed] = useState(false);
+  const [landscape, setLandscape] = useState(false);
 
   if (!src || failed) {
     return (
@@ -57,8 +64,15 @@ function CoverImageSource({
       src={src}
       alt={alt}
       loading={loading}
-      onError={() => setFailed(true)}
+      onLoad={event => {
+        const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+        if (fitLandscape) setLandscape(width > height);
+        onDimensions?.({ width, height });
+      }}
+      onError={() => { setFailed(true); onDimensions?.(null); }}
       className={className}
+      data-landscape={fitLandscape ? landscape : undefined}
+      style={fitLandscape && landscape ? { objectFit: "contain", objectPosition: "center" } : undefined}
     />
   );
 }

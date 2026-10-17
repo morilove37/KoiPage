@@ -7,6 +7,7 @@ const SECTIONS = [
   { id: 'settings-localization', label: '资料汉化' },
   { id: 'settings-launch', label: '启动设置' },
   { id: 'settings-data', label: '数据管理' },
+  { id: 'settings-announcements', label: '公告' },
   { id: 'settings-about', label: '关于' },
 ] as const;
 
@@ -92,7 +93,7 @@ export function SettingsSectionNav() {
   return (
     <nav ref={navRef} aria-label="设置分区导航"
       className="sticky top-0 z-20 shrink-0 rounded-xl border border-border bg-background/95 p-1 shadow-sm backdrop-blur-md [.glass_&]:bg-[hsl(var(--glass-strong))]">
-      <div className="relative grid grid-cols-6">
+      <div className="relative grid" style={{ gridTemplateColumns: `repeat(${SECTIONS.length}, minmax(0, 1fr))` }}>
         <span aria-hidden="true" data-settings-slider
           className="sidebar-slider pointer-events-none absolute inset-y-0 left-0"
           style={{ width: `${100 / SECTIONS.length}%`, transform: `translateX(${activeIndex * 100}%)` }} />

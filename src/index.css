@@ -555,7 +555,21 @@ html.glass #lg-backdrop-image {
    copy crossfade below it; only this region receives the game artwork. */
 .home-hero { height: clamp(500px, 68vh, 570px); isolation: isolate; }
 .home-game-artwork { background: linear-gradient(135deg, hsl(var(--primary) / 0.45), #131827 65%); }
-.home-game-artwork > img { object-position: 72% 36%; }
+.home-game-artwork > img {
+  object-position: 72% 36%;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+}
+.home-game-artwork > img[data-landscape="true"] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  transform: translate(-50%, -50%);
+}
 .home-game-shade {
   background:
     linear-gradient(180deg, rgb(6 9 18 / 0.72), transparent 38%, rgb(6 9 18 / 0.78)),
@@ -687,6 +701,44 @@ html.glass #lg-backdrop-image {
 
 /* Route content entering. Applied to the routed page area. */
 .app-sidebar { view-transition-name: app-sidebar; }
+.detail-cover-frame {
+  aspect-ratio: var(--detail-cover-ratio, 3 / 4);
+  max-height: 420px;
+}
+.detail-layout[data-detail-layout="landscape"] { grid-template-columns: minmax(0, 1fr); }
+.detail-layout[data-detail-layout="landscape"] .detail-summary-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+}
+.detail-layout[data-detail-layout="landscape"] .detail-cover-frame {
+  width: 90%;
+  max-width: calc(260px * var(--detail-cover-ratio));
+  max-height: 260px;
+  justify-self: center;
+}
+.detail-layout[data-detail-layout="landscape"] .detail-summary-information {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+}
+.detail-layout[data-detail-layout="landscape"] [data-detail-metadata] { grid-column: 1; grid-row: 1; margin-top: 0; }
+.detail-layout[data-detail-layout="landscape"] [data-detail-records] {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: 0;
+  border-top: 0;
+  border-left: 1px solid hsl(var(--border));
+  padding-top: 0;
+  padding-left: 12px;
+}
+.detail-layout[data-detail-layout="landscape"] [data-detail-editor] { grid-column: 1 / -1; margin-top: 0; }
+@media (max-width: 1000px) {
+  .detail-layout[data-detail-layout="landscape"] .detail-summary-content { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 14px; }
+  .detail-layout[data-detail-layout="landscape"] .detail-cover-frame { max-width: calc(210px * var(--detail-cover-ratio)); max-height: 210px; }
+}
 [data-detail-cover] { view-transition-name: game-cover; }
 
 /* The cover travels independently; toolbar coordinates never animate. */

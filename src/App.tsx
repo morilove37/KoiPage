@@ -10,6 +10,7 @@ import { syncAssetScope } from "@/lib/db";
 import { loadLocalizationPreference } from "@/lib/localization";
 import { BRAND } from "@/lib/brand";
 import { UpdateDialog } from "@/features/updates/UpdateDialog";
+import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog";
 
 /**
  * Application shell: sidebar navigation + routed page area.
@@ -163,6 +164,7 @@ export default function App() {
         </ErrorBoundary>
       </main>
       <UpdateDialog />
+      <AnnouncementDialog />
     </div>
   );
 }

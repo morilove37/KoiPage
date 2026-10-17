@@ -67,6 +67,16 @@ export function launchGame(gameId: number): Promise<LaunchResult> {
   return initDatabase().then(() => invoke<LaunchResult>('launch_game', { gameId }));
 }
 
+export interface LocaleToolStatus {
+  available: boolean;
+  path: string | null;
+  version: string;
+}
+
+export function localeToolStatus(): Promise<LocaleToolStatus> {
+  return invoke<LocaleToolStatus>('locale_tool_status');
+}
+
 /** Whether this app currently tracks a live process for the game. */
 export function gameRunning(gameId: number): Promise<boolean> {
   return initDatabase().then(() => invoke<boolean>('game_running', { gameId }));
