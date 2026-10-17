@@ -203,6 +203,20 @@ export function playSessionsList(gameId?: number, limit?: number): Promise<PlayS
   );
 }
 
+/** Complete ended-session range for calendar charts, independent of list limits. */
+export function playSessionsForPeriod(start: string, end: string): Promise<PlaySession[]> {
+  return ready.then(() => invoke<PlaySession[]>('play_sessions_list', {
+    gameId: null, limit: null, startedBefore: end, endedAfter: start,
+  }));
+}
+
+/** Cursor pagination for all-time history; no total-history record cap. */
+export function playSessionsPage(limit: number, before?: Pick<PlaySession, 'startedAt' | 'id'>): Promise<PlaySession[]> {
+  return ready.then(() => invoke<PlaySession[]>('play_sessions_list', {
+    gameId: null, limit, beforeStartedAt: before?.startedAt ?? null, beforeId: before?.id ?? null,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------

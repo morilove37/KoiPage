@@ -1,0 +1,22 @@
+Locale Emulator 2.5.0.1
+Copyright (c) the Locale Emulator authors, including xupefei / Paddy Xu.
+
+LEProc.exe, LoaderDll.dll and LocaleEmulator.dll are unmodified binaries from
+the user-provided E:\Locale directory, verified byte-for-byte against the
+official Locale.Emulator.2.5.0.1.zip release.
+LECommonLibrary.dll is included from the same user-provided installation;
+it is required by the LEProc .NET application.
+
+Upstream project and source:
+https://github.com/xupefei/Locale-Emulator/tree/v2.5.0.1
+https://github.com/xupefei/Locale-Emulator-Core
+Official release:
+https://github.com/xupefei/Locale-Emulator/releases/tag/v2.5.0.1
+
+The launcher and core libraries are distributed under LGPL-3.0. See the
+accompanying COPYING and COPYING.LESSER files. The original components remain
+separate files and can be replaced by compatible builds from their source.
+
+KoiPage supplies its own LEConfig.xml Japanese profile and launches LEProc
+as an independent process. Locale Emulator is a third-party project and is
+not affiliated with KoiPage.

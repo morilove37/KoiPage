@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -26,7 +27,7 @@ import {
 import { useAppStore } from "@/store/app";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating, roundRating } from "@/lib/rating";
-import { isGameOpeningTransition } from "@/lib/game-opening";
+import { isGameOpeningTransition, returnFromGameWithTransition } from "@/lib/game-opening";
 import {
   GAME_STATUSES,
   GAME_STATUS_LABELS,
@@ -44,7 +45,6 @@ interface FormState {
   originalTitle: string;
   developer: string;
   releaseDate: string;
-  status: GameStatus;
   rating: string;
   coverPath: string;
   description: string;
@@ -64,7 +64,6 @@ function toForm(game: GameDetail): FormState {
     originalTitle: game.originalTitle ?? "",
     developer: game.developer ?? "",
     releaseDate: game.releaseDate ?? "",
-    status: game.status,
     rating: game.rating === null ? "" : formatRating(game.rating),
     coverPath: game.coverPath ?? "",
     description: game.description ?? "",
@@ -101,6 +100,7 @@ export default function GameDetailPage() {
   const playTimeRevision = useAppStore((s) => s.playTimeRevision);
 
   const [game, setGame] = useState<GameDetail | null>(null);
+  const [coverSize, setCoverSize] = useState<{ path: string | null; width: number; height: number } | null>(null);
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [sessions, setSessions] = useState<PlaySession[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
@@ -119,6 +119,8 @@ export default function GameDetailPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const statusPending = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [metadataOpen, setMetadataOpen] = useState(false);
@@ -180,9 +182,11 @@ export default function GameDetailPage() {
     // The decision is frozen at mount (`canGoBackRef`) so entries pushed *after*
     // this page opened — a tag link to /tags, say — cannot redirect 返回 to a
     // sibling page instead of the library the user came from.
-    if (canGoBackRef.current) navigate(-1);
-    else navigate("/library");
-  }, [navigate]);
+    returnFromGameWithTransition(gameId, () => {
+      if (canGoBackRef.current) navigate(-1);
+      else navigate("/library");
+    });
+  }, [gameId, navigate]);
 
   /**
    * Re-read the game and its sessions **without** the full-page loading state.
@@ -283,7 +287,6 @@ export default function GameDetailPage() {
       patch.developer = orNull(form.developer);
     if (orNull(form.releaseDate) !== game.releaseDate)
       patch.releaseDate = orNull(form.releaseDate);
-    if (form.status !== game.status) patch.status = form.status;
     if (form.coverPath.trim() !== (game.coverPath ?? ""))
       patch.coverPath = orNull(form.coverPath);
     if (form.description.trim() !== (game.description ?? ""))
@@ -316,7 +319,7 @@ export default function GameDetailPage() {
   };
 
   const save = async () => {
-    if (!form || saving) return;
+    if (!form || saving || statusPending.current) return;
     if (form.title.trim() === "") {
       setError("标题不能为空。");
       return;
@@ -357,12 +360,32 @@ export default function GameDetailPage() {
   const toggleFavorite = async () => {
     if (!game) return;
     const next = isFavorite(game) ? 0 : 1;
-    setGame({ ...game, favorite: next });
+    setGame(current => current?.id === gameId ? { ...current, favorite: next } : current);
     try {
       await gameUpdate(gameId, { favorite: next });
     } catch (cause) {
-      setGame({ ...game, favorite: game.favorite });
+      setGame(current => current?.id === gameId ? { ...current, favorite: game.favorite } : current);
       setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const changeStatus = async (status: GameStatus) => {
+    if (!game || status === game.status || saving || deleting || statusPending.current) return;
+    statusPending.current = true;
+    setStatusSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await gameUpdate(gameId, { status });
+      setGame(current => current?.id === gameId
+        ? { ...current, status: updated.status, updatedAt: updated.updatedAt }
+        : current);
+      setNotice(`状态已更新为「${GAME_STATUS_LABELS[updated.status]}」。`);
+    } catch (cause) {
+      setError(`状态保存失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      statusPending.current = false;
+      setStatusSaving(false);
     }
   };
 
@@ -443,6 +466,8 @@ export default function GameDetailPage() {
   // without making subsequent edits replay the entrance animation.
   if (sharedOpening.current === null) sharedOpening.current = isGameOpeningTransition();
   const favorite = isFavorite(game);
+  const dimensions = coverSize?.path === game.coverPath ? coverSize : null;
+  const landscape = Boolean(dimensions && dimensions.width > dimensions.height);
   const tags = selectedTagIds
     .map((tagId) => tagById.get(tagId))
     .filter((tag): tag is Tag => tag !== undefined);
@@ -497,7 +522,15 @@ export default function GameDetailPage() {
             >
               {favorite ? "★ 已收藏" : "☆ 收藏"}
             </Button>
-            <Button variant="outline" loading={saving} onClick={() => void save()}>
+            <Select
+              aria-label="游戏状态"
+              className="w-24 shrink-0"
+              value={game.status}
+              disabled={statusSaving || saving || deleting}
+              onValueChange={value => void changeStatus(value)}
+              options={GAME_STATUSES.map(status => ({ value: status, label: GAME_STATUS_LABELS[status] }))}
+            />
+            <Button variant="outline" loading={saving} disabled={statusSaving} onClick={() => void save()}>
               保存
             </Button>
             <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
@@ -505,10 +538,26 @@ export default function GameDetailPage() {
             </Button>
           </div>
         </div>
-        <h1 className="min-w-0 truncate text-xl font-semibold tracking-tight" title={game.title}>
+        <h1 className="min-w-0 truncate text-2xl font-semibold tracking-tight sm:text-3xl" title={game.title}>
           {game.title}
         </h1>
       </div>
+
+      <Tabs
+        className="shrink-0"
+        label="游戏详情分区"
+        value={tab}
+        onValueChange={value => {
+          setTab(value);
+          contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
+        }}
+        items={[
+          { value: "info", label: "基本信息" },
+          { value: "history", label: "游玩历史" },
+          { value: "files", label: "路径与启动" },
+          { value: "tags", label: "标签" },
+        ]}
+      />
 
       <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
@@ -524,34 +573,23 @@ export default function GameDetailPage() {
         </div>
       ) : null}
 
-      <Tabs
-        className="shrink-0"
-        value={tab}
-        onValueChange={value => {
-          setTab(value);
-          contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
-        }}
-        items={[
-          { value: "info", label: "基本信息" },
-          { value: "files", label: "路径与启动" },
-          { value: "tags", label: "标签" },
-          { value: "history", label: "游玩历史" },
-        ]}
-      />
-
-      <div className="grid items-start gap-3 grid-cols-[112px_minmax(0,1fr)] md:grid-cols-[160px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)]">
+      <div className="detail-layout grid items-start gap-3 grid-cols-[112px_minmax(0,1fr)] md:grid-cols-[160px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)]"
+        data-detail-layout={landscape ? "landscape" : "portrait"}
+        style={{ "--detail-cover-ratio": dimensions ? dimensions.width / dimensions.height : 3 / 4 } as CSSProperties}>
         {/* Cover --------------------------------------------------------- */}
-        <Card className="h-fit min-w-0">
-          <CardContent className="p-3">
-            <div data-detail-cover className="aspect-[3/4] w-full overflow-hidden rounded bg-muted">
+        <Card className="detail-summary-card h-fit min-w-0">
+          <CardContent className="detail-summary-content p-3">
+            <div data-detail-cover className="detail-cover-frame w-full overflow-hidden rounded bg-muted">
               <CoverImage
                 loading="eager"
                 path={game.coverPath}
                 alt={game.title}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-contain"
+                onDimensions={size => setCoverSize(size ? { path: game.coverPath, ...size } : null)}
               />
             </div>
-            <dl className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
+            <div className="detail-summary-information min-w-0">
+            <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
               <dt className="text-muted-foreground">评分</dt>
               <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{form.rating === "" ? "未评分" : formatRating(Number(form.rating))}</dd>
               <dt className="text-muted-foreground">发售日</dt>
@@ -561,9 +599,9 @@ export default function GameDetailPage() {
               <dt className="text-muted-foreground">原名</dt>
               <dd className="min-w-0 break-words text-right">{form.originalTitle || "未填写"}</dd>
               <dt className="text-muted-foreground">状态</dt>
-              <dd className="min-w-0 text-right">{GAME_STATUS_LABELS[form.status]}</dd>
+              <dd className="min-w-0 text-right">{GAME_STATUS_LABELS[game.status]}</dd>
             </dl>
-            <details className="mt-3 text-xs">
+            <details data-detail-editor className="mt-3 text-xs">
               <summary className="cursor-pointer text-primary">编辑资料</summary>
               <div className="mt-2 flex flex-col gap-2">
                 <Field label="评分" hint="0-10，支持小数，留空表示未评分">
@@ -586,17 +624,10 @@ export default function GameDetailPage() {
                 <Field label="原名">
                   <Input value={form.originalTitle} onChange={event => setForm({ ...form, originalTitle: event.target.value })} />
                 </Field>
-                <Field label="状态">
-                  <Select
-                    value={form.status}
-                    onValueChange={value => setForm({ ...form, status: value as GameStatus })}
-                    options={GAME_STATUSES.map(status => ({ value: status, label: GAME_STATUS_LABELS[status] }))}
-                  />
-                </Field>
                 <p className="text-muted-foreground">修改后点击右上角「保存」生效。</p>
               </div>
             </details>
-            <dl className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
+            <dl data-detail-records className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
               <div className="flex justify-between gap-2">
                 <dt className="text-muted-foreground">游玩时长</dt>
                 <dd>{formatPlayTime(game.playTimeSeconds)}</dd>
@@ -614,6 +645,7 @@ export default function GameDetailPage() {
                 <dd className="text-right">{formatDateTime(game.updatedAt)}</dd>
               </div>
             </dl>
+            </div>
           </CardContent>
         </Card>
 

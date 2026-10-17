@@ -9,12 +9,14 @@ import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
-import { gamesList, gamesTagsGet, playSessionsList, tagsList } from "@/lib/db";
+import { gamesList, gamesTagsGet, tagsList } from "@/lib/db";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
 import { useAppStore } from "@/store/app";
 import { GAME_STATUSES, GAME_STATUS_LABELS, formatPlayTime, isFavorite } from "@/types/game";
-import type { Game, GameStatus, PlaySession, Tag } from "@/types/game";
+import type { Game, GameStatus, Tag } from "@/types/game";
+import { PlayTimeChart } from "./PlayTimeChart";
+import { RecentPlayHistory } from "./RecentPlayHistory";
 
 const STATUS_COLORS: Record<GameStatus, string> = {
   unplayed: "bg-primary/50", wishlist: "bg-sky-500", playing: "bg-primary",
@@ -30,10 +32,6 @@ function timestamp(value: string | null): number {
 function playedAt(value: string | null): string {
   if (!timestamp(value)) return "尚未游玩";
   return new Date(value!).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
-function sessionDuration(seconds: number): string {
-  return seconds < 60 ? `${Math.max(0, Math.floor(seconds))} 秒` : formatPlayTime(seconds);
 }
 
 interface Selection {
@@ -187,7 +185,7 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
   return (
     <>
       <div aria-hidden="true" className="home-game-artwork absolute inset-0 overflow-hidden">
-        <CoverImage path={game.coverPath} alt="" loading="eager" className="h-full w-full object-cover" fallbackText="" />
+        <CoverImage path={game.coverPath} alt="" loading="eager" fitLandscape className="h-full w-full object-cover" fallbackText="" />
         <div className="home-game-shade absolute inset-0" />
       </div>
       <div className="home-game-copy text-white">
@@ -228,10 +226,6 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [sessions, setSessions] = useState<PlaySession[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [selection, setSelection] = useState<Selection>(INITIAL_SELECTION);
   const launcher = useGameLauncher();
 
@@ -252,20 +246,6 @@ export default function HomePage() {
     });
     return () => { cancelled = true; };
   }, [playTimeRevision, reloadKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setHistoryLoading(true);
-    setHistoryError(null);
-    void playSessionsList(undefined, 12).then(next => {
-      if (!cancelled) setSessions(next);
-    }).catch(cause => {
-      if (!cancelled) setHistoryError(cause instanceof Error ? cause.message : String(cause));
-    }).finally(() => {
-      if (!cancelled) setHistoryLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [playTimeRevision, reloadKey, historyReloadKey]);
 
   useEffect(() => {
     let disposed = false;
@@ -334,11 +314,6 @@ export default function HomePage() {
     const picked = games[Math.floor(Math.random() * games.length)];
     navigate(`/library/${picked.id}`);
   };
-  const gameById = useMemo(() => new Map(games.map(game => [game.id, game])), [games]);
-  const recentSessions = useMemo(() => [...sessions]
-    .filter(session => gameById.has(session.gameId))
-    .sort((a, b) => timestamp(b.startedAt) - timestamp(a.startedAt) || b.id - a.id)
-    .slice(0, 6), [sessions, gameById]);
   const waitingGames = useMemo(() => games
     .filter(game => game.status === "unplayed" || game.status === "wishlist")
     .sort((a, b) => b.favorite - a.favorite || timestamp(b.createdAt) - timestamp(a.createdAt) || b.id - a.id), [games]);
@@ -424,47 +399,10 @@ export default function HomePage() {
 
       {games.length > 0 ? (
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(250px,1fr)]">
-          <section aria-labelledby="home-history-heading" className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
-            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-              <h2 id="home-history-heading" className="flex items-center gap-2 text-sm font-semibold"><GeometryIcon name="clock" className="text-primary" />最近游玩记录</h2>
-              <span className="text-xs text-muted-foreground">最近 {recentSessions.length} 次</span>
-            </div>
-            {historyLoading ? (
-              <p role="status" className="px-4 py-5 text-xs text-muted-foreground">正在读取游玩记录…</p>
-            ) : historyError ? (
-              <div className="flex flex-col items-start gap-2 px-4 py-4 text-xs">
-                <p role="alert" className="text-destructive">游玩记录载入失败：{historyError}</p>
-                <Button size="sm" variant="outline" onClick={() => setHistoryReloadKey(key => key + 1)}>重试游玩记录</Button>
-              </div>
-            ) : recentSessions.length > 0 ? (
-              <ol className="divide-y divide-border">
-                {recentSessions.map(session => {
-                  const game = gameById.get(session.gameId)!;
-                  return (
-                    <li key={session.id}>
-                      <Link to={`/library/${game.id}?tab=history`} data-session-id={session.id} className="flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                        <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage path={game.coverPath} alt={game.title} className="h-full w-full object-cover" fallbackText="" /></div>
-                        <div className="min-w-0 flex-1">
-                          <h3 className="truncate text-sm font-medium">{game.title}</h3>
-                          <p className="mt-1 text-xs text-muted-foreground"><time dateTime={session.startedAt}>{playedAt(session.startedAt)}</time>{session.endedAt ? <> → <time dateTime={session.endedAt}>{playedAt(session.endedAt)}</time></> : " · 记录未结束"}</p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-xs font-medium tabular-nums">{session.endedAt ? sessionDuration(session.durationSeconds) : "未结束"}</p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">查看历史 ↗</p>
-                        </div>
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ol>
-            ) : (
-              <div className="flex flex-col items-center gap-2 px-4 py-7 text-center">
-                <GeometryIcon name="clock" className="size-8 text-muted-foreground/50" />
-                <p className="text-sm">还没有游玩记录</p>
-                <p className="text-xs text-muted-foreground">从管理器启动游戏后，每次游玩的时间会记录在这里。</p>
-              </div>
-            )}
-          </section>
+          <div className="flex min-w-0 flex-col gap-4">
+          <RecentPlayHistory games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} />
+          <PlayTimeChart games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} />
+          </div>
 
           <div className="flex flex-col gap-4">
             <section aria-labelledby="home-waiting-heading" className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">

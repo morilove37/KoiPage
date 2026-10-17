@@ -94,6 +94,7 @@ pub fn run() {
             scanner::inspect_exe_file,
             // launcher (launch-settings)
             launcher::launch_game,
+            launcher::locale::locale_tool_status,
             launcher::game_running,
             launcher::stop_game,
             launcher::export_games,

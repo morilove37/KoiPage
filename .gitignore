@@ -53,3 +53,4 @@ dist-ssr
 *.msi
 *.exe
 *.sig
+!/src-tauri/resources/locale-emulator/LEProc.exe

@@ -386,7 +386,7 @@ export default function LibraryPage() {
     activeTagIds.length > 0;
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3">
+    <div className="flex flex-col gap-3 px-4 py-3" data-library-state={loading ? "loading" : error ? "error" : "ready"}>
       {/* Header ---------------------------------------------------------- */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
