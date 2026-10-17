@@ -28,7 +28,12 @@ aliases,olang,released,image.url,image.thumbnail,average,rating,votecount,\
 length_minutes,description,tags{id,name,rating,spoiler},developers{id,name}";
 
 /// Smaller field set for search results.
-const SEARCH_FIELDS: &str = "id,title,alttitle,released,image.url,rating,votecount";
+///
+/// `titles` is included so the result list can prefer a Chinese title (VNDB
+/// carries official `zh-Hans`/`zh-Hant` names for localized releases) instead of
+/// falling back to the romanised primary title.
+const SEARCH_FIELDS: &str = "id,title,alttitle,titles{lang,title,latin,official,main},\
+released,image.url,rating,votecount";
 
 #[derive(Debug, Deserialize)]
 struct KanaResponse {
@@ -73,6 +78,9 @@ struct VnTitle {
     /// even though we only ever read the original-script title today.
     #[allow(dead_code)]
     latin: Option<String>,
+    /// Official localizations are preferred over unofficial fan translations.
+    #[serde(default)]
+    official: bool,
     #[allow(dead_code)]
     #[serde(default)]
     main: bool,
@@ -136,6 +144,90 @@ fn original_title(vn: &Vn) -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
+/// A Chinese title from VNDB's multilingual `titles` list.
+///
+/// VNDB lists official localizations (`zh-Hans` / `zh-Hant`) for many releases.
+/// They are the reason importing from VNDB does not have to fall back to the
+/// romanised English title: prefer official translations, then any Chinese one.
+fn chinese_title(vn: &Vn) -> Option<String> {
+    let mut unofficial: Option<String> = None;
+    for title in &vn.titles {
+        let Some(lang) = title.lang.as_deref() else {
+            continue;
+        };
+        if !lang.to_ascii_lowercase().starts_with("zh") {
+            continue;
+        }
+        let Some(value) = title
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if title.official {
+            return Some(value.to_string());
+        }
+        unofficial.get_or_insert_with(|| value.to_string());
+    }
+    unofficial
+}
+
+/// Pick the title shown in the result list and the alternate kept as 原名.
+///
+/// Order: Chinese (official first) → original-script → VNDB's romanised title.
+/// The alternate is the first non-equal candidate from original/Latin, so a
+/// Chinese display name keeps the Japanese name visible as 原名.
+fn display_titles(vn: &Vn) -> (String, Option<String>) {
+    let chinese = chinese_title(vn);
+    let original = original_title(vn);
+    let latin = vn
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let title = chinese
+        .clone()
+        .or_else(|| original.clone())
+        .or_else(|| latin.clone())
+        .unwrap_or_else(|| vn.id.clone());
+    let alternate = original
+        .into_iter()
+        .chain(latin)
+        .find(|candidate| candidate != &title);
+    (title, alternate)
+}
+
+/// Extra spellings for auto-fetch matching only.
+///
+/// When the display title becomes Chinese, the romanised title and original
+/// script still have to match a folder named `Sabbat of the Witch` or
+/// `サノバウィッチ`.
+fn matching_aliases(vn: &Vn, title: &str, original: Option<&str>) -> Vec<String> {
+    let mut aliases: Vec<String> = Vec::new();
+    let mut push = |value: Option<&str>| {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if value == title || Some(value) == original {
+            return;
+        }
+        if !aliases.iter().any(|existing| existing == value) {
+            aliases.push(value.to_string());
+        }
+    };
+    push(vn.title.as_deref());
+    push(vn.alttitle.as_deref());
+    for entry in &vn.titles {
+        push(entry.title.as_deref());
+        push(entry.latin.as_deref());
+    }
+    aliases
+}
+
 async fn post(body: KanaQuery<'_>) -> super::CmdResult<Vec<Vn>> {
     let response = super::http_client()?
         .post(ENDPOINT)
@@ -179,13 +271,16 @@ pub async fn search(query: &str, limit: u32) -> super::CmdResult<Vec<MetadataCan
     Ok(results
         .into_iter()
         .map(|vn| {
-            let title = vn.title.clone().unwrap_or_else(|| vn.id.clone());
-            let original = original_title(&vn).filter(|o| *o != title);
+            // Chinese when VNDB knows one, Japanese otherwise; the romanised
+            // title is never the display name.
+            let (title, original) = display_titles(&vn);
+            let aliases = matching_aliases(&vn, &title, original.as_deref());
             MetadataCandidate {
                 provider: Provider::Vndb,
                 external_id: vn.id.clone(),
                 title,
                 original_title: original,
+                aliases,
                 release_date: vn.released.clone(),
                 cover_url: vn.image.as_ref().and_then(|i| i.url.clone()),
                 rating: normalise(vn.rating).or_else(|| normalise(vn.average)),
@@ -241,7 +336,7 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         provider: Some(Provider::Vndb),
         external_id: Some(vn.id.clone()),
         title: vn.title.clone().unwrap_or_else(|| vn.id.clone()),
-        title_zh: None,
+        title_zh: chinese_title(&vn),
         title_original: original_title(&vn),
         developer: vn.developers.first().and_then(|d| d.name.clone()),
         release_date: vn.released.clone(),
@@ -278,5 +373,97 @@ mod tests {
     #[test]
     fn strip_markup_leaves_plain_text_untouched() {
         assert_eq!(strip_markup("plain text"), "plain text");
+    }
+
+    fn vn_with_titles(titles: &[(&str, &str, bool)], primary: &str) -> Vn {
+        Vn {
+            id: "v16044".to_string(),
+            title: Some(primary.to_string()),
+            alttitle: Some("サノバウィッチ".to_string()),
+            released: None,
+            image: None,
+            rating: None,
+            average: None,
+            votecount: None,
+            length_minutes: None,
+            description: None,
+            titles: titles
+                .iter()
+                .map(|(lang, title, official)| VnTitle {
+                    lang: Some(lang.to_string()),
+                    title: Some(title.to_string()),
+                    latin: None,
+                    official: *official,
+                    main: *lang == "ja",
+                })
+                .collect(),
+            tags: Vec::new(),
+            developers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn chinese_title_prefers_an_official_localization() {
+        let vn = vn_with_titles(
+            &[
+                ("en", "Sabbat of the Witch", true),
+                ("ja", "サノバウィッチ", true),
+                ("zh-Hant", "魔女的夜宴", false),
+                ("zh-Hans", "魔女的夜宴", true),
+            ],
+            "Sanoba Witch",
+        );
+        assert_eq!(chinese_title(&vn).as_deref(), Some("魔女的夜宴"));
+
+        let unofficial_only = vn_with_titles(
+            &[("ja", "サノバウィッチ", true), ("zh-Hant", "魔女的夜宴", false)],
+            "Sanoba Witch",
+        );
+        assert_eq!(chinese_title(&unofficial_only).as_deref(), Some("魔女的夜宴"));
+
+        let no_chinese = vn_with_titles(&[("ja", "サノバウィッチ", true)], "Sanoba Witch");
+        assert_eq!(chinese_title(&no_chinese), None);
+    }
+
+    #[test]
+    fn display_titles_never_uses_the_romanised_title_when_localized_ones_exist() {
+        // Chinese available: becomes the display title, Japanese stays 原名.
+        let chinese = vn_with_titles(
+            &[
+                ("en", "Sabbat of the Witch", true),
+                ("ja", "サノバウィッチ", true),
+                ("zh-Hans", "魔女的夜宴", true),
+            ],
+            "Sanoba Witch",
+        );
+        assert_eq!(
+            display_titles(&chinese),
+            ("魔女的夜宴".to_string(), Some("サノバウィッチ".to_string()))
+        );
+
+        // No Chinese: the original-script name wins and Latin becomes 原名.
+        let japanese = vn_with_titles(&[("ja", "サノバウィッチ", true)], "Sanoba Witch");
+        assert_eq!(
+            display_titles(&japanese),
+            ("サノバウィッチ".to_string(), Some("Sanoba Witch".to_string()))
+        );
+    }
+
+    #[test]
+    fn matching_aliases_keep_the_english_names_out_of_the_display_title() {
+        let vn = vn_with_titles(
+            &[
+                ("en", "Sabbat of the Witch", true),
+                ("ja", "サノバウィッチ", true),
+                ("zh-Hans", "魔女的夜宴", true),
+            ],
+            "Sanoba Witch",
+        );
+        let (title, original) = display_titles(&vn);
+        let aliases = matching_aliases(&vn, &title, original.as_deref());
+        assert!(aliases.iter().any(|alias| alias == "Sabbat of the Witch"));
+        assert!(aliases.iter().any(|alias| alias == "Sanoba Witch"));
+        assert!(!aliases.iter().any(|alias| alias == "魔女的夜宴"));
+        assert!(!aliases.iter().any(|alias| alias == "サノバウィッチ"));
     }
 }

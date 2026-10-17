@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { errorMessage, localeToolStatus } from "@/features/io/io";
 import type { LocaleToolStatus } from "@/features/io/io";
 
-export function LocaleLaunchSettings() {
+export function LocaleToolSection() {
   const [source, setSource] = useState<"bundled" | "custom">("bundled");
   const [enabled, setEnabled] = useState(false);
   const [toolPath, setToolPath] = useState("");
@@ -61,7 +61,7 @@ export function LocaleLaunchSettings() {
   return <div data-locale-launch-settings className="space-y-4">
     <div className="flex items-center justify-between gap-4">
       <div>
-        <h3 id="locale-launch-label" className="text-sm font-medium">转区启动</h3>
+        <h3 id="locale-launch-label" className="text-sm font-medium">启用转区</h3>
         <p className="mt-1 text-xs text-muted-foreground">开启后使用日文区域环境启动游戏；关闭后正常启动。</p>
       </div>
       <button type="button" role="switch" aria-labelledby="locale-launch-label" aria-checked={enabled}

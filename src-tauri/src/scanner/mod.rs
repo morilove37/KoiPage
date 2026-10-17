@@ -104,6 +104,19 @@ const EXE_BLOCKLIST: &[&str] = &[
 /// Exact (lowercased) stems that are strong positives, ranked first.
 const EXE_PREFERRED: &[&str] = &["game", "start", "play", "galgame", "game_start"];
 
+/// Batch launcher extensions we accept as an alternative to `.exe`.
+const SCRIPT_EXTENSIONS: &[&str] = &["bat", "cmd"];
+
+/// Script stems that are installers/uninstallers rather than launchers.
+const SCRIPT_BLOCKLIST: &[&str] = &[
+    "unins", "uninst", "setup", "install", "vcredist", "dxsetup", "directx", "readme", "help",
+];
+
+/// Script names that commonly launch the game or apply a patch.
+const SCRIPT_PREFERRED: &[&str] = &[
+    "start", "launch", "run", "play", "game", "galgame", "patch", "游戏", "启动", "开始",
+];
+
 /// Cover image extensions we accept, lowercased and without the dot.
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "bmp", "webp"];
 
@@ -180,11 +193,21 @@ pub async fn scan_directory(
 #[tauri::command]
 pub async fn inspect_exe_file(app: AppHandle, path: String) -> CmdResult<ScanCandidate> {
     let path = required_string(&path, "path")?;
-    if !Path::new(&path).is_file()
-        || !Path::new(&path).extension().and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-    {
-        return Err(CmdError("请选择真实存在的 exe 文件".to_string()));
+    let launch_path = Path::new(&path);
+    let launchable = launch_path.is_file()
+        && launch_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("exe")
+                    || SCRIPT_EXTENSIONS
+                        .iter()
+                        .any(|script| extension.eq_ignore_ascii_case(script))
+            });
+    if !launchable {
+        return Err(CmdError(
+            "请选择真实存在的 exe、.bat 或 .cmd 文件".to_string(),
+        ));
     }
     let already: HashSet<String> = match pool(&app).await {
         Ok(pool) => {
@@ -385,10 +408,18 @@ pub fn recognize(
         size_bytes = size_bytes.saturating_add(*size);
 
         if let Some(name) = file.file_name().and_then(|n| n.to_str()) {
-            if has_extension(name, "exe") {
-                if let Some(rank) = exe_rank(name) {
-                    exes.push((name.to_string(), rank));
-                }
+            let rank = if has_extension(name, "exe") {
+                exe_rank(name)
+            } else if SCRIPT_EXTENSIONS
+                .iter()
+                .any(|extension| has_extension(name, extension))
+            {
+                script_rank(name)
+            } else {
+                None
+            };
+            if let Some(rank) = rank {
+                exes.push((name.to_string(), rank));
             }
         }
         if is_cover_name(file) {
@@ -459,6 +490,28 @@ fn exe_rank(name: &str) -> Option<u8> {
         return Some(2);
     }
     Some(3)
+}
+
+/// Rank a `.bat` / `.cmd` launcher. Lower is better; `None` means "reject".
+///
+/// Scripts always rank below executables (base 10), so a folder that also ships
+/// `game.exe` still defaults to the exe; a folder with only a patch script still
+/// becomes an importable candidate and the user can pick the script.
+fn script_rank(name: &str) -> Option<u8> {
+    let stem = file_stem(name).to_lowercase();
+    if stem.is_empty() {
+        return None;
+    }
+    if SCRIPT_BLOCKLIST
+        .iter()
+        .any(|bad| stem.contains(bad))
+    {
+        return None;
+    }
+    if SCRIPT_PREFERRED.iter().any(|preferred| stem.contains(preferred)) {
+        return Some(10);
+    }
+    Some(14)
 }
 
 /// Pick the cover: name priority first, then the largest file.
@@ -694,6 +747,47 @@ mod tests {
         assert_eq!(exe_rank("GAME.EXE"), Some(0));
         assert_eq!(exe_rank("Sabbat_of_the_Witch_cn.exe"), Some(1));
         assert_eq!(exe_rank("月姫.exe"), Some(2));
+    }
+
+    #[test]
+    fn script_launchers_rank_after_executables() {
+        assert_eq!(script_rank("start.bat"), Some(10));
+        assert_eq!(script_rank("patch.bat"), Some(10));
+        assert_eq!(script_rank("启动游戏.cmd"), Some(10));
+        assert_eq!(script_rank("unins000.bat"), None);
+        assert_eq!(script_rank("setup.bat"), None);
+        assert_eq!(script_rank("misc.cmd"), Some(14));
+    }
+
+    #[test]
+    fn recognize_accepts_batch_launchers() {
+        // Both present: the executable stays the default suggestion, the script
+        // stays selectable in the dropdown.
+        let both = recognize(
+            Path::new("/games/demo"),
+            &files(&[("game.exe", 10), ("start.bat", 5)]),
+            &HashSet::new(),
+        )
+        .expect("candidate");
+        assert_eq!(both.exe_paths.len(), 2);
+        assert!(both.suggested_exe.unwrap().ends_with("game.exe"));
+
+        // Script-only patch folder: still importable, suggested launch is the bat.
+        let script_only = recognize(
+            Path::new("/games/patch"),
+            &files(&[("start.bat", 5)]),
+            &HashSet::new(),
+        )
+        .expect("script-only folder is a candidate");
+        assert!(script_only.suggested_exe.unwrap().ends_with("start.bat"));
+
+        // Installer scripts are rejected like installer executables.
+        assert!(recognize(
+            Path::new("/games/x"),
+            &files(&[("unins000.bat", 5)]),
+            &HashSet::new(),
+        )
+        .is_none());
     }
 
     #[test]

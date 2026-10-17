@@ -28,6 +28,7 @@ use crate::commands::error::{CmdError, CmdResult};
 use crate::commands::games::pool;
 use crate::commands::util::{not_found, now_iso8601};
 pub mod locale;
+pub mod magpie;
 
 /// Settings key holding the path of the locale-emulation tool ("转区工具").
 pub const LOCALE_TOOL_PATH_KEY: &str = "locale_tool_path";
@@ -201,6 +202,41 @@ fn resolve_workdir(exe: &Path, workdir: Option<&str>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Is this a Windows batch launcher (`.bat` / `.cmd`)?
+///
+/// Patches occasionally ship as a batch file that sets up the environment and
+/// starts the real executable. `CreateProcess` cannot run those directly, so
+/// [`launch_game`] wraps them in `cmd.exe`.
+pub fn is_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd")
+        })
+}
+
+/// Build the `cmd.exe` invocation for a batch launcher.
+///
+/// `/D` skips AutoRun commands, `/C` runs the script and exits. The arguments
+/// stay separate so the standard Windows quoting handles spaces and quotes.
+fn script_command(script: &Path, args: &[String]) -> CmdResult<(PathBuf, Vec<String>)> {
+    let command_interpreter = std::env::var_os("COMSPEC")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+    if !command_interpreter.is_file() {
+        return Err(CmdError("找不到 cmd.exe，无法启动 .bat/.cmd 脚本".into()));
+    }
+    let mut command = vec![
+        "/D".to_string(),
+        "/C".to_string(),
+        "call".to_string(),
+        script.to_string_lossy().into_owned(),
+    ];
+    command.extend(args.iter().cloned());
+    Ok((command_interpreter, command))
+}
+
 /// `YYYYMMDD-HHMMSS` in UTC, for timestamped backup file names.
 fn timestamp_slug() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -264,8 +300,26 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
 
     let args = split_args(target.launch_args.as_deref().unwrap_or(""));
     let workdir = resolve_workdir(&exe_path, target.workdir.as_deref());
+    // A patch may ship as `start.bat` rather than an executable; those can only
+    // be started through `cmd.exe`, never with `CreateProcess` directly.
+    let script = is_script(&exe_path);
+
+    // Start Magpie first when the user opted in, so the scaling hotkey is ready
+    // by the time the game window appears. Best effort only — a missing or
+    // broken Magpie install must never stop the game from launching.
+    if flag_is_on(setting(&db, magpie::AUTOSTART_KEY).await?.as_deref()) {
+        let source = setting(&db, magpie::SOURCE_KEY).await?;
+        let custom = setting(&db, magpie::PATH_KEY).await?;
+        let scaling = setting(&db, magpie::SCALING_MODE_KEY).await?;
+        magpie::autostart(&app, source.as_deref(), custom.as_deref(), scaling.as_deref());
+    }
 
     let locale_use = flag_is_on(setting(&db, LOCALE_TOOL_USE_KEY).await?.as_deref());
+    if locale_use && script {
+        return Err(CmdError(
+            "转区启动暂不支持 .bat/.cmd 启动脚本；请改用游戏 exe，或先关闭转区启动。".into(),
+        ));
+    }
     let (program, program_args): (PathBuf, Vec<String>) = if locale_use {
         if setting(&db, LOCALE_TOOL_SOURCE_KEY).await?.as_deref() == Some("custom") {
             let tool = setting(&db, LOCALE_TOOL_PATH_KEY).await?
@@ -281,9 +335,16 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
             locale::validate_game(&exe_path)?;
             (locale::bundled_path(&app)?, locale::arguments(&exe_path, &args, true))
         }
+    } else if script {
+        // `/C` executes the script and then cmd exits; args stay separate so
+        // Rust's Windows quoting protects paths with spaces.
+        script_command(&exe_path, &args)?
     } else {
         (exe_path.clone(), args)
     };
+    // Batch launchers may spawn the real game as a child, so stopping them has
+    // to kill the tree just like the locale helper does.
+    let terminate_tree = locale_use || script;
 
     let mut command = std::process::Command::new(&program);
     command.args(&program_args);
@@ -338,7 +399,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     let session_id = match session_result {
         Ok(id) => id,
         Err(error) => {
-            let _ = terminate_child(&mut child, locale_use);
+            let _ = terminate_child(&mut child, terminate_tree);
             let _ = child.wait();
             return Err(error);
         }
@@ -354,7 +415,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
             game_id,
             RunningGame {
                 child,
-                terminate_tree: locale_use,
+                terminate_tree,
                 session_id,
                 started_at: started_at.clone(),
             },
@@ -1319,4 +1380,41 @@ mod tests {
         "vndb_id",
         "bangumi_id",
     ];
+
+    #[test]
+    fn scripts_are_detected_case_insensitively() {
+        assert!(is_script(Path::new(r"C:\Games\Patch\start.bat")));
+        assert!(is_script(Path::new(r"C:\Games\Patch\START.CMD")));
+        assert!(!is_script(Path::new(r"C:\Games\Patch\game.exe")));
+    }
+
+    /// A patch may be a batch file in a path with spaces; verify the cmd wrapper
+    /// both finds the script and forwards an argument containing a space.
+    #[cfg(windows)]
+    #[test]
+    fn batch_launcher_runs_through_cmd_with_spaced_paths_and_args() {
+        let directory = std::env::temp_dir().join(format!(
+            "koipage-batch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let script = directory.join("start game.bat");
+        std::fs::write(&script, "@echo off\r\necho %~1> result.txt\r\n").unwrap();
+
+        let (program, args) = script_command(&script, &["two words".to_string()]).unwrap();
+        let status = std::process::Command::new(program)
+            .args(&args)
+            .current_dir(&directory)
+            .status()
+            .expect("cmd should start");
+        assert!(status.success(), "batch exited with {status:?}");
+        let result = std::fs::read_to_string(directory.join("result.txt")).unwrap();
+        assert_eq!(result.trim(), "two words");
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

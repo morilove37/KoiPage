@@ -14,7 +14,7 @@ import type {
 import type { GameInput } from "@/types/game";
 import { formatRating, roundRating } from "@/lib/rating";
 
-/** Preserve the user's search title; copy the accepted supplemental fields. */
+/** Copy the accepted fields onto the draft (its title is already resolved). */
 export function metadataInput(
   draft: GameInput,
   detail: MetadataDetail,
@@ -77,7 +77,7 @@ export const FIELD_ORDER: readonly MetadataField[] = [
 ];
 
 export const FIELD_LABELS: Record<MetadataField, string> = {
-  title: "游戏名（搜索名称）",
+  title: "游戏名",
   original_title: "原名",
   developer: "开发商",
   release_date: "发售日",
@@ -90,22 +90,45 @@ export const FIELD_LABELS: Record<MetadataField, string> = {
 
 /** Hints shown for fields that usually deserve a second look. */
 export const FIELD_NOTES: Partial<Record<MetadataField, string>> = {
-  title: "使用本次搜索填写的名称，匹配结果不会替换游戏名。",
+  title: "英文搜索会优先采用数据源里的中文名，其次日文原名；中文/日文搜索保留你填写的名称。",
   rating: "上游评分归一到 0-10，四舍五入到小数点后两位。",
   tags: "按名称入库，同名标签会复用而不是重建。",
 };
 
-/**
- * The title `metadata_apply` will actually write for the `title` field.
- *
- * Mirrors the Rust side: a non-blank `titleZh` wins, otherwise `title`.
- */
-export function titleFor(detail: MetadataDetail): string {
-  const zh = detail.titleZh?.trim();
-  return zh !== undefined && zh !== "" ? zh : detail.title.trim();
+/** Which language the auto-fetch path prefers for the stored game name. */
+export type MetadataTitlePreference = "zh" | "ja" | "source";
+
+/** Settings key shared with Rust (`metadata::TITLE_LANGUAGE_KEY`). */
+export const TITLE_LANGUAGE_KEY = "metadata_title_language";
+
+/** Parse the stored setting; unknown values fall back to Chinese-first. */
+export function normalizeTitlePreference(value: string | null | undefined): MetadataTitlePreference {
+  const trimmed = value?.trim().toLowerCase() ?? "";
+  if (trimmed === "ja") return "ja";
+  if (trimmed === "source") return "source";
+  return "zh";
 }
 
 /**
+ * The display title a merged detail resolves to.
+ *
+ * Mirrors `metadata::resolve_title` in Rust: VNDB's primary `title` is often
+ * romanised, so it is only the last resort unless the user explicitly opts into
+ * source titles.
+ */
+export function titleFor(
+  detail: MetadataDetail,
+  preference: MetadataTitlePreference = "zh",
+): string {
+  const zh = detail.titleZh?.trim() ?? "";
+  const original = detail.titleOriginal?.trim() ?? "";
+  const source = detail.title.trim();
+  const order =
+    preference === "ja" ? [original, zh, source]
+    : preference === "source" ? [source, zh, original]
+    : [zh, original, source];
+  return order.find((value) => value !== "") ?? "";
+}/**
  * Whether the detail carries a value for `field` at all.
  *
  * Load-bearing: `metadata_apply` writes null for a listed field whose upstream
@@ -139,7 +162,9 @@ export function hasFieldData(detail: MetadataDetail, field: MetadataField): bool
 export function fieldPreview(detail: MetadataDetail, field: MetadataField): string {
   switch (field) {
     case "title":
-      return titleFor(detail);
+      // `metadata_apply` writes this value verbatim for a manual confirmation
+      // (the dialog has already substituted the search name into `title`).
+      return detail.title.trim();
     case "original_title":
       return detail.titleOriginal?.trim() ?? "";
     case "developer":

@@ -12,7 +12,8 @@
 use tauri::AppHandle;
 
 use crate::metadata::{
-    self, bangumi, merge, nextmoe, vndb, MetadataCandidate, MetadataDetail, Provider,
+    self, bangumi, merge, nextmoe, resolve_title, vndb, MetadataCandidate, MetadataDetail, Provider,
+    TitlePreference, TITLE_LANGUAGE_KEY,
 };
 
 use super::error::{CmdError, CmdResult};
@@ -22,6 +23,12 @@ use super::util::{now_iso8601, required_string};
 
 /// Settings key holding the optional NextMoe API key.
 const NEXTMOE_KEY: &str = "nextmoe_api_key";
+
+/// Current title-language preference from the `settings` table.
+async fn title_preference(pool: &sqlx::Pool<sqlx::Sqlite>) -> TitlePreference {
+    let stored = settings_get_impl(pool, TITLE_LANGUAGE_KEY).await.ok().flatten();
+    TitlePreference::parse(stored.as_deref())
+}
 
 /// Which providers a search should query.
 ///
@@ -162,16 +169,26 @@ pub async fn metadata_detail(
     let external_id = required_string(&external_id, "externalId")?;
 
     let key = nextmoe_key(&app).await;
-    let key_ref = key.as_deref();
+    resolve_detail(provider, &external_id, key.as_deref()).await
+}
 
+/// Resolve one provider id into merged metadata, enriching from NextMoe.
+///
+/// Shared by the manual lookup and auto-fetch so a title fetched automatically
+/// also benefits from the Chinese title and ratings NextMoe may know about.
+async fn resolve_detail(
+    provider: Sources,
+    external_id: &str,
+    nextmoe_key: Option<&str>,
+) -> CmdResult<MetadataDetail> {
     let primary = match provider {
-        Sources::Nextmoe => nextmoe::detail(&external_id, key_ref).await?,
-        Sources::Vndb => vndb::detail(&external_id).await?,
-        Sources::Bangumi => bangumi::detail(&external_id).await?,
+        Sources::Nextmoe => nextmoe::detail(external_id, nextmoe_key).await?,
+        Sources::Vndb => vndb::detail(external_id).await?,
+        Sources::Bangumi => bangumi::detail(external_id).await?,
     };
 
-    // Try to enrich from NextMoe when the user picked a raw provider. Failure is
-    // expected (NextMoe may not know the work) and must not break the flow.
+    // Failure is expected (NextMoe may not know the work) and must not break
+    // the lookup.
     let mut detail = primary;
     if provider != Sources::Nextmoe {
         let source_name = match provider {
@@ -180,13 +197,10 @@ pub async fn metadata_detail(
             Sources::Nextmoe => unreachable!(),
         };
         let reference = format!("{source_name}:{external_id}");
-        // `Ok(None)` means NextMoe does not know this work; only enrich when it
-        // actually resolved something.
-        if let Ok(Some(extra)) = nextmoe::detail_by_ref(&reference, key_ref).await {
+        if let Ok(Some(extra)) = nextmoe::detail_by_ref(&reference, nextmoe_key).await {
             merge::merge_into(&mut detail, extra);
         }
     }
-
     Ok(detail)
 }
 
@@ -208,20 +222,17 @@ pub async fn metadata_detail(
 fn text_columns(
     detail: &MetadataDetail,
     fields: &[String],
+    preference: TitlePreference,
 ) -> CmdResult<Vec<(&'static str, String)>> {
     let wants = |name: &str| fields.iter().any(|f| f == name);
     let mut columns: Vec<(&'static str, String)> = Vec::new();
+    let resolved_title = resolve_title(detail, preference);
 
     if wants("title") {
-        let title = detail
-            .title_zh
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| detail.title.clone());
-        if title.trim().is_empty() {
+        if resolved_title.trim().is_empty() {
             return Err(CmdError("拒绝应用空标题".to_string()));
         }
-        columns.push(("title", title));
+        columns.push(("title", resolved_title.clone()));
     }
 
     // Appended only when the provider actually supplies a non-blank value.
@@ -232,7 +243,13 @@ fn text_columns(
     };
 
     if wants("original_title") {
-        push("original_title", detail.title_original.clone());
+        // With a Japanese-first preference the resolved name *is* the original
+        // title; writing the same string twice would just be noise.
+        let duplicate_of_title =
+            wants("title") && resolved_title.trim() == detail.title_original.as_deref().unwrap_or("").trim();
+        if !duplicate_of_title {
+            push("original_title", detail.title_original.clone());
+        }
     }
     if wants("developer") {
         push("developer", detail.developer.clone());
@@ -281,13 +298,14 @@ pub(crate) async fn apply_detail(
     detail: &MetadataDetail,
     fields: &[String],
     tag_mode: Option<&str>,
+    preference: TitlePreference,
 ) -> CmdResult<AppliedMetadata> {
     let wants = |name: &str| fields.iter().any(|f| f == name);
     let now = now_iso8601();
 
     // Build the update from only the accepted fields, dropping any the provider
     // has no value for. See `text_columns` for why that matters.
-    let columns = text_columns(detail, fields)?;
+    let columns = text_columns(detail, fields, preference)?;
 
     // A typed binding list keeps the `?` placeholders and the `.bind()` calls in
     // a single ordered walk. Building the SQL by string surgery instead (e.g.
@@ -394,7 +412,17 @@ pub async fn metadata_apply(
     tag_mode: Option<String>,
 ) -> CmdResult<AppliedMetadata> {
     let pool = pool(&app).await?;
-    apply_detail(&pool, game_id, &detail, &fields, tag_mode.as_deref()).await
+    // Manual confirmation keeps naming the game after the user's search query;
+    // only automatic fetching applies the configured title-language preference.
+    apply_detail(
+        &pool,
+        game_id,
+        &detail,
+        &fields,
+        tag_mode.as_deref(),
+        TitlePreference::Source,
+    )
+    .await
 }
 
 /// `metadata_cover_cache` — download a remote cover next to the game and return
@@ -579,6 +607,9 @@ pub async fn metadata_autofetch(
     let key_ref = key.as_deref();
 
     let fields: Vec<String> = AUTOFETCH_FIELDS.iter().map(|f| f.to_string()).collect();
+    // Read once per batch: the preference decides which language becomes the
+    // stored game name (Chinese by default, so autofetch stops writing English).
+    let preference = title_preference(&pool).await;
     let total = game_ids.len();
     let mut summary = AutofetchSummary::default();
 
@@ -664,7 +695,7 @@ pub async fn metadata_autofetch(
                             outcome.message = Some(error.0);
                         }
                         Ok(detail) => {
-                            match apply_detail(&pool, *game_id, &detail, &fields, None).await {
+                            match apply_detail(&pool, *game_id, &detail, &fields, None, preference).await {
                                 Err(error) => {
                                     outcome.status = AutofetchStatus::Failed;
                                     outcome.message = Some(error.0);
@@ -739,16 +770,20 @@ async fn sleep_between(delay_ms: u64) {
 }
 
 /// Fetch a detail record from the provider the candidate came from.
+///
+/// Uses the same enrichment path as the manual lookup, so auto-fetch also picks
+/// up NextMoe's Chinese title when available.
 async fn fetch_detail(
     provider: Provider,
     external_id: &str,
     nextmoe_key: Option<&str>,
 ) -> CmdResult<MetadataDetail> {
-    match provider {
-        Provider::Nextmoe => nextmoe::detail(external_id, nextmoe_key).await,
-        Provider::Vndb => vndb::detail(external_id).await,
-        Provider::Bangumi => bangumi::detail(external_id).await,
-    }
+    let sources = match provider {
+        Provider::Nextmoe => Sources::Nextmoe,
+        Provider::Vndb => Sources::Vndb,
+        Provider::Bangumi => Sources::Bangumi,
+    };
+    resolve_detail(sources, external_id, nextmoe_key).await
 }
 
 /// Download a cover next to the game and return the local path.
@@ -816,11 +851,11 @@ mod tests {
         sqlx::query("INSERT INTO games (id, title, install_path, created_at, updated_at, rating) VALUES (1, 'Test', 'decimal', 'now', 'now', 8)")
             .execute(&pool).await.unwrap();
         let detail = MetadataDetail { rating: Some(8.725), ..Default::default() };
-        apply_detail(&pool, 1, &detail, &fields(&["rating"]), None).await.unwrap();
+        apply_detail(&pool, 1, &detail, &fields(&["rating"]), None, TitlePreference::Source).await.unwrap();
         let rating: Option<f64> = sqlx::query_scalar("SELECT rating FROM games WHERE id = 1")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(rating, Some(8.73));
-        apply_detail(&pool, 1, &MetadataDetail::default(), &fields(&["rating"]), None).await.unwrap();
+        apply_detail(&pool, 1, &MetadataDetail::default(), &fields(&["rating"]), None, TitlePreference::Source).await.unwrap();
         let rating: Option<f64> = sqlx::query_scalar("SELECT rating FROM games WHERE id = 1")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(rating, Some(8.73));
@@ -857,7 +892,7 @@ mod tests {
             "bangumi_id",
         ]);
 
-        let columns = text_columns(&detail, &accepted).expect("title is present");
+        let columns = text_columns(&detail, &accepted, TitlePreference::Chinese).expect("title is present");
 
         assert_eq!(
             columns.len(),
@@ -876,7 +911,7 @@ mod tests {
             ..Default::default()
         };
         let columns =
-            text_columns(&detail, &fields(&["developer", "description"])).expect("no title wanted");
+            text_columns(&detail, &fields(&["developer", "description"]), TitlePreference::Chinese).expect("no title wanted");
         assert!(
             columns.is_empty(),
             "whitespace and empty strings must not be written, got {columns:?}"
@@ -892,7 +927,7 @@ mod tests {
             ..Default::default()
         };
         // Caller only accepted the developer.
-        let columns = text_columns(&detail, &fields(&["developer"])).expect("ok");
+        let columns = text_columns(&detail, &fields(&["developer"]), TitlePreference::Chinese).expect("ok");
         assert_eq!(columns.len(), 1);
         assert_eq!(columns[0], ("developer", "Key".to_string()));
     }
@@ -906,7 +941,7 @@ mod tests {
             title_zh: Some("克兰纳德".to_string()),
             ..Default::default()
         };
-        let columns = text_columns(&detail, &fields(&["title"])).expect("ok");
+        let columns = text_columns(&detail, &fields(&["title"]), TitlePreference::Chinese).expect("ok");
         assert_eq!(columns[0], ("title", "克兰纳德".to_string()));
     }
 
@@ -918,7 +953,7 @@ mod tests {
             title: "   ".to_string(),
             ..Default::default()
         };
-        assert!(text_columns(&detail, &fields(&["title"])).is_err());
+        assert!(text_columns(&detail, &fields(&["title"]), TitlePreference::Chinese).is_err());
     }
 
     #[test]
@@ -928,6 +963,71 @@ mod tests {
             developer: Some("Key".to_string()),
             ..Default::default()
         };
-        assert!(text_columns(&detail, &[]).expect("ok").is_empty());
+        assert!(text_columns(&detail, &[], TitlePreference::Chinese).expect("ok").is_empty());
+    }
+
+    /// The reported bug: VNDB's primary title is often romanised, while the
+    /// original Japanese title was already fetched. Applying metadata used to
+    /// write the English name.
+    #[test]
+    fn romanised_provider_title_never_wins_over_the_original_title() {
+        let detail = MetadataDetail {
+            title: "Clannad".to_string(),
+            title_zh: None,
+            title_original: Some("クラナド".to_string()),
+            ..Default::default()
+        };
+
+        for preference in [TitlePreference::Chinese, TitlePreference::Japanese] {
+            let columns = text_columns(
+                &detail,
+                &fields(&["title", "original_title"]),
+                preference,
+            )
+            .expect("title exists");
+            assert_eq!(
+                columns,
+                vec![("title", "クラナド".to_string())],
+                "the Japanese title becomes the name and must not also be written as 原名 ({preference:?})"
+            );
+        }
+
+        let source = text_columns(
+            &detail,
+            &fields(&["title", "original_title"]),
+            TitlePreference::Source,
+        )
+        .expect("title exists");
+        assert_eq!(
+            source,
+            vec![
+                ("title", "Clannad".to_string()),
+                ("original_title", "クラナド".to_string()),
+            ],
+            "opting into the source title keeps the previous behaviour"
+        );
+    }
+
+    #[test]
+    fn chinese_preference_keeps_the_japanese_name_as_original_title() {
+        let detail = MetadataDetail {
+            title: "Clannad".to_string(),
+            title_zh: Some("克兰纳德".to_string()),
+            title_original: Some("クラナド".to_string()),
+            ..Default::default()
+        };
+        let columns = text_columns(
+            &detail,
+            &fields(&["title", "original_title"]),
+            TitlePreference::Chinese,
+        )
+        .expect("title exists");
+        assert_eq!(
+            columns,
+            vec![
+                ("title", "克兰纳德".to_string()),
+                ("original_title", "クラナド".to_string()),
+            ]
+        );
     }
 }

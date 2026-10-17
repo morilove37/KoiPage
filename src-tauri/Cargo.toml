@@ -1,6 +1,6 @@
 [package]
 name = "galgame-manager"
-version = "0.4.0"
+version = "0.5.0"
 description = "KoiPage - a Galgame and visual novel library manager"
 authors = ["morilove37"]
 edition = "2024"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "image-png"] }
+tauri = { version = "2", features = ["protocol-asset", "image-png", "tray-icon"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -55,3 +55,14 @@ strip = true
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
+
+# The Magpie integration reads an executable's version resource and enumerates
+# `Magpie.exe` processes — both live in Win32 APIs that have no std equivalent.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }

@@ -27,7 +27,7 @@ export function PathInput({ label, value, onChange, kind, disabled = false }: {
         multiple: false,
         directory,
         defaultPath: value.trim() || undefined,
-        filters: !directory && kind === "file" ? [{ name: "可执行文件", extensions: ["exe"] }] : undefined,
+        filters: !directory && kind === "file" ? [{ name: "可执行文件或启动脚本", extensions: ["exe", "bat", "cmd"] }] : undefined,
       });
       if (mounted.current && typeof path === "string") onChange(path);
     } catch (cause) {

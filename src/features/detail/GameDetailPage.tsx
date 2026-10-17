@@ -16,14 +16,18 @@ import { Tabs } from "@/components/ui/tabs";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
+import { errorMessage, localeToolStatus } from "@/features/io/io";
 import type { GameExitedPayload } from "@/features/io/io";
 import {
   gameDelete,
   gameGet,
   gameUpdate,
   playSessionsList,
+  settingsGet,
+  settingsSet,
   tagsList,
 } from "@/lib/db";
+import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/app";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating, roundRating } from "@/lib/rating";
@@ -91,6 +95,55 @@ function formatDateTime(iso: string | null): string {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+/** Truthy spellings shared by the launch-option settings. */
+function isOn(value: string | null | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
+}
+
+/** Batch launchers (.bat/.cmd) are started through cmd.exe, not directly. */
+function isScriptPath(value: string): boolean {
+  return /\.(bat|cmd)$/i.test(value.trim());
+}
+
+/** Compact switch for the toolbar's launch options. */
+function MiniSwitch({
+  checked,
+  disabled,
+  label,
+  title,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  title?: string;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={title}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "bg-primary" : "bg-muted-foreground/40",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+          checked ? "translate-x-[18px]" : "translate-x-1",
+        )}
+      />
+    </button>
+  );
+}
+
 export default function GameDetailPage() {
   const sharedOpening = useRef<boolean | null>(null);
   const { id } = useParams<{ id: string }>();
@@ -130,6 +183,60 @@ export default function GameDetailPage() {
   const launching = useAppStore(state => state.launching[gameId] === true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // 启动选项与「实用工具」共用同一批全局设置；详情页的开关只是快捷入口，
+  // 因此这里读写的是 locale_tool_use / magpie_autostart 本身。
+  const [localeUse, setLocaleUse] = useState(false);
+  const [magpieAutostart, setMagpieAutostart] = useState(false);
+  const [localeReady, setLocaleReady] = useState<boolean | null>(null);
+  const [optionBusy, setOptionBusy] = useState<"locale" | "magpie" | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const [use, autostart, source, toolPath] = await Promise.all([
+          settingsGet("locale_tool_use"),
+          settingsGet("magpie_autostart"),
+          settingsGet("locale_tool_source"),
+          settingsGet("locale_tool_path"),
+        ]);
+        let ready = false;
+        try {
+          const status = await localeToolStatus();
+          ready = source === "custom" ? Boolean(toolPath?.trim()) : status.available;
+        } catch {
+          ready = false;
+        }
+        if (!alive) return;
+        setLocaleUse(isOn(use));
+        setMagpieAutostart(isOn(autostart));
+        setLocaleReady(ready);
+      } catch (cause) {
+        if (alive) setError(errorMessage(cause));
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  async function toggleLaunchOption(kind: "locale" | "magpie", next: boolean) {
+    if (optionBusy) return;
+    setOptionBusy(kind);
+    setError(null);
+    setNotice(null);
+    try {
+      await settingsSet(kind === "locale" ? "locale_tool_use" : "magpie_autostart", next ? "1" : "0");
+      if (kind === "locale") setLocaleUse(next);
+      else setMagpieAutostart(next);
+      setNotice(kind === "locale"
+        ? next ? "已开启转区启动（全局设置）。" : "已关闭转区启动（全局设置）。"
+        : next ? "已开启启动时缩放（全局设置）。" : "已关闭启动时缩放（全局设置）。");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setOptionBusy(null);
+    }
+  }
   /**
    * Whether this detail view can pop the history stack. A game opened from the
    * library list gets `history.state.idx > 0`, so `navigate(-1)` returns to the
@@ -497,7 +604,29 @@ export default function GameDetailPage() {
             </Link>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div
+              className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1"
+              title="启动选项（全局设置，与「实用工具」同步）：转区使用内置 LE 启动；缩放会在启动前自动启动 Magpie，仍需按快捷键放大窗口。"
+            >
+              <span className="text-[11px] text-muted-foreground">转区</span>
+              <MiniSwitch
+                checked={localeUse}
+                disabled={optionBusy !== null || (!localeUse && localeReady !== true)}
+                label="转区启动"
+                title={localeReady === false ? "转区工具不可用，请先在「实用工具 → 转区启动」检查" : "启动游戏时使用日语区域（内置 LE）"}
+                onChange={next => void toggleLaunchOption("locale", next)}
+              />
+              <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-border" />
+              <span className="text-[11px] text-muted-foreground">缩放</span>
+              <MiniSwitch
+                checked={magpieAutostart}
+                disabled={optionBusy !== null}
+                label="启动时缩放"
+                title="启动游戏前自动启动 Magpie；放大仍需按 Magpie 快捷键"
+                onChange={next => void toggleLaunchOption("magpie", next)}
+              />
+            </div>
             <Button
               loading={launching}
               onClick={() => void launcher.launch(game)}
@@ -726,6 +855,11 @@ export default function GameDetailPage() {
                 <PathInput label="可执行文件" kind="file" value={form.exePath} disabled={saving}
                   onChange={value => setForm(before => before ? { ...before, exePath: value } : before)} />
               </Field>
+              {isScriptPath(form.exePath) ? (
+                <p className="text-xs leading-relaxed text-muted-foreground sm:col-span-2">
+                  当前使用 .bat/.cmd 启动脚本（通过 cmd 运行）。如果脚本启动游戏后立即退出，本次游玩时长可能无法统计；转区启动暂不支持脚本，需要转区时请改用游戏 exe。
+                </p>
+              ) : null}
               <Field label="启动参数">
                 <Input
                   value={form.launchArgs}

@@ -2,3 +2,10 @@
 *.png binary
 *.ico binary
 *.icns binary
+# Bundled Magpie release (src-tauri/resources/magpie) — never apply EOL rewriting.
+/src-tauri/resources/magpie/*.exe binary
+/src-tauri/resources/magpie/*.dll binary
+/src-tauri/resources/magpie/*.pri binary
+/src-tauri/resources/magpie/**/*.dds binary
+# Preserve upstream files verbatim, including their original line endings.
+/src-tauri/resources/magpie/** -text -whitespace

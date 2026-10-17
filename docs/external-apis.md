@@ -131,6 +131,7 @@ POST https://api.vndb.org/kana/vn
 - `rating` 与 `average` 是 **0-100** 数值（本项目除以 10，保留来源精度）
 - `tags` 只在**直接**应用时返回，不含父标签
 - 描述 `description` 可能含 VNDB 私有格式标记，需要清洗
+- `titles` 是多语言标题列表：不少作品带官方中文（`zh-Hans` / `zh-Hant`），`official` 区分官方/非官方译名；本项目优先采用官方中文名写入 `title_zh`，`ja` 条目作为原名。`title` 字段常为罗马字，只作最后兜底。
 
 ---
 

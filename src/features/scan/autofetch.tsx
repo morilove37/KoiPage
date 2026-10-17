@@ -248,7 +248,8 @@ export function AutofetchPanel({
             <Badge variant="status">{STATUS_LABELS[progress.status]}</Badge>
           </p>
         ) : null}
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+          导入速度取决于数据源速度，导入较慢请耐心等待或之后再试；同一时间内多次导入可能会被限流，等待一段时间即可。
           逐个查询以免触发上游限流（每部间隔约 0.7 秒），期间请勿关闭窗口。
         </p>
       </div>

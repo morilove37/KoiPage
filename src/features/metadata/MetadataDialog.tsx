@@ -35,6 +35,7 @@ import {
   metadataCoverCache,
   metadataDetail,
   metadataSearch,
+  settingsGet,
 } from "@/lib/db";
 import type {
   Game,
@@ -55,14 +56,17 @@ import {
   FIELD_NOTES,
   FIELD_ORDER,
   PROVIDER_LABELS,
+  TITLE_LANGUAGE_KEY,
   defaultChecked,
   errorMessage,
   fieldPreview,
   formatScore,
   formatSourceRating,
   hasFieldData,
+  normalizeTitlePreference,
   providerLabel,
   titleFor,
+  type MetadataTitlePreference,
 } from "./fields";
 import { ManualEntryForm } from "./ManualEntryForm";
 import { createGameFromMetadata } from "./create-game";
@@ -141,12 +145,39 @@ export default function MetadataDialog({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
+  // Preview the eventual game name with the same language policy the auto-fetch
+  // path writes; manual confirmation still names the game after the search query.
+  const [titlePreference, setTitlePreference] = useState<MetadataTitlePreference>("zh");
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void settingsGet(TITLE_LANGUAGE_KEY)
+      .then((value) => {
+        if (!cancelled) setTitlePreference(normalizeTitlePreference(value));
+      })
+      .catch(() => {
+        // The preview falls back to the Chinese-first default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
   const { t, enabled: localizationEnabled } = useLocalizedTags();
   // Use the submitted query that produced these candidates. Editing the input
   // without searching again must not attach an unrelated name to stale results.
   const searchName = searchedTitle || query.trim() || draft?.title.trim() || initialQuery?.trim() || "";
+  // Chinese/Japanese searches keep exactly what the user typed. An English query
+  // is only a lookup key: it must not become the game name when the provider
+  // knows a Chinese title (VNDB carries zh-Hans/zh-Hant localizations) or the
+  // original-script title.
+  const searchNameHasCjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(searchName);
   const importDraft = useMemo(() => draft ? { ...draft, title: searchName } : undefined, [draft, searchName]);
-  const detailForWrite = useMemo(() => detail ? { ...detail, title: searchName, titleZh: null } : null, [detail, searchName]);
+  const detailForWrite = useMemo(() => {
+    if (!detail) return null;
+    const title = searchNameHasCjk ? searchName : (titleFor(detail, titlePreference) || searchName);
+    return { ...detail, title, titleZh: null };
+  }, [detail, searchName, searchNameHasCjk, titlePreference]);
   const displayDetail = useMemo(() => detailForWrite ? {
     ...detailForWrite, tags: detailForWrite.tags.map(t),
   } : null, [detailForWrite, t]);
@@ -304,7 +335,10 @@ export default function MetadataDialog({
 
     try {
       if (importDraft) {
-        const { game } = await createGameFromMetadata(importDraft, detailForWrite, selectedFields, wantsCover);
+        // New imports must carry the title resolved above; `metadataInput` reads
+        // the draft title, so hand it the resolved name instead of the raw query.
+        const draftForCreate = { ...importDraft, title: detailForWrite.title.trim() || importDraft.title };
+        const { game } = await createGameFromMetadata(draftForCreate, detailForWrite, selectedFields, wantsCover);
         onCreated?.(game);
         return;
       }
@@ -711,7 +745,7 @@ export default function MetadataDialog({
                 <div className="h-40 w-28 shrink-0 overflow-hidden rounded bg-muted">
                   <CoverImage
                     path={detail.coverUrl}
-                    alt={titleFor(detail) || detail.title}
+                    alt={titleFor(detail, titlePreference) || detail.title}
                     className="h-full w-full object-cover"
                   />
                 </div>
@@ -728,7 +762,7 @@ export default function MetadataDialog({
                     ) : null}
                   </div>
 
-                  <p className="text-sm font-semibold">匹配作品：{titleFor(detail) || "（无标题）"}</p>
+                  <p className="text-sm font-semibold">匹配作品：{titleFor(detail, titlePreference) || "（无标题）"}</p>
                   {detail.titleOriginal ? (
                     <p className="text-muted-foreground">原名：{detail.titleOriginal}</p>
                   ) : null}

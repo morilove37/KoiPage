@@ -116,6 +116,7 @@ pub fn score(query: &str, candidate: &MetadataCandidate) -> Match {
     let mut best = Match::None;
     for haystack in [Some(candidate.title.as_str()), candidate.original_title.as_deref()]
         .into_iter()
+        .chain(candidate.aliases.iter().map(|alias| Some(alias.as_str())))
         .flatten()
     {
         best = best.max(compare(&needle, &normalise(haystack)));
@@ -189,6 +190,7 @@ mod tests {
             external_id: "1".to_string(),
             title: title.to_string(),
             original_title: original.map(str::to_string),
+            aliases: Vec::new(),
             release_date: None,
             cover_url: None,
             rating: None,
@@ -241,6 +243,15 @@ mod tests {
             score("クラナド", &candidate("CLANNAD", Some("クラナド"))),
             Match::Exact
         );
+    }
+
+    #[test]
+    fn matching_a_latin_alias_works_when_the_display_title_is_chinese() {
+        // VNDB now shows the Chinese title but must still match an English folder.
+        let mut vndb = candidate("魔女的夜宴", Some("サノバウィッチ"));
+        vndb.aliases = vec!["Sabbat of the Witch".to_string()];
+        assert_eq!(score("Sabbat of the Witch", &vndb), Match::Exact);
+        assert_eq!(score("Sanoba Witch", &vndb), Match::None);
     }
 
     #[test]

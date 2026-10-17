@@ -1,0 +1,183 @@
+{
+  "language": "",
+  "theme": 2,
+  "shortcuts": {
+    "scale": 3137,
+    "windowedModeScale": 3153,
+    "toolbar": 3140
+  },
+  "countdownSeconds": 3,
+  "developerMode": false,
+  "debugMode": false,
+  "benchmarkMode": false,
+  "disableEffectCache": false,
+  "disableFontCache": false,
+  "saveEffectSources": false,
+  "warningsAreErrors": false,
+  "allowScalingMaximized": true,
+  "simulateExclusiveFullscreen": false,
+  "alwaysRunAsAdmin": true,
+  "showNotifyIcon": true,
+  "inlineParams": false,
+  "autoCheckForUpdates": true,
+  "checkForPreviewUpdates": false,
+  "duplicateFrameDetectionMode": 1,
+  "enableStatisticsForDynamicDetection": false,
+  "minFrameRate": 10.0,
+  "disableFP16": false,
+  "scalingModes": [
+    {
+      "name": "Lanczos",
+      "effects": [
+        {
+          "name": "Lanczos",
+          "scalingType": 1,
+          "scale": {
+            "x": 1.0,
+            "y": 1.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "FSR",
+      "effects": [
+        {
+          "name": "FSR\\FSR_EASU",
+          "scalingType": 1,
+          "scale": {
+            "x": 1.0,
+            "y": 1.0
+          }
+        },
+        {
+          "name": "FSR\\FSR_RCAS",
+          "parameters": {
+            "sharpness": 0.8700000047683716
+          }
+        }
+      ]
+    },
+    {
+      "name": "FSRCNNX",
+      "effects": [
+        {
+          "name": "FSRCNNX\\FSRCNNX"
+        }
+      ]
+    },
+    {
+      "name": "CuNNy",
+      "effects": [
+        {
+          "name": "CuNNy2\\CuNNy-4x12-NVL"
+        }
+      ]
+    },
+    {
+      "name": "Anime4K",
+      "effects": [
+        {
+          "name": "Anime4K\\Anime4K_Upscale_Denoise_L"
+        }
+      ]
+    },
+    {
+      "name": "CRT-Geom",
+      "effects": [
+        {
+          "name": "CRT\\CRT_Geom",
+          "scalingType": 1,
+          "scale": {
+            "x": 1.0,
+            "y": 1.0
+          },
+          "parameters": {
+            "monitorGamma": 2.200000047683716,
+            "cornerSize": 0.0010000000474974513,
+            "curvature": 0.0,
+            "interlace": 0.0,
+            "CRTGamma": 1.5
+          }
+        }
+      ]
+    },
+    {
+      "name": "Integer Scale 2x",
+      "effects": [
+        {
+          "name": "Nearest",
+          "scalingType": 0,
+          "scale": {
+            "x": 2.0,
+            "y": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "1k",
+      "effects": [
+        {
+          "name": "Anime4K\\Anime4K_Upscale_L"
+        },
+        {
+          "name": "Lanczos",
+          "scalingType": 1,
+          "scale": {
+            "x": 1.0,
+            "y": 1.0
+          }
+        },
+        {
+          "name": "Anime4K\\Anime4K_Restore_L"
+        }
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "scalingMode": 7,
+      "captureMethod": 0,
+      "multiMonitorUsage": 0,
+      "initialWindowedScaleFactor": 0,
+      "customInitialWindowedScaleFactor": 1.25,
+      "graphicsCardId": {
+        "idx": -1,
+        "vendorId": 0,
+        "deviceId": 0
+      },
+      "frameRateLimiterEnabled": false,
+      "maxFrameRate": 60.0,
+      "3DGameMode": false,
+      "captureTitleBar": false,
+      "adjustCursorSpeed": true,
+      "disableDirectFlip": false,
+      "cursorScaling": 2,
+      "customCursorScaling": 1.0,
+      "cursorInterpolationMode": 0,
+      "autoHideCursorEnabled": false,
+      "autoHideCursorDelay": 3.0,
+      "croppingEnabled": false,
+      "cropping": {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0
+      }
+    }
+  ],
+  "overlay": {
+    "fullscreenInitialToolbarState": 2,
+    "windowedInitialToolbarState": 2,
+    "screenshotsDir": "",
+    "windows": {
+      "profiler": {
+        "hArea": 2,
+        "vArea": 2,
+        "hPos": 92.66667175292969,
+        "vPos": 161.33334350585938
+      }
+    }
+  }
+}
