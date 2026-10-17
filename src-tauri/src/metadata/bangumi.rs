@@ -223,11 +223,32 @@ pub async fn search(query: &str, limit: u32) -> super::CmdResult<Vec<MetadataCan
                 .clone()
                 .filter(|n| *n != title)
                 .or_else(|| alias_title(&subject));
+            // Bangumi's name/name_cn/别名 are all useful for matching an English
+            // or Japanese folder even when the display title is Chinese.
+            let alias = alias_title(&subject);
+            let mut aliases: Vec<String> = Vec::new();
+            for value in [
+                subject.name.as_deref(),
+                subject.name_cn.as_deref(),
+                alias.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let value = value.trim();
+                if value.is_empty() || value == title || Some(value) == original.as_deref() {
+                    continue;
+                }
+                if !aliases.iter().any(|existing| existing == value) {
+                    aliases.push(value.to_string());
+                }
+            }
             MetadataCandidate {
                 provider: Provider::Bangumi,
                 external_id: subject.id.to_string(),
                 title,
                 original_title: original,
+                aliases,
                 release_date: subject.date.clone(),
                 cover_url: subject.images.as_ref().and_then(Images::best),
                 rating: normalise(subject.rating.as_ref().and_then(|r| r.score)),

@@ -135,7 +135,7 @@ export default function ImportExeDialog({
       // `string | null` — the path, or null when the user cancels.
       const selected = await open({
         title: "选择游戏启动程序",
-        filters: [{ name: "可执行文件", extensions: ["exe"] }],
+        filters: [{ name: "可执行文件或启动脚本", extensions: ["exe", "bat", "cmd"] }],
       });
       if (typeof selected !== "string" || selected.length === 0) return; // cancelled
       setSelectedExe(selected);
@@ -147,7 +147,7 @@ export default function ImportExeDialog({
 
   const runImport = useCallback(async () => {
     if (!candidate) {
-      setError("请先选择一个可执行文件。");
+      setError("请先选择一个启动程序。");
       return;
     }
     const finalTitle = title.trim() || candidate.folderName;
@@ -221,7 +221,7 @@ export default function ImportExeDialog({
           <div>
             <h2 className="text-sm font-semibold">手动导入</h2>
             <p className="text-xs text-muted-foreground">
-              直接选择游戏的 .exe 文件导入，适用于目录结构不规则的安装。
+              直接选择游戏的 exe 或 .bat/.cmd 启动脚本导入，适用于目录结构不规则的安装。通过脚本启动时，如果脚本启动游戏后立即退出，游玩时长可能无法统计。
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
@@ -233,17 +233,17 @@ export default function ImportExeDialog({
         <div className="space-y-3 border-b border-border px-4 py-3">
           <div className="flex items-end gap-2">
             <label className="flex flex-1 flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">可执行文件</span>
+              <span className="text-xs font-medium text-muted-foreground">启动程序</span>
               <Input
                 value={selectedExe ?? ""}
-                placeholder="尚未选择 .exe 文件"
+                placeholder="尚未选择 exe 或 .bat 文件"
                 spellCheck={false}
                 readOnly
                 title={selectedExe ?? undefined}
               />
             </label>
             <Button variant="outline" onClick={() => void pickExe()} disabled={busy}>
-              选择 exe…
+              选择程序…
             </Button>
           </div>
         </div>
@@ -274,7 +274,7 @@ export default function ImportExeDialog({
             <div className="py-10 text-center text-sm text-muted-foreground">正在读取…</div>
           ) : !candidate ? (
             <div className="py-10 text-center text-sm text-muted-foreground">
-              还没有选择文件。点击「选择 exe…」定位游戏启动程序。
+              还没有选择文件。点击「选择程序…」定位游戏启动程序（exe 或 .bat/.cmd）。
             </div>
           ) : (
             <div className="flex gap-4">
@@ -313,7 +313,7 @@ export default function ImportExeDialog({
                       }))}
                     />
                   ) : (
-                    <span className="text-xs text-destructive">未找到可执行文件</span>
+                    <span className="text-xs text-destructive">未找到启动程序</span>
                   )}
                 </label>
 

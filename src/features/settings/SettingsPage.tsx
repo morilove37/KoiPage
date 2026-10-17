@@ -1,13 +1,18 @@
 /**
  * 设置页 — `/settings`.
  *
- * Four sections, each self-contained so a failure in one (e.g. no database yet)
+ * Sections, each self-contained so a failure in one (e.g. no database yet)
  * does not blank the whole page:
  *
  *   1. 扫描根管理 — list / add / delete / enable / maxDepth
  *   2. 外观      — light / dark / system, persisted to the `settings` table
- *   3. 启动设置  — locale tool ("转区工具") path + enable switch
+ *   3. 资料汉化  — offline tag dictionary switch
  *   4. 数据管理  — backup / export / import
+ *   5. 公告      — re-open the welcome / release announcements
+ *   6. 关于      — version and project links
+ *
+ * The locale tool ("转区工具") and the Magpie window-scaling tool live on the
+ * dedicated 实用工具 page (`/tools`), not here.
  *
  * Data access goes through `@/lib/db` (which awaits the connection and
  * migrations) and `@/features/io/io` (launcher commands). Command failures
@@ -22,12 +27,25 @@ import {
   scanRootDelete,
   scanRootsList,
   scanRootUpdate,
+  settingsGet,
+  settingsSet,
   syncAssetScope,
 } from '@/lib/db';
 import type { ScanRoot } from '@/types/game';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
 import { loadLocalizationPreference, OFFLINE_TAG_COUNT, setLocalizationEnabled, useLocalizationStore } from '@/lib/localization';
+import {
+  TITLE_LANGUAGE_KEY,
+  normalizeTitlePreference,
+  type MetadataTitlePreference,
+} from '@/features/metadata/fields';
+import {
+  CLOSE_BEHAVIOR_KEY,
+  CLOSE_BEHAVIOR_OPTIONS,
+  normalizeCloseBehavior,
+  type CloseBehavior,
+} from '@/features/window/close-behavior';
 import {
   DEFAULT_THEME,
   THEMES,
@@ -57,8 +75,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select } from '@/components/ui/select';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
-import { LocaleLaunchSettings } from '@/features/launch/LocaleLaunchSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
+import { useScanFolderTip } from '@/features/scan/ScanFolderTip';
 import { SettingsSectionNav } from './SettingsSectionNav';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
@@ -202,6 +220,7 @@ function ScanRootsSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const scanFolderTip = useScanFolderTip();
 
   const reload = useCallback(async () => {
     try {
@@ -357,12 +376,17 @@ function ScanRootsSection() {
         )}
 
         <div className="flex items-center gap-3">
-          <Button variant="primary" disabled={busy} onClick={() => void addRoot()}>
+          <Button
+            variant="primary"
+            disabled={busy}
+            onClick={() => scanFolderTip.guard(() => void addRoot())}
+          >
             添加扫描根
           </Button>
           {info ? <Status tone="ok">{info}</Status> : null}
         </div>
         {error ? <Status tone="error">{error}</Status> : null}
+        {scanFolderTip.dialog}
       </div>
     </Section>
   );
@@ -747,13 +771,43 @@ function ThemePreview({ theme }: { theme: Theme }) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Launch / locale tool
+// 3. Localization
 // ---------------------------------------------------------------------------
 
-function LaunchSettingsSection() {
+function LocalizationSection() {
+  const { enabled, loaded } = useLocalizationStore();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void loadLocalizationPreference().catch(cause => setError(errorMessage(cause)));
+  }, []);
+  async function toggle() {
+    setSaving(true);
+    setError(null);
+    try { await setLocalizationEnabled(!enabled); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setSaving(false); }
+  }
   return (
-    <Section id="settings-launch" title="启动设置" description="选择普通启动或通过内置 Locale Emulator 转区启动。">
-      <LocaleLaunchSettings />
+    <Section id="settings-localization" title="资料汉化" description="使用内置词典离线汉化标签，适用于已有游戏和新导入资料；简介保留原文。">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p id="localization-label" className="text-sm font-medium">标签离线汉化</p>
+          <p className="mt-1 text-xs text-muted-foreground">即时生效，无需联网；关闭后恢复原始标签名称。</p>
+        </div>
+        <button
+          type="button" role="switch" aria-checked={enabled} aria-labelledby="localization-label"
+          disabled={!loaded || saving} onClick={() => void toggle()}
+          className={cn('relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50', enabled ? 'bg-primary' : 'bg-muted-foreground/40')}
+        >
+          <span className={cn('inline-block h-4 w-4 rounded-full bg-white transition-transform', enabled ? 'translate-x-6' : 'translate-x-1')} />
+        </button>
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+        内置 {OFFLINE_TAG_COUNT} 条标签译名，涵盖题材、人物、剧情、结局与系统功能。
+        词典未收录的内容保留原文；简介不翻译。汉化只改变显示，不修改标签名称或游戏资料。
+      </p>
+      {error ? <Status tone="error">{error}</Status> : null}
     </Section>
   );
 }
@@ -902,78 +956,185 @@ function DataSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Page
+// Window close behaviour
 // ---------------------------------------------------------------------------
 
-function LocalizationSection() {
-  const { enabled, loaded } = useLocalizationStore();
+function WindowSection() {
+  const [behavior, setBehavior] = useState<CloseBehavior>('ask');
+  const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    void loadLocalizationPreference().catch(cause => setError(errorMessage(cause)));
+    let alive = true;
+    void settingsGet(CLOSE_BEHAVIOR_KEY)
+      .then((value) => {
+        if (alive) setBehavior(normalizeCloseBehavior(value));
+      })
+      .catch((cause) => {
+        if (alive) setError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (alive) setLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
-  async function toggle() {
+
+  async function change(next: CloseBehavior) {
     setSaving(true);
     setError(null);
-    try { await setLocalizationEnabled(!enabled); }
-    catch (cause) { setError(errorMessage(cause)); }
-    finally { setSaving(false); }
+    try {
+      await settingsSet(CLOSE_BEHAVIOR_KEY, next);
+      setBehavior(next);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
-    <Section id="settings-localization" title="资料汉化" description="使用内置词典离线汉化标签，适用于已有游戏和新导入资料；简介保留原文。">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p id="localization-label" className="text-sm font-medium">标签离线汉化</p>
-          <p className="mt-1 text-xs text-muted-foreground">即时生效，无需联网；关闭后恢复原始标签名称。</p>
-        </div>
-        <button
-          type="button" role="switch" aria-checked={enabled} aria-labelledby="localization-label"
-          disabled={!loaded || saving} onClick={() => void toggle()}
-          className={cn('relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50', enabled ? 'bg-primary' : 'bg-muted-foreground/40')}
-        >
-          <span className={cn('inline-block h-4 w-4 rounded-full bg-white transition-transform', enabled ? 'translate-x-6' : 'translate-x-1')} />
-        </button>
+    <Section
+      id="settings-window"
+      title="窗口"
+      description="点击窗口关闭按钮时的行为；「每次询问」会先弹出「缩小至托盘 / 直接关闭」的选择。"
+    >
+      <div className="max-w-sm space-y-1.5">
+        <label htmlFor="close-behavior" className="text-xs font-medium text-muted-foreground">关闭按钮行为</label>
+        <Select<CloseBehavior>
+          id="close-behavior"
+          aria-label="关闭按钮行为"
+          value={behavior}
+          disabled={!loaded || saving}
+          options={[...CLOSE_BEHAVIOR_OPTIONS]}
+          onValueChange={(value) => void change(value)}
+        />
       </div>
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        内置 {OFFLINE_TAG_COUNT} 条标签译名，涵盖题材、人物、剧情、结局与系统功能。
-        词典未收录的内容保留原文；简介不翻译。汉化只改变显示，不修改标签名称或游戏资料。
+        选择「缩小至托盘」后，点击关闭按钮会隐藏窗口，应用继续在系统托盘运行；左键点击托盘图标或选择菜单「显示恋页」可恢复，托盘菜单也能直接退出。
+        弹窗里的「今后不再提示」会写入同一个设置。
       </p>
       {error ? <Status tone="error">{error}</Status> : null}
     </Section>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Metadata title language
+// ---------------------------------------------------------------------------
+
+function MetadataSection() {
+  const [preference, setPreference] = useState<MetadataTitlePreference>('zh');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void settingsGet(TITLE_LANGUAGE_KEY)
+      .then((value) => {
+        if (alive) setPreference(normalizeTitlePreference(value));
+      })
+      .catch((cause) => {
+        if (alive) setError(errorMessage(cause));
+      })
+      .finally(() => {
+        if (alive) setLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function change(next: MetadataTitlePreference) {
+    setSaving(true);
+    setError(null);
+    try {
+      await settingsSet(TITLE_LANGUAGE_KEY, next);
+      setPreference(next);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section
+      id="settings-metadata"
+      title="资料匹配"
+      description="联网补全（导入后自动抓取）时选择游戏名的语言；手动确认资料时仍以你填写的搜索名称为准。"
+    >
+      <div className="max-w-sm space-y-1.5">
+        <label htmlFor="metadata-title-language" className="text-xs font-medium text-muted-foreground">标题语言</label>
+        <Select<MetadataTitlePreference>
+          id="metadata-title-language"
+          aria-label="标题语言"
+          value={preference}
+          disabled={!loaded || saving}
+          options={[
+            { value: 'zh', label: '中文名优先（推荐）' },
+            { value: 'ja', label: '日文原名优先' },
+            { value: 'source', label: '数据源标题（可能是英文）' },
+          ]}
+          onValueChange={(value) => void change(value)}
+        />
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+        中文名优先：中文标题 → 日文原名 → 数据源标题；日文原名优先：日文原名 → 中文标题 → 数据源标题。
+        搜索结果也会优先显示中文或日文名；已经入库的英文标题，用中文或日文名重新匹配资料即可修正。
+      </p>
+      {error ? <Status tone="error">{error}</Status> : null}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function SettingsPage() {
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
-      <header>
-        <h1 className="text-xl font-semibold">设置</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          扫描目录、外观、启动方式与数据备份。
-        </p>
-      </header>
+    <div className="mx-auto flex max-w-5xl items-start gap-6 p-6">
+      {/* The anchor nav lives in the empty gutter beside the content and stays
+          pinned while the sections scroll — the same place a desktop sidebar
+          would occupy, without taking width away from the cards. */}
+      <aside className="sticky top-6 z-10 w-36 shrink-0 self-start">
+        <SettingsSectionNav />
+      </aside>
 
-      <SettingsSectionNav />
-      <ScanRootsSection />
-      <ThemeSection />
-      <LocalizationSection />
-      <LaunchSettingsSection />
-      <DataSection />
-      <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
-        <AnnouncementSettings />
-      </Section>
-      <Section id="settings-about" title="关于恋页">
-        <div className="flex items-center gap-4">
-          <img src={BRAND.icon} alt="恋页应用图标" width={64} height={64} className="h-16 w-16 shrink-0" />
-          <div className="min-w-0">
-            <p className="text-lg font-semibold">{BRAND.name} <span className="text-sm font-normal text-muted-foreground">{BRAND.latinName}</span></p>
-            <p className="mt-1 text-sm text-muted-foreground">{BRAND.tagline}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Galgame / 视觉小说收藏馆 · v{BRAND.version}</p>
-            <p className="mt-2 text-xs text-muted-foreground">GitHub：<GithubProfileLink display="url" className="break-all" /></p>
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <header>
+          <h1 className="text-xl font-semibold">设置</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            扫描目录、外观、窗口、资料汉化、资料匹配与数据备份。
+          </p>
+        </header>
+
+        <ScanRootsSection />
+        <ThemeSection />
+        <WindowSection />
+        <LocalizationSection />
+        <MetadataSection />
+        <DataSection />
+        <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
+          <AnnouncementSettings />
+        </Section>
+        <Section id="settings-about" title="关于恋页">
+          <div className="flex items-center gap-4">
+            <img src={BRAND.icon} alt="恋页应用图标" width={64} height={64} className="h-16 w-16 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-lg font-semibold">{BRAND.name} <span className="text-sm font-normal text-muted-foreground">{BRAND.latinName}</span></p>
+              <p className="mt-1 text-sm text-muted-foreground">{BRAND.tagline}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Galgame / 视觉小说收藏馆 · v{BRAND.version}</p>
+              <p className="mt-2 text-xs text-muted-foreground">GitHub：<GithubProfileLink display="url" className="break-all" /></p>
+            </div>
           </div>
-        </div>
-        <UpdateSettings />
-      </Section>
+          <UpdateSettings />
+        </Section>
+      </div>
     </div>
   );
 }

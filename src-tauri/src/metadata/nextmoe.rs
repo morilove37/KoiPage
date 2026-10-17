@@ -277,16 +277,53 @@ fn source_ratings(raw: Vec<Rating>) -> Vec<SourceRating> {
         .collect()
 }
 
+/// Extra spellings used only by the auto-fetch matcher.
+///
+/// The display title is Chinese/original-script, but folders are often named
+/// with the romanised title (`Sabbat of the Witch`), so those forms must still
+/// be recognised without being rendered.
+fn matching_aliases(work: &Work, title: &str, original: Option<&str>) -> Vec<String> {
+    let mut aliases: Vec<String> = Vec::new();
+    let mut push = |value: Option<&str>| {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if value == title || Some(value) == original {
+            return;
+        }
+        if !aliases.iter().any(|existing| existing == value) {
+            aliases.push(value.to_string());
+        }
+    };
+    push(work.display_name.as_deref());
+    for entry in &work.titles {
+        push(entry.title.as_deref());
+        push(entry.latin.as_deref());
+    }
+    aliases
+}
+
 fn to_candidate(work: Work) -> MetadataCandidate {
-    let title = chinese_title(&work.titles)
-        .or_else(|| work.display_name.clone())
+    let chinese = chinese_title(&work.titles);
+    let original = original_title(&work);
+    let display = work.display_name.clone().filter(|name| !name.trim().is_empty());
+    // Chinese → original script → provider display name. `display_name` is
+    // often the romanised title, so it is the last resort for the result list.
+    let title = chinese
+        .or_else(|| original.clone())
+        .or_else(|| display.clone())
         .unwrap_or_else(|| work.id.clone());
-    let original = original_title(&work).filter(|o| *o != title);
+    let alternate = original
+        .clone()
+        .filter(|value| *value != title)
+        .or_else(|| display.filter(|value| *value != title));
+    let aliases = matching_aliases(&work, &title, alternate.as_deref());
     MetadataCandidate {
         provider: Provider::Nextmoe,
         external_id: work.id.clone(),
         title,
-        original_title: original,
+        original_title: alternate,
+        aliases,
         release_date: work.release_date.clone(),
         cover_url: work.cover.as_ref().and_then(Image::url),
         rating: work

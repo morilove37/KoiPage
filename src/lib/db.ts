@@ -381,6 +381,8 @@ export interface MetadataCandidate {
   /** Best display title the provider offers (Chinese preferred when known). */
   title: string;
   originalTitle: string | null;
+  /** Extra spellings used only by the Rust auto-fetch matcher, never rendered. */
+  aliases?: string[];
   releaseDate: string | null;
   /** Remote cover URL; cache it with {@link metadataCoverCache}. */
   coverUrl: string | null;

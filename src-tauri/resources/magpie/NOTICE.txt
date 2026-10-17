@@ -1,0 +1,19 @@
+Magpie - A general-purpose window upscaler for Windows 10/11
+https://github.com/Blinue/Magpie
+
+版本 / Version: 0.12.1
+二进制来源 / Binaries: official release archive Magpie-v0.12.1-x64.zip
+发布页 / Release: https://github.com/Blinue/Magpie/releases/tag/v0.12.1
+SHA-256 (zip): 8bc8bc233438f546b7996b00b21d7376f4f7d3d8a4940e6a8800babd2225b2de
+对应源码 / Source code: https://github.com/Blinue/Magpie/tree/v0.12.1
+
+许可 / License: GNU General Public License v3.0（见同目录 COPYING / see COPYING）
+
+本目录中的 Magpie 二进制文件取自上述官方发布包，未作修改，仅去除了运行时可再
+生成的 cache 与 logs 目录。恋页（KoiPage）以独立进程的方式调用 Magpie，不与其
+链接。若需要对应源码，可从上面的源码地址获取，或联系恋页维护者索取。
+The Magpie binaries in this directory are unmodified copies from the official
+release above; only the regenerable cache/ and logs/ directories are omitted.
+KoiPage invokes Magpie as a separate process and does not link against it.
+The corresponding source code is available at the URL above or on request from
+the KoiPage maintainer.

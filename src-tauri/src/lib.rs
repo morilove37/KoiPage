@@ -21,6 +21,47 @@ pub fn allow_asset_file(app: &tauri::AppHandle, path: &str) {
     }
 }
 
+/// Create the tray icon that keeps the app reachable after the window is hidden.
+///
+/// The frontend decides on `CloseRequested` whether to hide or exit; the tray is
+/// always available so "缩小至托盘" never strands the window with no way back.
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(app, "tray-show", "显示恋页", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray-quit", "退出恋页", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let Some(icon) = app.default_window_icon().cloned() else {
+        eprintln!("[tray] default window icon is missing; tray icon disabled");
+        return Ok(());
+    };
+
+    TrayIconBuilder::with_id("koipage-tray")
+        .icon(icon)
+        .tooltip("恋页 KoiPage")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray-show" => commands::window::show_main_window(app),
+            "tray-quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                commands::window::show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -31,7 +72,20 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            setup_tray(app.handle())?;
             Ok(())
+        })
+        // The window must not vanish on its own: the frontend shows the close
+        // prompt (缩小至托盘 / 直接关闭) and calls a command back. Programmatic
+        // exits (`app.exit`, used by the tray menu and the updater) bypass this.
+        .on_window_event(|window, event| {
+            use tauri::{Emitter, WindowEvent};
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if let Err(error) = window.emit("close-requested", ()) {
+                    eprintln!("[window] could not emit close-requested: {error}");
+                }
+            }
         })
         .plugin(
             tauri_plugin_sql::Builder::new()
@@ -95,11 +149,21 @@ pub fn run() {
             // launcher (launch-settings)
             launcher::launch_game,
             launcher::locale::locale_tool_status,
+            launcher::magpie::magpie_status,
+            launcher::magpie::magpie_launch,
+            launcher::magpie::magpie_quit,
+            launcher::magpie::magpie_scaling_config,
+            launcher::magpie::magpie_scaling_set,
+            launcher::magpie::magpie_scaling_reset,
             launcher::game_running,
             launcher::stop_game,
             launcher::export_games,
             launcher::import_games,
             launcher::backup_database,
+            // window / tray lifecycle
+            commands::window::app_show_window,
+            commands::window::app_hide_to_tray,
+            commands::window::app_quit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

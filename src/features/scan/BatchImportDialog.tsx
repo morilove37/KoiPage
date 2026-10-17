@@ -5,7 +5,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { metadataDetail, metadataSearch } from "@/lib/db";
 import type { GameInput } from "@/lib/db";
 import { createGameFromMetadata } from "@/features/metadata/create-game";
-import { ALL_PROVIDERS, FIELD_ORDER, errorMessage, hasFieldData, providerLabel } from "@/features/metadata/fields";
+import { ALL_PROVIDERS, FIELD_ORDER, errorMessage, hasFieldData, providerLabel, titleFor } from "@/features/metadata/fields";
 
 type Status = "pending" | "searching" | "loading" | "saving" | "imported" | "manual" | "failed";
 interface ImportRow { draft: GameInput; status: Status; message: string; }
@@ -68,8 +68,11 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
               if (shouldStop()) { update(index, "pending"); break; }
               // The confirmed search name is retained by metadataInput.
               update(index, "saving", matched);
+              // Use the localized title (Chinese, then original script) instead
+              // of the English search key the pending import was created with.
+              const resolvedTitle = titleFor(detail, "zh") || draft.title;
               const result = await createGameFromMetadata(
-                draft, detail, FIELD_ORDER.filter(field => hasFieldData(detail, field)), Boolean(detail.coverUrl?.trim()),
+                { ...draft, title: resolvedTitle }, detail, FIELD_ORDER.filter(field => hasFieldData(detail, field)), Boolean(detail.coverUrl?.trim()),
               );
               update(index, "imported", [`${result.game.title} · ${detail.attribution || providerLabel(first.provider)}`, warnings, result.coverWarning].filter(Boolean).join("；"));
             } catch (cause) {
@@ -90,7 +93,7 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
 
   return (
     <Dialog open title="一键导入" className="max-w-2xl" onClose={() => { if (!running) onClose(); }}
-      description="自动采用每款游戏搜索结果的第一项，填入封面、评分、简介和标签。"
+      description="自动采用每款游戏搜索结果的第一项，填入封面、评分、简介和标签；若要确保准确性，请停止后使用「逐款确认」逐条导入。"
       footer={running ? (
         <Button variant="outline" disabled={stopping} onClick={() => { stopRef.current = true; setStopping(true); }}>
           {stopping ? "正在停止…" : "停止后续导入"}
@@ -110,6 +113,11 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
       <div role="progressbar" aria-label="导入进度" aria-valuemin={0} aria-valuemax={rows.length} aria-valuenow={done} className="mb-4 h-1.5 overflow-hidden rounded-full bg-muted">
         <div className="h-full bg-primary transition-[width]" style={{ width: `${done / Math.max(1, rows.length) * 100}%` }} />
       </div>
+      {running ? (
+        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+          导入速度取决于数据源速度，导入较慢请耐心等待或之后再试；同一时间内多次导入可能会被限流，等待一段时间即可。
+        </p>
+      ) : null}
       <ul className="divide-y divide-border">
         {rows.map(row => <li key={row.draft.installPath} data-import-status={row.status} className="py-3">
           <div className="flex items-start justify-between gap-3 text-sm">

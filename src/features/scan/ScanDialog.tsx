@@ -16,6 +16,7 @@ import {
   scanDirectory,
   type ScanCandidate,
 } from "./types";
+import { useScanFolderTip } from "./ScanFolderTip";
 
 /**
  * Scan-and-import dialog.
@@ -109,6 +110,7 @@ export default function ScanDialog({
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const scanFolderTip = useScanFolderTip();
   // Guards the async import loop against a dialog that closed mid-flight.
   const aliveRef = useRef(true);
   useEffect(() => {
@@ -135,15 +137,16 @@ export default function ScanDialog({
     };
   }, [isOpen]);
 
-  // Esc closes the dialog, but never while a scan/import/fetch is running.
+  // Esc closes the dialog, but never while a scan/import/fetch is running, and
+  // never while the one-time folder tip sits on top (its own Esc closes that).
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !scanning) onClose();
+      if (event.key === "Escape" && !scanning && !scanFolderTip.open) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, scanning, onClose]);
+  }, [isOpen, scanning, scanFolderTip.open, onClose]);
 
   /** Shared post-scan state update for both the dialog and a root shortcut. */
   const applyScan = useCallback((found: ScanCandidate[]) => {
@@ -172,7 +175,7 @@ export default function ScanDialog({
       const selected = await open({
         title: "选择一个或多个游戏启动程序",
         multiple: true,
-        filters: [{ name: "可执行文件", extensions: ["exe"] }],
+        filters: [{ name: "可执行文件或启动脚本", extensions: ["exe", "bat", "cmd"] }],
       });
       if (selected === null) return;
       const paths = Array.isArray(selected) ? selected : [selected];
@@ -183,9 +186,9 @@ export default function ScanDialog({
       );
       const failed = inspected.length - found.length;
       applyScan(found);
-      if (failed > 0) setError(`${failed} 个 exe 无法读取，其余项目仍可继续导入。`);
+      if (failed > 0) setError(`${failed} 个启动文件无法读取，其余项目仍可继续导入。`);
     } catch (cause) {
-      if (aliveRef.current) setError(`无法选择 exe：${String(cause)}`);
+      if (aliveRef.current) setError(`无法选择启动文件：${String(cause)}`);
     } finally {
       if (aliveRef.current) setScanning(false);
     }
@@ -218,7 +221,7 @@ export default function ScanDialog({
     [applyScan],
   );
 
-  const pickDirectory = useCallback(async () => {
+  const pickDirectoryDialog = useCallback(async () => {
     setError(null);
     try {
       // Verified against @tauri-apps/plugin-dialog 2.8.2 `index.d.ts`:
@@ -232,6 +235,13 @@ export default function ScanDialog({
       setError(`无法打开目录选择对话框：${String(cause)}`);
     }
   }, [maxDepth, runScan]);
+
+  /** The first folder pick shows a one-time "keep games in one folder" tip. */
+  const pickDirectory = useCallback(() => {
+    scanFolderTip.guard(() => {
+      void pickDirectoryDialog();
+    });
+  }, [pickDirectoryDialog, scanFolderTip.guard]);
 
   // ---- selection helpers -------------------------------------------------
 
@@ -339,7 +349,7 @@ export default function ScanDialog({
           <div>
             <h2 className="text-sm font-semibold">添加游戏</h2>
             <p className="text-xs text-muted-foreground">
-              选择 exe 或扫描目录；程序会按 exe 的上一级目录归并游戏。
+              选择 exe 或 .bat/.cmd 启动脚本，或扫描目录；程序会按启动文件的上一级目录归并游戏。
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
@@ -351,7 +361,7 @@ export default function ScanDialog({
         <div className="space-y-3 border-b border-border px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={() => void pickExecutables()} loading={scanning} disabled={busy}>
-              选择 exe 文件…
+              选择启动文件…
             </Button>
             <span className="text-xs text-muted-foreground">
               可多选；同一游戏目录最终只保留一个启动程序
@@ -395,7 +405,7 @@ export default function ScanDialog({
               loading={scanning}
               disabled={busy || rootPath.trim().length === 0}
             >
-              扫描 exe
+              开始扫描
             </Button>
           </div>
 
@@ -419,6 +429,9 @@ export default function ScanDialog({
               ))}
             </div>
           ) : null}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            支持 exe 或 .bat/.cmd 补丁脚本；如果脚本启动游戏后立即退出，本次游玩时长可能无法统计。
+          </p>
         </div>
 
         {/* status */}
@@ -430,6 +443,14 @@ export default function ScanDialog({
         {notice ? (
           <div className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
             {notice}
+          </div>
+        ) : null}
+
+        {/* A wrong exe or title here silently produces a broken game row, so the
+            warning is shown right above the review list in the destructive colour. */}
+        {!scanning && candidates.length > 0 ? (
+          <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-medium text-destructive">
+            请确认游戏启动文件正确和游戏名称正确，否则会导入错误的游戏或导致游戏无法启动。
           </div>
         ) : null}
 
@@ -465,7 +486,7 @@ export default function ScanDialog({
             </div>
           ) : candidates.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-              请选择 exe 文件，或选择根目录扫描 exe。
+              请选择启动文件（exe / .bat / .cmd），或选择根目录开始扫描。
             </div>
           ) : (
             <ul className="divide-y divide-border">
@@ -519,7 +540,7 @@ export default function ScanDialog({
                           <Select
                             size="sm"
                             aria-label="启动程序"
-                            className="max-w-xs"
+                            className="w-56 max-w-xs"
                             value={row.exePath ?? ""}
                             onValueChange={(next) => setRowExe(key, next)}
                             disabled={busy}
@@ -529,7 +550,7 @@ export default function ScanDialog({
                             }))}
                           />
                         ) : (
-                          <span className="text-xs text-destructive">未找到可执行文件</span>
+                          <span className="text-xs text-destructive">未找到启动文件</span>
                         )}
                         <span
                           className="truncate text-xs text-muted-foreground"
@@ -551,7 +572,7 @@ export default function ScanDialog({
         {/* footer */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border px-4 py-3">
           <span className="text-xs text-muted-foreground">
-            一键导入采用每款搜索的第一项；也可逐款确认资料
+            一键导入采用每款搜索的第一项；若要确保准确性，请使用「逐款确认」逐条导入。
           </span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">
@@ -578,6 +599,7 @@ export default function ScanDialog({
           </div>
         </div>
       </div>
+      {scanFolderTip.dialog}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { loadLocalizationPreference } from "@/lib/localization";
 import { BRAND } from "@/lib/brand";
 import { UpdateDialog } from "@/features/updates/UpdateDialog";
 import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog";
+import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
 
 /**
  * Application shell: sidebar navigation + routed page area.
@@ -22,6 +23,7 @@ import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog"
  *   /home             首页
  *   /library          游戏库
  *   /library/:id      游戏详情
+ *   /tools            实用工具
  *   /tags             标签管理
  *   /settings         设置
  */
@@ -29,6 +31,7 @@ import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog"
 const HomePage = lazy(() => import("@/features/home/HomePage"));
 const LibraryPage = lazy(() => import("@/features/library/LibraryPage"));
 const GameDetailPage = lazy(() => import("@/features/detail/GameDetailPage"));
+const ToolsPage = lazy(() => import("@/features/tools/ToolsPage"));
 const TagsPage = lazy(() => import("@/features/tags/TagsPage"));
 const SettingsPage = lazy(() => import("@/features/settings/SettingsPage"));
 
@@ -43,6 +46,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: "/home", label: "首页", icon: "home" },
   { to: "/library", label: "游戏库", icon: "library", prefix: true },
+  { to: "/tools", label: "实用工具", icon: "tools" },
   { to: "/tags", label: "标签管理", icon: "tags" },
   { to: "/settings", label: "设置", icon: "settings" },
 ];
@@ -156,6 +160,7 @@ export default function App() {
               <Route path="/home" element={<HomePage />} />
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/library/:id" element={<GameDetailPage />} />
+              <Route path="/tools" element={<ToolsPage />} />
               <Route path="/tags" element={<TagsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
@@ -165,6 +170,7 @@ export default function App() {
       </main>
       <UpdateDialog />
       <AnnouncementDialog />
+      <CloseBehaviorDialog />
     </div>
   );
 }
