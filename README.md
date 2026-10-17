@@ -3,9 +3,11 @@
 
   <h1>恋页 KoiPage</h1>
   <p><strong>收藏相遇，续写下一页。</strong></p>
-  <p>为本地 Galgame 与视觉小说收藏打造的 Windows 桌面游戏库。</p>
+  <p>面向 Windows 的 Galgame／视觉小说管理器，从整理收藏到继续游玩。</p>
+  <p><strong>当前版本：v0.5.0</strong> · Windows x64 · 本地游戏库</p>
 
   <a href="https://github.com/morilove37/KoiPage/releases/latest">下载最新版</a> ·
+  <a href="#界面预览">界面预览</a> ·
   <a href="#功能">功能介绍</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
   <a href="https://github.com/morilove37/KoiPage/issues">反馈问题</a>
@@ -13,44 +15,94 @@
 
 ---
 
-把散落在磁盘里的故事，整理成自己的收藏馆。恋页可以扫描游戏、匹配资料、管理标签与收藏、启动游戏并记录游玩时长。下次打开时，从上次的故事继续。
+把散落在磁盘里的故事，整理成自己的收藏。**恋页**可以扫描启动文件、匹配作品资料、整理标签与游玩记录，并提供内置转区和窗口缩放工具。打开首页，浏览封面、继续上次的游戏，或随机挑选下一部作品。
+
+![恋页 v0.5.0 首页：封面切换、游戏信息与最近游玩记录](docs/screenshots/home.png)
+
+## 恋页能做什么？
+
+| 从这里开始 | 可以做的事 |
+|---|---|
+| **导入作品** | 选择启动文件或扫描目录，确认名称后匹配 NextMoe、VNDB、Bangumi；支持逐款确认、一键批量导入和自定义资料。 |
+| **整理收藏** | 网格／列表浏览，按标签、状态、开发商筛选；收藏、搜索、排序与离线标签汉化。 |
+| **继续游玩** | 首页循环切换封面、直接启动游戏；查看最近记录、本日／周／月时长图表和日历回顾。 |
+| **转区与缩放** | 内置 Locale Emulator 和 Magpie，集中管理启动方式，选择默认缩放模式并查看效果链。 |
+| **分享足迹** | 生成包含原名、评分与游玩时长的图片，选择隐藏作品或替换封面，也可生成 24 小时分享链接。 |
+| **留住自己的布置** | 浅色、深色与液态玻璃主题；本地数据库、导入导出、备份、托盘和版本更新提醒。 |
+
+## v0.5.0 更新重点
+
+- **实用工具集中管理**：内置 Locale Emulator 2.5.0.1 与 Magpie 0.12.1，支持选择其他工具程序；游戏详情顶部可快捷切换转区和随游戏启动缩放工具。
+- **缩放模式与滤镜可查看、可选择**：附带开发者调校的默认配置，已有 Magpie 配置优先保留；恢复默认前会备份原配置。
+- **导入更完整**：支持 `.exe`、`.bat` 和 `.cmd`，新增扫描提示；中文／日文标题优先级可在设置中调整。
+- **窗口行为可选**：关闭时选择缩小至托盘或退出，并可记住选择。
+
+完整改动见 [更新日志](CHANGELOG.md#050---2026-10-17)。
 
 ## 下载与安装
 
-前往 **[Releases 下载最新版](https://github.com/morilove37/KoiPage/releases/latest)**，选择 Windows x64 的 `setup.exe` 安装包。也提供 MSI 格式，两种安装包任选一种即可。
+前往 **[Releases 下载最新版](https://github.com/morilove37/KoiPage/releases/latest)**，选择下面一种安装包：
 
-- **运行环境**：Windows x64、Microsoft WebView2。
-- **普通用户无需安装** Node.js、Rust 或 pnpm。
-- GitHub 附带的 `Source code` 是源码，不能直接当作应用运行。
-- `latest.json` 与 `.sig` 是更新系统使用的文件，无需手动下载。
+| 文件 | 适合谁 |
+|---|---|
+| `KoiPage_0.5.0_x64-setup.exe` | 推荐日常安装使用，约 **13.8 MB**。 |
+| `KoiPage_0.5.0_x64_zh-CN.msi` | 需要 MSI 安装格式时使用，约 **18.1 MB**。 |
+
+- **运行环境**：Windows x64、Microsoft WebView2。普通用户无需安装 Node.js、Rust 或 pnpm。
+- 安装包大小是下载体积；安装文件、首次释放的工具与后续游戏库缓存会另占磁盘空间。
+- GitHub 附带的 `Source code` 是源码，不能直接当作应用运行；`latest.json` 和 `.sig` 供更新系统使用，无需手动下载。
+- 已安装支持应用内更新的版本时，可在 **设置 → 关于** 检查更新，确认后安装。
 
 ## 界面预览
 
-以下截图使用维护者实际导入的游戏与封面，展示应用界面；本机完整路径已遮盖。游戏封面与作品资料归各自权利人所有。
+以下均为 **v0.5.0 界面截图**，使用维护者此前实际导入的 **17 款游戏收藏快照**，并非应用预置作品。本机路径与封面资源地址已隐藏；截图中的游玩记录保留真实数据。游戏封面与作品资料归各自权利人所有。
 
-### 首页：从上次的故事继续
+### 游戏库：让每一部作品都容易找到
 
-![首页与游玩概览](docs/screenshots/home.png)
+![游戏库：封面网格、搜索、状态和标签筛选](docs/screenshots/library.png)
 
-### 游戏库：把收藏整理清楚
+收藏与标签筛选配合网格／列表视图，既能浏览封面，也能快速定位想玩的作品。
 
-![游戏库与离线中文标签](docs/screenshots/library.png)
+### 实用工具：转区启动与窗口缩放
 
-### 游戏详情：资料、启动与记录
+<img src="docs/screenshots/tools.png" width="900" alt="实用工具：内置 Locale Emulator、Magpie、默认缩放模式与效果链" />
 
-![游戏详情与固定操作栏](docs/screenshots/detail.png)
+内置工具可离线使用。**LE 只支持 32 位游戏 exe**；Magpie 随游戏启动后，仍需按其缩放快捷键放大窗口。更多说明见 [转区启动](docs/locale-emulator.md) 与 [Magpie 窗口缩放](docs/magpie.md)。
 
-### 路径与启动：直接选择文件和文件夹
+<details>
+<summary><strong>展开更多截图：作品详情、启动设置、时长图表、日历、分享与液态玻璃主题</strong></summary>
 
-![路径选择与启动设置](docs/screenshots/detail-files.png)
+### 作品详情：封面、资料与固定操作栏
 
-### 液态玻璃：让收藏馆有自己的颜色
+![横向封面详情：评分、发售日、原名与简介](docs/screenshots/detail.png)
 
-![液态玻璃主题](docs/screenshots/glass.png)
+横向与竖向封面采用不同排版；返回、启动、收藏和状态操作固定在顶部。
 
-### 分享足迹：展示自己的游玩收藏
+### 路径与启动：选择文件，也可以直接输入
 
-![分享列表与游玩足迹预览](docs/screenshots/share.png)
+![竖向封面详情与路径选择：安装目录、可执行文件、工作目录和存档路径](docs/screenshots/detail-files.png)
+
+### 游玩概览：最近记录与本日／周／月时长
+
+![首页游玩时长图表与游戏库状态分布](docs/screenshots/playtime.png)
+
+### 日历回顾：找到某一天玩过的故事
+
+![日历回顾：按日期查看真实游玩时长和作品](docs/screenshots/calendar.png)
+
+### 分享足迹：保留原名，也展示自己的游玩进度
+
+![分享编辑器：排序、隐藏作品、替换封面、图片预览和临时链接入口](docs/screenshots/share.png)
+
+可保存或复制图片；只有点击生成链接时，才会将分享图上传至第三方服务。
+
+### 液态玻璃：为收藏馆换一种氛围
+
+![液态玻璃主题：渐变背景与半透明收藏卡片](docs/screenshots/glass.png)
+
+自定义壁纸仅在液态玻璃主题下展示，其他主题保留各自的界面风格。
+
+</details>
 
 ## 功能
 
@@ -175,6 +227,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
 应用图标为《天津罪／アマツツミ》水无月萤的 Q 版再创作，角色归 Purple software 所有，本项目与原作官方无隶属关系。详见 [图标与角色来源](docs/branding.md)。
 
 内置 [Locale Emulator](https://github.com/xupefei/Locale-Emulator) 由其原作者维护，相关组件按 LGPL-3.0 分发，附带原始许可与来源说明；详见 [集成说明](docs/locale-emulator.md)。
+
+内置 [Magpie](https://github.com/Blinue/Magpie) 0.12.1 按 GPL-3.0 分发，保留原始许可与来源说明，通过独立进程调用；详见 [集成与许可说明](docs/magpie.md)。
 
 ## 反馈与作者
 
