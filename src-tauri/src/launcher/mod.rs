@@ -29,6 +29,7 @@ use crate::commands::games::pool;
 use crate::commands::util::{not_found, now_iso8601};
 pub mod locale;
 pub mod magpie;
+pub mod luna;
 
 /// Settings key holding the path of the locale-emulation tool ("转区工具").
 pub const LOCALE_TOOL_PATH_KEY: &str = "locale_tool_path";
@@ -313,6 +314,8 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
         let scaling = setting(&db, magpie::SCALING_MODE_KEY).await?;
         magpie::autostart(&app, source.as_deref(), custom.as_deref(), scaling.as_deref());
     }
+
+    luna::autostart(&app).await;
 
     let locale_use = flag_is_on(setting(&db, LOCALE_TOOL_USE_KEY).await?.as_deref());
     if locale_use && script {
