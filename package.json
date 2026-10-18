@@ -1,7 +1,7 @@
 {
   "name": "galgame-manager",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "packageManager": "pnpm@12.11.2",
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:share": "node --test tests/share-model.test.mjs",
     "test:announcements": "node --test tests/announcements.test.mjs",
     "test:home-play-time": "node --test tests/home-play-time.test.mjs tests/play-time-calendar.test.mjs",
+    "test:birthdays": "node --test tests/birthdays.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

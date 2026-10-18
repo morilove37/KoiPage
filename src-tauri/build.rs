@@ -1,27 +1,30 @@
-//! Build script: compile the Tauri context and generate the embedded Magpie
-//! asset manifest.
+//! Build script: compile the Tauri context and generate the embedded asset
+//! manifests.
 //!
-//! Magpie is shipped inside the executable (`include_bytes!`) rather than as a
-//! Tauri bundle resource, mirroring how the bundled Locale Emulator works: the
-//! extracted copy must be writable (Magpie keeps its cache/logs next to the
-//! executable), so it is unpacked to the app-local data directory on first use.
+//! Bundled third-party tools (Magpie, 7-Zip) are shipped inside the executable
+//! (`include_bytes!`) rather than as Tauri bundle resources: the extracted copy
+//! must be writable (Magpie keeps its cache next to itself, 7-Zip is executed
+//! from the app-local data directory), so each tool is unpacked on first use.
+//! This mirrors how the bundled Locale Emulator works.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    generate_magpie_manifest();
+    generate_bundled_manifest("magpie", "magpie_files.rs");
+    generate_bundled_manifest("7zip", "sevenzip_files.rs");
     tauri_build::build();
 }
 
-/// Write `$OUT_DIR/magpie_files.rs` with one `(&str, &[u8])` entry per bundled
-/// asset. Paths are absolute because the generated file is `include!`d from
+/// Write `$OUT_DIR/<output>` with one `(&str, &[u8])` entry per bundled asset.
+///
+/// Paths are absolute because the generated file is `include!`d from
 /// `OUT_DIR`, not from this crate's source tree.
-fn generate_magpie_manifest() {
+fn generate_bundled_manifest(resource_dir: &str, output: &str) {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
     );
-    let root = manifest_dir.join("resources").join("magpie");
+    let root = manifest_dir.join("resources").join(resource_dir);
     println!("cargo:rerun-if-changed={}", root.display());
 
     let mut files = Vec::new();
@@ -41,8 +44,8 @@ fn generate_magpie_manifest() {
     source.push_str("];\n");
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
-    let destination = out_dir.join("magpie_files.rs");
-    std::fs::write(&destination, source).expect("write the generated Magpie manifest");
+    let destination = out_dir.join(output);
+    std::fs::write(&destination, source).expect("write the generated asset manifest");
 }
 
 /// Recursively collect `(forward-slash relative path, absolute path)` pairs.

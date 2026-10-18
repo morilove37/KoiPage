@@ -327,6 +327,70 @@ export interface ScanCandidatePayload {
 }
 
 // ---------------------------------------------------------------------------
+// Archive extraction (archive-import)
+// ---------------------------------------------------------------------------
+
+/** One dropped archive family; volumes collapse to the first volume. */
+export interface ArchiveGroup {
+  primary: string;
+  displayName: string;
+  paths: string[];
+}
+
+export type ArchiveExtractStatus = "ok" | "passwordRequired" | "wrongPassword" | "failed";
+
+export interface ArchiveExtractResult {
+  status: ArchiveExtractStatus;
+  archive: string;
+  /** Created folder; empty unless `status === "ok"`. */
+  targetDir: string;
+  message: string | null;
+  /** Originals moved to the Recycle Bin after a successful extraction. */
+  deletedFiles: string[];
+  /** Set when the originals could not be moved to the Recycle Bin. */
+  cleanupWarning: string | null;
+}
+
+/** Payload of the `archive-extract-progress` event. */
+export interface ArchiveExtractProgress {
+  archive: string;
+  percent: number;
+}
+
+export const ARCHIVE_EXTRACT_PROGRESS_EVENT = "archive-extract-progress";
+
+/**
+ * `archive_group` — collapse dropped paths into archive families.
+ *
+ * Accepts any volume (`Game.part2.rar`, `Game.r01`, `Game.7z.002`, `Game.z01`)
+ * and returns the first volume 7-Zip needs. Unsupported paths are omitted.
+ */
+export function archiveGroup(paths: string[]): Promise<ArchiveGroup[]> {
+  return ready.then(() => invoke<ArchiveGroup[]>("archive_group", { paths }));
+}
+
+/**
+ * `archive_extract` — extract one archive into `<destination>/<name>`.
+ *
+ * Password-protected archives return `passwordRequired` / `wrongPassword`
+ * instead of rejecting, so the UI can prompt and retry. The folder is created
+ * only for successful runs (a failed attempt cleans up after itself).
+ */
+export function archiveExtract(
+  archive: string,
+  destination: string,
+  password?: string,
+): Promise<ArchiveExtractResult> {
+  return ready.then(() =>
+    invoke<ArchiveExtractResult>("archive_extract", {
+      archive,
+      destination,
+      password: password && password.length > 0 ? password : null,
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Escape hatch
 // ---------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@ import { GAME_STATUSES, GAME_STATUS_LABELS, formatPlayTime, isFavorite } from "@
 import type { Game, GameStatus, Tag } from "@/types/game";
 import { PlayTimeChart } from "./PlayTimeChart";
 import { RecentPlayHistory } from "./RecentPlayHistory";
+import { BirthdayCard } from "@/features/birthdays/BirthdayCard";
 
 const STATUS_COLORS: Record<GameStatus, string> = {
   unplayed: "bg-primary/50", wishlist: "bg-sky-500", playing: "bg-primary",
@@ -405,6 +406,7 @@ export default function HomePage() {
           </div>
 
           <div className="flex flex-col gap-4">
+            <BirthdayCard games={games} />
             <section aria-labelledby="home-waiting-heading" className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
               <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
                 <h2 id="home-waiting-heading" className="flex items-center gap-2 text-sm font-semibold"><GeometryIcon name="bookmark" className="text-primary" />等待开启的故事</h2>

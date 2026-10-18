@@ -1,6 +1,9 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
 pub mod commands;
+pub mod birthdays;
+pub mod instance;
+pub mod extract;
 pub mod launcher;
 pub mod metadata;
 pub mod scanner;
@@ -64,15 +67,25 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Only one manager may run: a second launch wakes the existing window and
+    // exits before any window, tray icon or database connection is created.
+    if instance::acquire() == instance::Role::Duplicate {
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
+            commands::window::remember_app(app.handle().clone());
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             setup_tray(app.handle())?;
+            // From now on a re-launch wakes this window instead of opening a
+            // second manager.
+            instance::listen_for_activation(app.handle().clone());
             Ok(())
         })
         // The window must not vanish on its own: the frontend shows the close
@@ -142,16 +155,29 @@ pub fn run() {
             commands::metadata::metadata_apply,
             commands::metadata::metadata_cover_cache,
             commands::metadata::metadata_autofetch,
+            // cached library character birthdays
+            birthdays::birthdays_list,
+            birthdays::birthdays_update,
+            birthdays::birthdays_sync_start,
+            birthdays::birthdays_sync_cancel,
+            birthdays::birthdays_export,
+            birthdays::birthdays_import,
             // scanner (scan-import)
             scanner::scan_directory,
             // scanner (manual exe import)
             scanner::inspect_exe_file,
+            // archive extraction (archive-import)
+            extract::archive_group,
+            extract::archive_extract,
             // launcher (launch-settings)
             launcher::launch_game,
             launcher::locale::locale_tool_status,
             launcher::magpie::magpie_status,
             launcher::magpie::magpie_launch,
             launcher::magpie::magpie_quit,
+            launcher::luna::luna_status,
+            launcher::luna::luna_launch,
+            launcher::luna::luna_quit,
             launcher::magpie::magpie_scaling_config,
             launcher::magpie::magpie_scaling_set,
             launcher::magpie::magpie_scaling_reset,

@@ -46,6 +46,11 @@ export interface ScanDialogProps {
   onConfirmed: (games: GameInput[], mode: "manual" | "automatic") => void;
   /** Pre-filled root directory. */
   defaultPath?: string;
+  /**
+   * Folders to scan automatically when the dialog opens. Used by the tools
+   * page after extraction so the user lands on the review list directly.
+   */
+  initialRoots?: string[];
 }
 
 /** A row plus its derived imports, resolved before the import loop. */
@@ -102,6 +107,7 @@ export default function ScanDialog({
   onClose,
   onConfirmed,
   defaultPath,
+  initialRoots,
 }: ScanDialogProps) {
   const [rootPath, setRootPath] = useState(defaultPath ?? "");
   const [maxDepth, setMaxDepth] = useState(3);
@@ -166,6 +172,43 @@ export default function ScanDialog({
       );
     }
   }, []);
+
+  // Folders handed over by 实用工具 → 游戏解压 are scanned as soon as the dialog
+  // opens, so the user lands directly on the review list.
+  useEffect(() => {
+    if (!isOpen || !initialRoots || initialRoots.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      setScanning(true);
+      setError(null);
+      setNotice(null);
+      const found: ScanCandidate[] = [];
+      const failures: string[] = [];
+      try {
+        for (const root of initialRoots) {
+          try {
+            found.push(...(await scanDirectory(root, 5)));
+          } catch (cause) {
+            failures.push(`${baseName(root)}：${String(cause)}`);
+          }
+        }
+        if (cancelled || !aliveRef.current) return;
+        setRootPath(initialRoots[0] ?? "");
+        applyScan(found);
+        if (found.length === 0) {
+          setNotice("解压出的文件夹里没有发现可导入的启动文件。");
+        }
+        if (failures.length > 0) {
+          setError(`部分解压目录扫描失败：${failures.join("；")}`);
+        }
+      } finally {
+        if (!cancelled && aliveRef.current) setScanning(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, initialRoots, applyScan]);
 
   const pickExecutables = useCallback(async () => {
     setScanning(true);
@@ -349,7 +392,7 @@ export default function ScanDialog({
           <div>
             <h2 className="text-sm font-semibold">添加游戏</h2>
             <p className="text-xs text-muted-foreground">
-              选择 exe 或 .bat/.cmd 启动脚本，或扫描目录；程序会按启动文件的上一级目录归并游戏。
+              选择 exe 或 .bat 启动脚本，或扫描目录；程序会按启动文件的上一级目录归并游戏。
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>

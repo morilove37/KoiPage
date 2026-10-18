@@ -1,0 +1,8 @@
+7-Zip 26.01 (x64) - console build
+Upstream: https://www.7-zip.org/
+Files bundled unmodified: 7z.exe, 7z.dll
+Source code: https://www.7-zip.org/a/7z2601-src.7z
+
+7-Zip is licensed under the GNU LGPL. The unRAR code included in 7z.dll is
+covered by the unRAR restriction; see License.txt. KoiPage only uses 7-Zip to
+extract archives selected by the user and does not implement a RAR archiver.

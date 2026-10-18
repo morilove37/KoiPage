@@ -55,3 +55,4 @@ dist-ssr
 *.sig
 !/src-tauri/resources/locale-emulator/LEProc.exe
 !/src-tauri/resources/magpie/*.exe
+!/src-tauri/resources/7zip/7z.exe
