@@ -31,6 +31,7 @@ import { GameRow } from "./GameRow";
 import ScanDialog from "@/features/scan/ScanDialog";
 import BatchImportDialog from "@/features/scan/BatchImportDialog";
 import type { PendingImport } from "@/features/scan/BatchImportDialog";
+import { takePendingScanRoots } from "@/features/scan/pendingScan";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
@@ -91,6 +92,16 @@ export default function LibraryPage() {
   const [activeTagIds, setActiveTagIds] = useState<number[]>([]);
   const [developer, setDeveloper] = useState("");
   const [scanOpen, setScanOpen] = useState(false);
+  // Folders extracted in 实用工具 are handed over through sessionStorage; the
+  // scan dialog opens preloaded so the user lands on the review list.
+  const [pendingScanRoots, setPendingScanRoots] = useState<string[] | null>(null);
+  useEffect(() => {
+    const roots = takePendingScanRoots();
+    if (roots !== null) {
+      setPendingScanRoots(roots);
+      setScanOpen(true);
+    }
+  }, []);
   const [metadataQueue, setMetadataQueue] = useState<GameInput[]>([]);
   const [batchDrafts, setBatchDrafts] = useState<GameInput[] | null>(null);
   const [customImportPaths, setCustomImportPaths] = useState<Set<string>>(() => new Set());
@@ -700,8 +711,12 @@ export default function LibraryPage() {
 
       <ScanDialog
         open={scanOpen}
-        onClose={() => setScanOpen(false)}
+        onClose={() => {
+          setScanOpen(false);
+          setPendingScanRoots(null);
+        }}
         onConfirmed={handleConfirmed}
+        initialRoots={pendingScanRoots ?? undefined}
       />
       {shareOpen ? <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">正在打开分享…</p>}><ShareDialog games={games} onClose={() => setShareOpen(false)} /></Suspense> : null}
 

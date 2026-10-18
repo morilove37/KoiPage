@@ -61,6 +61,11 @@ pub fn migrations() -> Vec<tauri_plugin_sql::Migration> {
         description: "localization cache",
         sql: include_str!("../../migrations/0002_localization.sql"),
         kind: MigrationKind::Up,
+    }, tauri_plugin_sql::Migration {
+        version: 3,
+        description: "character birthdays",
+        sql: include_str!("../../migrations/0003_birthdays.sql"),
+        kind: MigrationKind::Up,
     }]
 }
 

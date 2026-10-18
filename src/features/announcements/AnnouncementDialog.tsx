@@ -30,12 +30,12 @@ function WelcomeContent() {
     <p>欢迎来到恋页。这里用来收藏你的 Galgame、记录游玩足迹，也帮你决定下一次与哪部作品相遇。</p>
     <div className="rounded-lg border border-border bg-muted/40 p-3">
       <h3 className="font-semibold">从导入第一部作品开始</h3>
-      <p className="mt-1 text-muted-foreground">在游戏库选择游戏 exe 或扫描目录，确认名称后匹配资料。多部作品可逐款确认，也可一键导入；没有匹配结果时可手动填写。</p>
+      <p className="mt-1 text-muted-foreground">在游戏库选择游戏 exe 或扫描目录，确认名称后匹配资料。多部作品可逐款确认，也可一键导入；没有匹配结果时可手动填写。压缩包可先在「实用工具 → 游戏解压」解压，再扫描导入。</p>
     </div>
     <ul className="list-disc space-y-2 pl-5 text-muted-foreground">
-      <li>首页可切换作品封面、查看游玩记录，也可以随机抽取下一部作品。</li>
+      <li>首页可切换作品封面、查看游玩记录，也可以随机抽取下一部作品；角色生日展示今天及未来 30 天的寿星，首次获取后启用同步。</li>
       <li>详情页顶部可启动游戏、收藏和修改游玩状态；路径与启动设置保留手动输入和选择入口。</li>
-      <li>标签支持离线汉化，简介保留原文；主题与背景可在设置中调整，转区与窗口缩放工具在实用工具中配置。</li>
+      <li>标签支持离线汉化，简介保留原文；主题与背景可在设置中调整，转区、Luna 游戏翻译与窗口缩放工具在实用工具中配置。</li>
       <li>分享足迹支持隐藏作品和替换封面。仅在你主动生成分享链接时上传分享图，链接约 24 小时后过期。</li>
     </ul>
     <p className="text-xs text-muted-foreground">游戏库与记录保存在本机，建议在设置的「数据管理」中定期备份。本公告和当前版本公告都可以在「设置 → 公告」重新查看。</p>
@@ -64,7 +64,7 @@ function Announcement({ kind, blocked }: { kind: AnnouncementKind; blocked: bool
   >
     <div data-announcement={kind} className="space-y-4">
       {kind === "welcome" ? <WelcomeContent /> : <VersionContent />}
-      <AnnouncementContact />
+      <AnnouncementContact showMascot={kind === "welcome" || (kind === "version" && BRAND.version === "0.6.0")} />
       {state.error ? <p role="alert" className="text-sm text-destructive">{state.error}</p> : null}
     </div>
   </Dialog>;
