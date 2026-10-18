@@ -1,0 +1,27 @@
+LunaTranslator — Visual Novel Translator
+Author / 原作者: HIllya51 and LunaTranslator contributors
+Project: https://github.com/HIllya51/LunaTranslator
+Documentation: https://docs.lunatranslator.org/zh/
+License: GNU General Public License version 3 (see LICENSE and original LICENSES/).
+
+Bundled official release / 内置官方版本: v12.1.2.9 (Windows x64)
+Binary: LunaTranslator_x64.zip
+Release: https://github.com/HIllya51/LunaTranslator/releases/tag/v12.1.2.9
+Binary SHA-256: 1d8a2fd8ec0aade868471e0976491d2e97888d38f14d909f0e7628b9442410a3
+Corresponding source commit: 5a11c55e2cc8c0095a77f9f2145eb01bd6cfc410
+Source: LunaTranslator-source.zip (included beside this notice)
+Source URL: https://github.com/HIllya51/LunaTranslator/tree/5a11c55e2cc8c0095a77f9f2145eb01bd6cfc410
+Source archive: https://codeload.github.com/HIllya51/LunaTranslator/zip/5a11c55e2cc8c0095a77f9f2145eb01bd6cfc410
+
+The official binary archive is included unchanged. All upstream LICENSES and
+other notices remain intact. KoiPage invokes LunaTranslator as an independent
+program, without linking its code, altering its branding, or claiming authorship
+or endorsement. LunaTranslator and its components remain under their respective
+licenses, including their notices of no warranty. The matching source archive,
+build scripts and license are provided locally; third-party dependency source
+references are preserved in those build scripts and upstream notices.
+
+恋页保留原始程序包、作者署名、第三方许可与对应版本源码；以独立进程调用，
+不修改 Luna 二进制，不替换原作署名，不表示获得作者背书。用户的 userconfig、
+缓存和自更新文件不会因再次准备内置组件而被覆盖。
+内置程序可离线启动；在线翻译需要网络，离线翻译需在 Luna 中配置本地引擎。

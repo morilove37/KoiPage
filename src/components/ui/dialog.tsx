@@ -56,6 +56,7 @@ export function Dialog({
     >
       <div
         role="dialog"
+        aria-label={typeof title === "string" ? title : undefined}
         aria-modal="true"
         className={cn(
           "flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg",

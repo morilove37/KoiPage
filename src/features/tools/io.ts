@@ -6,6 +6,26 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { ready } from '@/lib/db';
+
+export interface LunaStatus {
+  path: string;
+  version: string;
+  available: boolean;
+  running: boolean;
+  sourcePath: string;
+  licensePath: string;
+  noticePath: string;
+}
+export function lunaStatus(): Promise<LunaStatus> {
+  return ready.then(() => invoke<LunaStatus>('luna_status'));
+}
+export function lunaLaunch(): Promise<boolean> {
+  return ready.then(() => invoke<boolean>('luna_launch'));
+}
+export function lunaQuit(): Promise<boolean> {
+  return ready.then(() => invoke<boolean>('luna_quit'));
+}
 
 export type MagpieSource = 'bundled' | 'custom' | 'process' | 'auto' | 'none';
 

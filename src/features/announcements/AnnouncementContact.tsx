@@ -2,14 +2,15 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { BRAND } from "@/lib/brand";
+import { AnnouncementMascot } from "./AnnouncementMascot";
 
 /** Project and author information shared by both notices. */
-export function AnnouncementContact() {
+export function AnnouncementContact({ showMascot = false }: { showMascot?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   return <section aria-label="项目与作者" className="border-t border-border pt-4">
     <h3 className="text-sm font-semibold">项目与作者</h3>
-    <div className="mt-3">
-      <div className="min-w-0 space-y-3 text-sm">
+    <div className="mt-3 flex items-start gap-3">
+      <div className="min-w-0 flex-1 space-y-3 text-sm">
         <div>
           <p className="font-medium">GitHub 项目</p>
           <a href={BRAND.repositoryUrl} target="_blank" rel="noopener noreferrer"
@@ -30,6 +31,7 @@ export function AnnouncementContact() {
         </div>
         {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       </div>
+      {showMascot ? <AnnouncementMascot /> : null}
     </div>
   </section>;
 }
