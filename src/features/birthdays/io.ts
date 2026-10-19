@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/logging';
 import { ready } from '@/lib/db';
 import type { BirthdayEdit, BirthdayProgress, BirthdaySnapshot } from './types';
 export const birthdaysList = () => ready.then(() => invoke<BirthdaySnapshot>('birthdays_list'));

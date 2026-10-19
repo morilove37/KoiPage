@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { settingsGet } from "@/lib/db";
-import { errorMessage, gameRunning, launchGame } from "@/features/io/io";
+import { errorMessage } from "@/features/io/io";
 import { useAppStore } from "@/store/app";
 import type { Game } from "@/types/game";
+import { gameProcesses } from "./game-process";
 
 /** Both home and detail use the same click-to-launch behavior. */
 export function useGameLauncher(onLaunched?: () => void) {
@@ -15,26 +16,31 @@ export function useGameLauncher(onLaunched?: () => void) {
 
   async function launch(game: Game) {
     if (pending.current || useAppStore.getState().launching[game.id]) return;
+    if (useAppStore.getState().gameProcesses[game.id]?.status === "running") {
+      setError(null); setNotice(null);
+      setDialogGame(game);
+      return;
+    }
     pending.current = true;
-    useAppStore.getState().setLaunching(game.id, true);
     setError(null); setNotice(null);
     try {
-      if (!game.exePath?.trim()) throw new Error("尚未设置可执行文件，请在游戏详情的「路径与启动」中选择文件并保存。");
-      const [useTool, running] = await Promise.all([settingsGet("locale_tool_use"), gameRunning(game.id)]);
+      const outcome = await gameProcesses.start(game.id, async () => {
+        if (!game.exePath?.trim()) throw new Error("尚未设置可执行文件，请在游戏详情的「路径与启动」中选择文件并保存。");
+        const useTool = await settingsGet("locale_tool_use");
+        // Avoid launching from a page that was left during the preflight.
+        if (!mounted.current) return false;
+        return !["1", "true", "yes", "on"].includes(useTool?.trim().toLowerCase() ?? "");
+      });
       if (!mounted.current) return;
-      // Match the launcher's accepted setting values. Running games retain
-      // their control panel so the user can inspect or stop the process.
-      if (running || ["1", "true", "yes", "on"].includes(useTool?.trim().toLowerCase() ?? "")) {
+      if (outcome.kind === "running" || outcome.kind === "panel") {
         setDialogGame(game);
         return;
       }
-      await launchGame(game.id);
-      if (mounted.current) { setNotice(`已启动「${game.title}」。`); onLaunched?.(); }
+      if (outcome.kind === "started") { setNotice(`已启动「${game.title}」。`); onLaunched?.(); }
     } catch (cause) {
       if (mounted.current) setError(errorMessage(cause));
     } finally {
       pending.current = false;
-      useAppStore.getState().setLaunching(game.id, false);
     }
   }
 

@@ -21,6 +21,7 @@
  */
 
 import { settingsGet, settingsSet } from './db';
+import { applyAccent, initAccent } from './accent';
 
 /** Settings key holding the persisted choice. */
 export const THEME_SETTING_KEY = 'theme';
@@ -125,6 +126,7 @@ function apply(theme: Theme, resolved: 'light' | 'dark'): void {
 
   // Lets native widgets (scrollbars, form controls) follow the theme too.
   root.style.colorScheme = resolved;
+  applyAccent();
 }
 
 /**
@@ -205,7 +207,7 @@ export async function setTheme(theme: Theme): Promise<void> {
  * Safe to call once at startup; it never throws.
  */
 export async function initTheme(): Promise<Theme> {
-  const theme = await loadTheme();
+  const [theme] = await Promise.all([loadTheme(), initAccent()]);
   applyTheme(theme);
   watchSystemTheme(theme);
   return theme;

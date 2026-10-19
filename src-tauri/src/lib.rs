@@ -8,6 +8,7 @@ pub mod launcher;
 pub mod metadata;
 pub mod scanner;
 mod rating;
+pub mod logging;
 
 use commands::DB_URL;
 
@@ -20,7 +21,7 @@ pub fn allow_asset_file(app: &tauri::AppHandle, path: &str) {
         return;
     }
     if let Err(error) = app.asset_protocol_scope().allow_file(file) {
-        eprintln!("[asset-scope] could not allow {path}: {error}");
+        crate::app_warn!("[asset-scope] could not allow {path}: {error}");
     }
 }
 
@@ -37,7 +38,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
     let Some(icon) = app.default_window_icon().cloned() else {
-        eprintln!("[tray] default window icon is missing; tray icon disabled");
+        crate::app_warn!("[tray] default window icon is missing; tray icon disabled");
         return Ok(());
     };
 
@@ -72,6 +73,7 @@ pub fn run() {
     if instance::acquire() == instance::Role::Duplicate {
         return;
     }
+    logging::init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -96,7 +98,7 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if let Err(error) = window.emit("close-requested", ()) {
-                    eprintln!("[window] could not emit close-requested: {error}");
+                    crate::app_warn!("[window] could not emit close-requested: {error}");
                 }
             }
         })
@@ -113,6 +115,10 @@ pub fn run() {
         // at runtime if the state was never managed.
         .manage(launcher::RunningGames::default())
         .invoke_handler(tauri::generate_handler![
+            logging::logs_info,
+            logging::logs_write,
+            logging::logs_export,
+            logging::logs_open_directory,
             // games
             commands::games::games_list,
             commands::games::game_get,
@@ -154,6 +160,9 @@ pub fn run() {
             commands::metadata::metadata_detail,
             commands::metadata::metadata_apply,
             commands::metadata::metadata_cover_cache,
+            commands::metadata::metadata_cover_preview,
+            commands::covers::game_cover_import,
+            commands::covers::covers_migrate,
             commands::metadata::metadata_autofetch,
             // cached library character birthdays
             birthdays::birthdays_list,

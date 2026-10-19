@@ -13,6 +13,7 @@ export interface PlayTimeSeries {
   totalSeconds: number;
   gameCount: number;
   activeDays: number;
+  games: Array<{ gameId: number; seconds: number }>;
 }
 
 function periodStarts(now: Date) {
@@ -20,6 +21,22 @@ function periodStarts(now: Date) {
   const week = new Date(day);
   week.setDate(week.getDate() - (week.getDay() + 6) % 7);
   return { day, week, month: new Date(now.getFullYear(), now.getMonth(), 1) };
+}
+
+/** Local calendar bounds; month movement always starts on day one. */
+export function playTimePeriodWindow(anchor: Date, period: PlayTimePeriod) {
+  const start = periodStarts(anchor)[period];
+  const end = new Date(start);
+  if (period === "month") end.setMonth(end.getMonth() + 1);
+  else end.setDate(end.getDate() + (period === "week" ? 7 : 1));
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+export function movePlayTimePeriod(anchor: Date, period: PlayTimePeriod, direction: -1 | 1, now: Date): Date {
+  const next = periodStarts(anchor)[period];
+  if (period === "month") next.setMonth(next.getMonth() + direction);
+  else next.setDate(next.getDate() + direction * (period === "week" ? 7 : 1));
+  return new Date(Math.min(+next, +periodStarts(now)[period]));
 }
 
 /** Read the whole relevant calendar range; recent-history pagination is separate. */
@@ -41,8 +58,8 @@ export function completedPlaySessions(sessions: readonly PlaySession[], cutoff: 
   });
 }
 
-export function buildPlayTimeSummary(sessions: readonly PlaySession[], now: Date): Record<PlayTimePeriod, PlayTimeSeries> {
-  const starts = periodStarts(now);
+export function buildPlayTimeSummary(sessions: readonly PlaySession[], now: Date, anchor = now): Record<PlayTimePeriod, PlayTimeSeries> {
+  const starts = periodStarts(anchor);
   const cutoff = now.getTime();
   const completed = completedPlaySessions(sessions, cutoff);
   const series = (period: PlayTimePeriod): PlayTimeSeries => {
@@ -67,20 +84,22 @@ export function buildPlayTimeSummary(sessions: readonly PlaySession[], now: Date
       });
       cursor = +next;
     }
-    const games = new Set<number>();
+    const games = new Map<number, number>();
     for (const session of completed) {
       if (session.end <= +start || session.start >= Math.min(+end, cutoff)) continue;
       for (const bucket of buckets) {
         const overlap = Math.min(session.end, bucket.end, cutoff) - Math.max(session.start, bucket.start);
         if (overlap <= 0) continue;
         // Preserve recorded duration, including manually adjusted/paused sessions.
-        bucket.seconds += session.seconds * overlap / (session.end - session.start);
-        games.add(session.gameId);
+        const seconds = session.seconds * overlap / (session.end - session.start);
+        bucket.seconds += seconds;
+        games.set(session.gameId, (games.get(session.gameId) ?? 0) + seconds);
       }
     }
     return {
       buckets, totalSeconds: buckets.reduce((total, bucket) => total + bucket.seconds, 0),
       gameCount: games.size,
+      games: [...games].map(([gameId, seconds]) => ({ gameId, seconds })).sort((a, b) => b.seconds - a.seconds || a.gameId - b.gameId),
       activeDays: period === "day" ? Number(buckets.some(bucket => bucket.seconds > 0)) : buckets.filter(bucket => bucket.seconds > 0).length,
     };
   };

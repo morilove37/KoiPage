@@ -4,7 +4,12 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { initBackdrop } from "./lib/backdrop";
 import { initTheme } from "./lib/theme";
+import { migrateCovers } from './lib/db';
 import "./index.css";
+import { initLogging } from './lib/logging';
+
+const disposeLogging = initLogging();
+if (import.meta.hot) import.meta.hot.dispose(disposeLogging);
 
 /**
  * Apply the persisted theme before the first paint, then mount.
@@ -30,6 +35,11 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn("[theme] could not apply the stored theme:", error);
   }
+
+  // Preserve existing covers before pages read their source/custom paths.
+  // Managed files are skipped on later startups; failed originals can retry.
+  try { await migrateCovers(); }
+  catch (error) { console.warn('[covers] could not preserve existing covers:', error); }
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

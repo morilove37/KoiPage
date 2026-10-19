@@ -9,6 +9,7 @@ import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
+import { useGameProcess } from "@/features/launch/useGameProcess";
 import { gamesList, gamesTagsGet, tagsList } from "@/lib/db";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
@@ -163,7 +164,7 @@ function GameSelector({ games, currentIndex, onSelect, onMove }: {
           tabIndex={index === currentIndex ? 0 : -1} title={game.title}
           className="home-game-choice" onClick={() => onSelect(index)}>
           <span className="home-game-thumbnail">
-            <CoverImage path={game.coverPath} alt="" loading={index < 10 ? "eager" : "lazy"}
+            <CoverImage gameId={game.id} path={game.coverPath} alt="" loading={index < 10 ? "eager" : "lazy"}
               className="h-full w-full object-cover" fallbackClassName="bg-slate-800 text-white/75" fallbackText="暂无封面" />
           </span>
           <span className="home-game-caption">{game.title}</span>
@@ -181,12 +182,13 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
   onLaunch?: () => void;
 }) {
   const { t } = useLocalizedTags();
-  const launching = useAppStore(state => state.launching[game.id] === true);
+  const process = useGameProcess(game.id, active);
+  const launching = process.status === "starting";
 
   return (
     <>
       <div aria-hidden="true" className="home-game-artwork absolute inset-0 overflow-hidden">
-        <CoverImage path={game.coverPath} alt="" loading="eager" fitLandscape className="h-full w-full object-cover" fallbackText="" />
+        <CoverImage gameId={game.id} path={game.coverPath} alt="" loading="eager" fitLandscape className="h-full w-full object-cover" fallbackText="" />
         <div className="home-game-shade absolute inset-0" />
       </div>
       <div className="home-game-copy text-white">
@@ -208,7 +210,7 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
         <div className="home-game-actions">
           {active ? (
             <>
-              <button type="button" className="home-game-play disabled:cursor-wait disabled:opacity-60" disabled={launching} aria-busy={launching} onClick={onLaunch}><GeometryIcon name="play" />{launching ? "启动中…" : game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</button>
+              <button type="button" className="home-game-play disabled:cursor-wait disabled:opacity-60" disabled={launching} aria-busy={launching} onClick={onLaunch}><GeometryIcon name="play" />{launching ? "启动中…" : process.status === "running" ? "运行中" : game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</button>
               <Link to={`/library/${game.id}`} className="home-game-details">查看详情 <span aria-hidden="true">↗</span></Link>
             </>
           ) : <span className="home-game-play"><GeometryIcon name="play" />{game.playTimeSeconds > 0 ? "继续游玩" : "启动游戏"}</span>}
@@ -416,7 +418,7 @@ export default function HomePage() {
                 <div className="divide-y divide-border">
                   {waitingGames.slice(0, 3).map(game => (
                     <Link key={game.id} to={`/library/${game.id}`} className="flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage path={game.coverPath} alt={game.title} className="h-full w-full object-cover" fallbackText="" /></div>
+                      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game.id} path={game.coverPath} alt={game.title} className="h-full w-full object-cover" fallbackText="" /></div>
                       <div className="min-w-0 flex-1">
                         <h3 className="truncate text-sm font-medium">{game.title}</h3>
                         <p className="mt-1 text-xs text-muted-foreground">{isFavorite(game) ? "★ 已收藏 · " : ""}{GAME_STATUS_LABELS[game.status]}</p>

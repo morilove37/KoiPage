@@ -6,11 +6,13 @@ import { formatPlayTime, GAME_STATUS_LABELS } from "@/types/game";
 import type { Game } from "@/types/game";
 import replacementCover from "@/assets/share-cover-placeholder.jpg";
 import { sharePages } from "./model";
+import { loadCoverPreferences, useCoverStore } from '@/features/covers/store';
+import { DEFAULT_COVER, effectiveCoverPath } from '@/features/covers/model';
 
 export { replacementCover };
 export interface ShareRender { pages: Blob[]; missing: string[] }
 
-async function thumbnail(blob: Blob): Promise<ImageBitmap> {
+async function thumbnail(blob: Blob, censored: boolean): Promise<ImageBitmap> {
   const url = URL.createObjectURL(blob), image = new Image();
   const canvas = document.createElement("canvas");
   try {
@@ -21,7 +23,10 @@ async function thumbnail(blob: Blob): Promise<ImageBitmap> {
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("无法生成封面缩略图");
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (censored) {
+      ctx.filter = 'blur(14px)';
+      ctx.drawImage(image, -16, -16, canvas.width + 32, canvas.height + 32);
+    } else ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     return await createImageBitmap(canvas);
   } finally { URL.revokeObjectURL(url); canvas.width = 0; canvas.height = 0; }
 }
@@ -30,10 +35,13 @@ async function thumbnail(blob: Blob): Promise<ImageBitmap> {
 export class ShareCoverCache {
   private images = new Map<string, Promise<ImageBitmap>>();
   private disposed = false;
-  get(game: Game, replaced: boolean): Promise<ImageBitmap | null> {
-    const source = replaced ? replacementCover : game.coverPath;
+  async get(game: Game, replaced: boolean): Promise<ImageBitmap | null> {
+    await loadCoverPreferences();
+    const preferences = useCoverStore.getState().preferences[game.id] ?? DEFAULT_COVER;
+    const censored = !replaced && preferences.censored;
+    const source = replaced ? replacementCover : effectiveCoverPath(game.coverPath, preferences);
     if (!source) return Promise.resolve(null);
-    const key = replaced ? "replacement" : `${game.id}:${source}`;
+    const key = replaced ? "replacement" : `${game.id}:${source}:${censored}`;
     const previous = this.images.get(key);
     if (previous) return previous;
     const image = (async () => {
@@ -47,7 +55,7 @@ export class ShareCoverCache {
         if (!response.ok) throw new Error("封面读取失败");
         blob = await response.blob();
       }
-      const decoded = await thumbnail(blob);
+      const decoded = await thumbnail(blob, censored);
       if (this.disposed) { decoded.close(); throw new Error("分享窗口已关闭"); }
       return decoded;
     })().catch(error => { this.images.delete(key); throw error; });

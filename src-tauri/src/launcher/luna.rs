@@ -408,7 +408,7 @@ pub async fn autostart(app: &AppHandle) {
     }
     .await;
     if let Err(e) = result {
-        eprintln!("[luna] optional autostart: {e}");
+        crate::app_warn!("[luna] optional autostart: {e}");
     }
 }
 

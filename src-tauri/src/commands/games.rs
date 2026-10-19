@@ -120,7 +120,11 @@ pub async fn game_get(app: AppHandle, id: i64) -> CmdResult<GameDetail> {
 /// `game_create` — insert a game and optionally attach tags.
 #[tauri::command]
 pub async fn game_create(app: AppHandle, input: GameInput) -> CmdResult<Game> {
+    let mut input = input;
     let pool = pool(&app).await?;
+    if let Some(path) = input.cover_path.take() {
+        input.cover_path = Some(super::covers::retain_or_original(&app, path).await);
+    }
     let game = create_game(&pool, input).await?;
     if let Some(path) = &game.cover_path {
         crate::allow_asset_file(&app, path);
@@ -230,7 +234,12 @@ async fn attach_tag_names(
 /// `game_update` — partial update; omitted fields are left untouched.
 #[tauri::command]
 pub async fn game_update(app: AppHandle, id: i64, patch: GamePatch) -> CmdResult<Game> {
+    let mut patch = patch;
     let pool = pool(&app).await?;
+    patch.cover_path = match patch.cover_path {
+        Some(Some(path)) => Some(Some(super::covers::retain_or_original(&app, path).await)),
+        unchanged => unchanged,
+    };
     let game = update_game(&pool, id, patch).await?;
     if let Some(path) = &game.cover_path {
         crate::allow_asset_file(&app, path);

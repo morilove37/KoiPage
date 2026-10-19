@@ -6,7 +6,7 @@
  * here is camelCase, matching the rest of {@link ../types/game}.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/logging';
 
 import { ready } from '@/lib/db';
 import type { Game, GameInput } from '@/types/game';

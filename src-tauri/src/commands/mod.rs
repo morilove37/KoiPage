@@ -7,6 +7,7 @@
 //! `Database.load("sqlite:galgame.db")`. See [`crate::DB_URL`].
 
 pub mod error;
+pub mod covers;
 pub mod games;
 pub mod metadata;
 pub mod model;

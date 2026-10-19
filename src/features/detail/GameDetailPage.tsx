@@ -8,6 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
+import { CoverControls } from "@/features/covers/CoverControls";
+import { useGameCover } from "@/features/covers/store";
+import { effectiveCoverPath } from "@/features/covers/model";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { PathInput } from "@/components/ui/path-input";
@@ -15,6 +18,7 @@ import { Select } from "@/components/ui/select";
 import { Tabs } from "@/components/ui/tabs";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
+import { useGameProcess } from "@/features/launch/useGameProcess";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 import { errorMessage, localeToolStatus } from "@/features/io/io";
 import type { GameExitedPayload } from "@/features/io/io";
@@ -150,6 +154,7 @@ export default function GameDetailPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const gameId = Number(id);
+  const { preferences: coverPreferences } = useGameCover(gameId);
   const playTimeRevision = useAppStore((s) => s.playTimeRevision);
 
   const [game, setGame] = useState<GameDetail | null>(null);
@@ -180,7 +185,8 @@ export default function GameDetailPage() {
   /** Set once metadata was written, so closing the dialog triggers one reload. */
   const [metadataDirty, setMetadataDirty] = useState(false);
   const [confirmMetadata, setConfirmMetadata] = useState(false);
-  const launching = useAppStore(state => state.launching[gameId] === true);
+  const process = useGameProcess(gameId);
+  const launching = process.status === "starting";
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -573,7 +579,8 @@ export default function GameDetailPage() {
   // without making subsequent edits replay the entrance animation.
   if (sharedOpening.current === null) sharedOpening.current = isGameOpeningTransition();
   const favorite = isFavorite(game);
-  const dimensions = coverSize?.path === game.coverPath ? coverSize : null;
+  const displayCoverPath = effectiveCoverPath(game.coverPath, coverPreferences);
+  const dimensions = coverSize?.path === displayCoverPath ? coverSize : null;
   const landscape = Boolean(dimensions && dimensions.width > dimensions.height);
   const tags = selectedTagIds
     .map((tagId) => tagById.get(tagId))
@@ -631,17 +638,19 @@ export default function GameDetailPage() {
               loading={launching}
               onClick={() => void launcher.launch(game)}
               title={
-                game.exePath?.trim()
+                process.status === "running"
+                  ? "查看正在运行的游戏"
+                  : game.exePath?.trim()
                   ? "启动这个游戏"
                   : "请在「路径与启动」选择可执行文件并保存"
               }
             >
-              启动游戏
+              {launching ? "启动中…" : process.status === "running" ? "运行中" : "启动游戏"}
             </Button>
             <Button
               variant="outline"
               onClick={openMetadata}
-              title="从鲲 Galgame 论坛 / VNDB / Bangumi 联网获取资料"
+              title="从鲲 Galgame 论坛 / VNDB / Bangumi / 2DFan 联网获取资料"
             >
               联网获取资料
             </Button>
@@ -710,14 +719,16 @@ export default function GameDetailPage() {
           <CardContent className="detail-summary-content p-3">
             <div data-detail-cover className="detail-cover-frame w-full overflow-hidden rounded bg-muted">
               <CoverImage
+                gameId={game.id}
                 loading="eager"
                 path={game.coverPath}
                 alt={game.title}
                 className="h-full w-full object-contain"
-                onDimensions={size => setCoverSize(size ? { path: game.coverPath, ...size } : null)}
+                onDimensions={size => setCoverSize(size ? { path: displayCoverPath, ...size } : null)}
               />
             </div>
             <div className="detail-summary-information min-w-0">
+            <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} />
             <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
               <dt className="text-muted-foreground">评分</dt>
               <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{form.rating === "" ? "未评分" : formatRating(Number(form.rating))}</dd>
@@ -804,7 +815,7 @@ export default function GameDetailPage() {
                   }
                 />
               </Field>
-              <Field label="封面路径">
+              <Field label="原封面路径" hint="自定义封面可在左侧封面区域设置，并可随时恢复为此封面。">
                 <Input
                   value={form.coverPath}
                   onChange={(event) =>
