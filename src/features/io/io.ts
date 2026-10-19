@@ -17,7 +17,7 @@
  * string), not an `Error` object — use {@link errorMessage} when displaying one.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/lib/logging';
 
 import { initDatabase } from '@/lib/db';
 

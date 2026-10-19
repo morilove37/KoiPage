@@ -166,8 +166,9 @@ fn compare(needle: &str, haystack: &str) -> Match {
 
 /// Pick the best candidate for `query`, or `None` when nothing overlaps.
 ///
-/// Ties are broken toward the order the providers returned, which is their own
-/// relevance order — a signal worth keeping.
+/// On equal confidence, keep the existing API providers ahead of 2DFan's HTML
+/// catalogue: they supply localized names and external IDs for enrichment.
+/// The existing ordering among those providers remains unchanged.
 pub fn best_match<'a>(
     query: &str,
     candidates: &'a [MetadataCandidate],
@@ -176,13 +177,62 @@ pub fn best_match<'a>(
         .iter()
         .map(|candidate| (candidate, score(query, candidate)))
         .filter(|(_, strength)| *strength != Match::None)
-        .max_by_key(|(_, strength)| *strength)
+        .max_by_key(|(candidate, strength)| (*strength, candidate.provider != super::Provider::TwoDfan))
+}
+
+pub fn ranked_candidates<'a>(
+    query: &str,
+    candidates: &'a [MetadataCandidate],
+    preferred: super::Provider,
+) -> Vec<(&'a MetadataCandidate, Match)> {
+    let mut ranked = candidates.iter().enumerate()
+        .map(|(index, candidate)| (index, candidate, score(query, candidate)))
+        .filter(|(_, _, strength)| strength.is_confident())
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(ai, a, sa), (bi, b, sb)| {
+        (b.provider == preferred).cmp(&(a.provider == preferred))
+            .then_with(|| sb.cmp(sa)).then_with(|| ai.cmp(bi))
+    });
+    ranked.into_iter().map(|(_, candidate, strength)| (candidate, strength)).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::metadata::Provider;
+
+    #[test]
+    fn preferred_source_wins_for_confident_matches_but_not_weak_ones() {
+        let mut fallback = candidate("CLANNAD", None);
+        fallback.provider = Provider::Bangumi;
+        let mut preferred = candidate("CLANNAD", None);
+        preferred.provider = Provider::Vndb;
+        let candidates = vec![fallback.clone(), preferred.clone()];
+        let ranked = ranked_candidates("CLANNAD", &candidates, Provider::Vndb);
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].0.provider, Provider::Vndb);
+
+        preferred.title = "CLANNAD -Happy Birthday-".into();
+        let candidates = vec![preferred, fallback];
+        let ranked = ranked_candidates("CLANNAD", &candidates, Provider::Vndb);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].0.provider, Provider::Bangumi);
+    }
+
+    #[test]
+    fn explicit_2dfan_preference_is_respected_and_same_source_order_is_stable() {
+        let mut api = candidate("CLANNAD", None);
+        api.provider = Provider::Vndb;
+        let mut first = candidate("CLANNAD", None);
+        first.provider = Provider::TwoDfan;
+        first.external_id = "21".into();
+        let mut second = first.clone();
+        second.external_id = "22".into();
+        let candidates = vec![api, first, second];
+        let ranked = ranked_candidates("CLANNAD", &candidates, Provider::TwoDfan);
+        assert_eq!(ranked.iter().map(|(c,_)| c.external_id.as_str()).collect::<Vec<_>>(), vec!["21","22","1"]);
+        assert!(ranked_candidates("unrelated", &candidates, Provider::TwoDfan).is_empty());
+    }
 
     fn candidate(title: &str, original: Option<&str>) -> MetadataCandidate {
         MetadataCandidate {
@@ -331,5 +381,21 @@ mod tests {
         let (found, strength) = best_match("CLANNAD", &candidates).expect("a match");
         assert_eq!(strength, Match::Exact);
         assert_eq!(found.title, "CLANNAD");
+    }
+
+    #[test]
+    fn adding_2dfan_preserves_existing_precedence_for_equal_matches() {
+        let mut existing = candidate("CLANNAD", Some("クラナド"));
+        existing.provider = Provider::Bangumi;
+        let mut added = candidate("CLANNAD", None);
+        added.provider = Provider::TwoDfan;
+        let candidates = vec![existing, added];
+        let (found, strength) = best_match("CLANNAD", &candidates).unwrap();
+        assert_eq!(strength, Match::Exact);
+        assert_eq!(found.provider, Provider::Bangumi);
+
+        let candidates = vec![candidate("CLANNAD -Happy Birthday-", None), candidates[1].clone()];
+        let (found, _) = best_match("CLANNAD", &candidates).unwrap();
+        assert_eq!(found.provider, Provider::TwoDfan, "a stronger 2DFan match must still win");
     }
 }

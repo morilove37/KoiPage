@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { metadataDetail, metadataSearch } from "@/lib/db";
-import type { GameInput } from "@/lib/db";
+import type { GameInput, MetadataCandidate, MetadataDetail } from "@/lib/db";
 import { createGameFromMetadata } from "@/features/metadata/create-game";
 import { ALL_PROVIDERS, FIELD_ORDER, errorMessage, hasFieldData, providerLabel, titleFor } from "@/features/metadata/fields";
 
-type Status = "pending" | "searching" | "loading" | "saving" | "imported" | "manual" | "failed";
+type Status = "pending" | "searching" | "loading" | "saving" | "imported" | "review" | "manual" | "failed";
 interface ImportRow { draft: GameInput; status: Status; message: string; }
 export interface PendingImport { draft: GameInput; manual: boolean; }
 
@@ -20,7 +20,7 @@ interface Props {
 
 const LABELS: Record<Status, string> = {
   pending: "等待导入", searching: "正在搜索", loading: "获取资料", saving: "正在保存",
-  imported: "已导入", manual: "未找到，待自定义", failed: "失败，待处理",
+  imported: "已导入", review: "待确认匹配", manual: "未找到，待自定义", failed: "失败，待处理",
 };
 
 /** Sequential requests preserve result order and avoid a burst against providers. */
@@ -52,20 +52,29 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
               update(index, "searching");
               const found = await metadataSearch(draft.title, [...ALL_PROVIDERS]);
               if (shouldStop()) { update(index, "pending"); break; }
-              const first = found.candidates[0];
-              if (!first) {
-                if (found.errors.length > 0) {
+              if (found.automaticCandidates.length === 0) {
+                if (found.candidates.length === 0 && found.errors.length > 0) {
                   update(index, "failed", found.errors.map(error => `${providerLabel(error.provider)}：${error.message}`).join("；"));
                 } else {
-                  update(index, "manual", "没有匹配结果，可手动填写资料。");
+                  update(index, found.candidates.length > 0 ? "review" : "manual", found.candidates.length > 0 ? "匹配不够确定，请逐款确认。" : "没有匹配结果，可手动填写资料。");
                 }
                 continue;
               }
-              const warnings = found.errors.map(error => `${providerLabel(error.provider)}：${error.message}`).join("；");
-              const matched = `${providerLabel(first.provider)} · ${first.title}`;
-              update(index, "loading", matched);
-              const detail = await metadataDetail(first.provider, first.externalId);
+              const warnings = found.errors.map(error => `${providerLabel(error.provider)}：${error.message}`);
+              let first: MetadataCandidate | null = null;
+              let detail: MetadataDetail | null = null;
+              for (const candidate of found.automaticCandidates) {
+                if (shouldStop()) break;
+                update(index, "loading", `${providerLabel(candidate.provider)} · ${candidate.title}`);
+                try {
+                  detail = await metadataDetail(candidate.provider, candidate.externalId);
+                  first = candidate;
+                  break;
+                } catch (cause) { warnings.push(`${providerLabel(candidate.provider)}：${errorMessage(cause)}`); }
+              }
               if (shouldStop()) { update(index, "pending"); break; }
+              if (!detail || !first) throw new Error(warnings.join("；") || "候选资料读取失败。");
+              const matched = `${providerLabel(first.provider)} · ${first.title}`;
               // The confirmed search name is retained by metadataInput.
               update(index, "saving", matched);
               // Use the localized title (Chinese, then original script) instead
@@ -74,7 +83,7 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
               const result = await createGameFromMetadata(
                 { ...draft, title: resolvedTitle }, detail, FIELD_ORDER.filter(field => hasFieldData(detail, field)), Boolean(detail.coverUrl?.trim()),
               );
-              update(index, "imported", [`${result.game.title} · ${detail.attribution || providerLabel(first.provider)}`, warnings, result.coverWarning].filter(Boolean).join("；"));
+              update(index, "imported", [`${result.game.title} · ${detail.attribution || providerLabel(first.provider)}`, ...warnings, result.coverWarning].filter(Boolean).join("；"));
             } catch (cause) {
               update(index, "failed", errorMessage(cause));
             }
@@ -88,12 +97,12 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
   }, [drafts, onFinished]);
 
   const imported = rows.filter(row => row.status === "imported").length;
-  const done = rows.filter(row => ["imported", "manual", "failed"].includes(row.status)).length;
+  const done = rows.filter(row => ["imported", "review", "manual", "failed"].includes(row.status)).length;
   const remaining = rows.filter(row => row.status !== "imported");
 
   return (
     <Dialog open title="一键导入" className="max-w-2xl" onClose={() => { if (!running) onClose(); }}
-      description="自动采用每款游戏搜索结果的第一项，填入封面、评分、简介和标签；若要确保准确性，请停止后使用「逐款确认」逐条导入。"
+      description="优先采用设置中默认数据源的可信匹配，没有合适结果或资料读取失败时使用其他来源；不确定的匹配交由逐款确认。"
       footer={running ? (
         <Button variant="outline" disabled={stopping} onClick={() => { stopRef.current = true; setStopping(true); }}>
           {stopping ? "正在停止…" : "停止后续导入"}

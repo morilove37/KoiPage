@@ -1,6 +1,6 @@
 [package]
 name = "galgame-manager"
-version = "0.6.0"
+version = "0.6.1"
 description = "KoiPage - a Galgame and visual novel library manager"
 authors = ["morilove37"]
 edition = "2024"
@@ -43,8 +43,10 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+regex = "1"
+scraper = { version = "0.24", default-features = false }
 # Decode avatar contents before accepting personal or imported image data.
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -63,8 +65,10 @@ tauri-plugin-updater = "2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
     "Win32_UI_Shell",

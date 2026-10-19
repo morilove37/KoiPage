@@ -8,6 +8,7 @@ const SECTIONS = [
   { id: 'settings-localization', label: '资料汉化' },
   { id: 'settings-metadata', label: '资料匹配' },
   { id: 'settings-data', label: '数据管理' },
+  { id: 'settings-logs', label: '日志' },
   { id: 'settings-announcements', label: '公告' },
   { id: 'settings-about', label: '关于' },
 ] as const;

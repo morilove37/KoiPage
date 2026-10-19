@@ -2,6 +2,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { CoverImage } from "@/components/ui/cover-image";
+import { CoverCensorButton } from "@/features/covers/CoverControls";
 import { cn } from "@/lib/utils";
 import { formatRating } from "@/lib/rating";
 import { openGameWithTransition } from "@/lib/game-opening";
@@ -76,6 +77,7 @@ export function GameCard({
         <div className="relative aspect-[3/4] w-full overflow-hidden bg-muted">
           <div data-game-cover className="absolute inset-0 overflow-hidden">
           <CoverImage
+            gameId={game.id}
             path={game.coverPath}
             alt={game.title}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
@@ -128,6 +130,8 @@ export function GameCard({
           ) : null}
         </div>
       </Link>
+
+      {!selectable ? <CoverCensorButton gameId={game.id} title={game.title} className="absolute right-2 top-10 z-20 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100" /> : null}
 
       <button
         type="button"

@@ -114,7 +114,7 @@ mod windows_guard {
         if handle.is_null() {
             // Creation failed (out of handles, or a hostile session). Fail open:
             // a missing guard is better than an app that will not start.
-            eprintln!(
+            crate::app_warn!(
                 "[instance] could not create the ownership mutex (error {})",
                 unsafe { GetLastError() }
             );
@@ -170,7 +170,7 @@ mod windows_guard {
         // Auto-reset (no `EVENT_MANUAL_RESET`): one signal wakes exactly one wait.
         let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
         if event.is_null() {
-            eprintln!(
+            crate::app_warn!(
                 "[instance] could not create the wake event (error {})",
                 unsafe { GetLastError() }
             );

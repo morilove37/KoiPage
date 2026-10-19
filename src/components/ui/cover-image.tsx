@@ -2,10 +2,15 @@ import { useState } from "react";
 
 import { coverSrc } from "@/lib/asset";
 import { cn } from "@/lib/utils";
+import { useGameCover } from "@/features/covers/store";
+import { effectiveCoverPath } from "@/features/covers/model";
+import { useProtectedCover } from "@/lib/protected-cover";
 
 export interface CoverImageProps {
   /** Absolute filesystem path from `games.coverPath`. */
   path: string | null;
+  gameId?: number;
+  censored?: boolean;
   alt: string;
   className?: string;
   /** Rendered when the path is empty *or* the image fails to load. */
@@ -26,11 +31,14 @@ export interface CoverImageProps {
  * instead of a silent broken image, so we swap to the same placeholder used for
  * "no cover".
  */
-export function CoverImage({ path, ...props }: CoverImageProps) {
-  const src = coverSrc(path);
+export function CoverImage({ path, gameId, censored, ...props }: CoverImageProps) {
+  const { preferences, loaded, error } = useGameCover(gameId);
+  const src = loaded ? coverSrc(effectiveCoverPath(path, preferences)) : undefined;
   // Remount the image state for each source. Resetting `failed` in an effect
   // races with cached image errors, which can otherwise leave a broken image.
-  return <CoverImageSource key={src ?? ""} src={src} {...props} />;
+  return <CoverImageSource key={src ?? ""} src={src} {...props}
+    censored={censored ?? preferences.censored}
+    fallbackText={!loaded ? error ? "封面设置读取失败" : "载入封面…" : props.fallbackText} />;
 }
 
 function CoverImageSource({
@@ -42,11 +50,13 @@ function CoverImageSource({
   loading = "lazy",
   fitLandscape = false,
   onDimensions,
+  censored = false,
 }: Omit<CoverImageProps, "path"> & { src: string | undefined }) {
   const [failed, setFailed] = useState(false);
   const [landscape, setLandscape] = useState(false);
+  const resolved = useProtectedCover(src);
 
-  if (!src || failed) {
+  if (!resolved.src || failed) {
     return (
       <div
         className={cn(
@@ -54,14 +64,14 @@ function CoverImageSource({
           fallbackClassName,
         )}
       >
-        {fallbackText}
+        {resolved.pending ? "载入封面…" : fallbackText}
       </div>
     );
   }
 
   return (
     <img
-      src={src}
+      src={resolved.src}
       alt={alt}
       loading={loading}
       onLoad={event => {
@@ -72,7 +82,11 @@ function CoverImageSource({
       onError={() => { setFailed(true); onDimensions?.(null); }}
       className={className}
       data-landscape={fitLandscape ? landscape : undefined}
-      style={fitLandscape && landscape ? { objectFit: "contain", objectPosition: "center" } : undefined}
+      data-censored={censored || undefined}
+      style={{
+        ...(fitLandscape && landscape ? { objectFit: "contain", objectPosition: "center" } : {}),
+        ...(censored ? { filter: "blur(20px)", transform: "scale(1.18)" } : {}),
+      }}
     />
   );
 }

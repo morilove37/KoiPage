@@ -73,7 +73,7 @@ export function RecentPlayHistory({ games, refreshKey }: { games: Game[]; refres
   const row = (session: PlaySession) => {
     const game = gamesById.get(session.gameId);
     const content = <>
-      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage path={game?.coverPath ?? null} alt={game?.title ?? "已移除的作品"} className="h-full w-full object-cover" fallbackText="" /></div>
+      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game?.id} path={game?.coverPath ?? null} alt={game?.title ?? "已移除的作品"} className="h-full w-full object-cover" fallbackText="" /></div>
       <div className="min-w-0 flex-1">
         <h3 className="truncate text-sm font-medium">{game?.title ?? "已移除的作品"}</h3>
         <p className="mt-1 break-words text-[11px] leading-relaxed text-muted-foreground"><time dateTime={session.startedAt}>{dateTime(session.startedAt)}</time>{session.endedAt ? <> → <time dateTime={session.endedAt}>{dateTime(session.endedAt)}</time></> : " · 记录未结束"}</p>

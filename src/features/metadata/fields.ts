@@ -25,7 +25,7 @@ export function metadataInput(
   for (const field of fields) {
     if (!hasFieldData(detail, field)) continue;
     switch (field) {
-      case "title": break; // The query, never the provider's title, names the game.
+      case "title": break; // The caller has already resolved the draft's title.
       case "original_title": input.originalTitle = detail.titleOriginal; break;
       case "developer": input.developer = detail.developer; break;
       case "release_date": input.releaseDate = detail.releaseDate; break;
@@ -41,7 +41,7 @@ export function metadataInput(
 }
 
 /** Every source `metadata_search` accepts, in display order. */
-export const ALL_PROVIDERS: readonly MetadataProvider[] = ["nextmoe", "vndb", "bangumi"];
+export const ALL_PROVIDERS: readonly MetadataProvider[] = ["nextmoe", "vndb", "bangumi", "2dfan"];
 
 /**
  * Display names for the sources.
@@ -53,6 +53,7 @@ export const PROVIDER_LABELS: Record<MetadataProvider, string> = {
   nextmoe: "鲲 Galgame 论坛",
   vndb: "VNDB",
   bangumi: "Bangumi",
+  '2dfan': "2DFan",
 };
 
 export function providerLabel(provider: MetadataProvider | null | undefined): string {
@@ -90,12 +91,12 @@ export const FIELD_LABELS: Record<MetadataField, string> = {
 
 /** Hints shown for fields that usually deserve a second look. */
 export const FIELD_NOTES: Partial<Record<MetadataField, string>> = {
-  title: "英文搜索会优先采用数据源里的中文名，其次日文原名；中文/日文搜索保留你填写的名称。",
+  title: "按设置中的标题语言选择名称，默认优先采用中文名，其次日文原名、数据源标题；搜索名称仅在资料没有标题时使用。",
   rating: "上游评分归一到 0-10，四舍五入到小数点后两位。",
   tags: "按名称入库，同名标签会复用而不是重建。",
 };
 
-/** Which language the auto-fetch path prefers for the stored game name. */
+/** Which language metadata confirmation and auto-fetch prefer for the game name. */
 export type MetadataTitlePreference = "zh" | "ja" | "source";
 
 /** Settings key shared with Rust (`metadata::TITLE_LANGUAGE_KEY`). */
@@ -163,7 +164,7 @@ export function fieldPreview(detail: MetadataDetail, field: MetadataField): stri
   switch (field) {
     case "title":
       // `metadata_apply` writes this value verbatim for a manual confirmation
-      // (the dialog has already substituted the search name into `title`).
+      // (the dialog has already resolved the preferred language into `title`).
       return detail.title.trim();
     case "original_title":
       return detail.titleOriginal?.trim() ?? "";
@@ -210,6 +211,7 @@ export function formatScore(score: number): string {
  * so the raw value is not fit to print.
  */
 const SOURCE_LABELS: Record<string, string> = {
+  '2dfan': "2DFan",
   vndb: "VNDB",
   bangumi: "Bangumi",
   nextmoe: "鲲 Galgame 论坛",

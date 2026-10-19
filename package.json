@@ -1,7 +1,7 @@
 {
   "name": "galgame-manager",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "packageManager": "pnpm@12.11.2",
   "type": "module",
   "scripts": {
@@ -14,6 +14,9 @@
     "test:announcements": "node --test tests/announcements.test.mjs",
     "test:home-play-time": "node --test tests/home-play-time.test.mjs tests/play-time-calendar.test.mjs",
     "test:birthdays": "node --test tests/birthdays.test.mjs",
+    "test:covers": "node --test tests/cover-preferences.test.mjs",
+    "test:metadata": "node --test tests/metadata-preferences.test.mjs",
+    "test:logs": "node --test tests/log-model.test.mjs tests/logging-runtime.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

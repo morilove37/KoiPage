@@ -327,7 +327,7 @@ export function AutofetchPanel({
         ) : null}
       </ul>
       <p className="mt-1.5 text-[11px] text-muted-foreground">
-        资料来自鲲 Galgame 论坛 / VNDB / Bangumi，仅写入可信字段；匹配不确定的一律留给你决定。
+        资料来自鲲 Galgame 论坛 / VNDB / Bangumi / 2DFan，仅写入可信字段；匹配不确定的一律留给你决定。
       </p>
     </div>
   );

@@ -64,7 +64,7 @@ function Announcement({ kind, blocked }: { kind: AnnouncementKind; blocked: bool
   >
     <div data-announcement={kind} className="space-y-4">
       {kind === "welcome" ? <WelcomeContent /> : <VersionContent />}
-      <AnnouncementContact showMascot={kind === "welcome" || (kind === "version" && BRAND.version === "0.6.0")} />
+      <AnnouncementContact />
       {state.error ? <p role="alert" className="text-sm text-destructive">{state.error}</p> : null}
     </div>
   </Dialog>;
