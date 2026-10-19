@@ -22,6 +22,7 @@ pub mod matching;
 pub mod merge;
 pub mod nextmoe;
 pub mod vndb;
+pub mod twodfan;
 
 #[cfg(test)]
 mod live_tests;
@@ -37,6 +38,8 @@ pub enum Provider {
     Nextmoe,
     Vndb,
     Bangumi,
+    #[serde(rename = "2dfan")]
+    TwoDfan,
 }
 
 impl Provider {
@@ -46,6 +49,7 @@ impl Provider {
             Provider::Nextmoe => "nextmoe",
             Provider::Vndb => "vndb",
             Provider::Bangumi => "bangumi",
+            Provider::TwoDfan => "2dfan",
         }
     }
 }
@@ -140,6 +144,26 @@ pub fn http_client() -> CmdResult<reqwest::Client> {
         .map_err(|error| CmdError(format!("could not build http client: {error}")))
 }
 
+/// 2DFan's image host returns 404 unless the request comes from the site.
+pub fn protected_cover(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|url| url.scheme() == "https" && url.host_str() == Some("img.achost.top"))
+}
+
+pub async fn download_cover(url: &str) -> CmdResult<Vec<u8>> {
+    let mut request = http_client()?.get(url).header("Accept", "image/*");
+    if protected_cover(url) { request = request.header(reqwest::header::REFERER, "https://2dfan.com/"); }
+    let mut response = request.send().await.map_err(|error| CmdError(format!("封面下载失败：{error}")))?;
+    let status = response.status();
+    if !status.is_success() { return Err(CmdError(format!("封面下载返回 HTTP {status}"))); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| CmdError(format!("封面读取失败：{error}")))? {
+        if bytes.len() + chunk.len() > 20 * 1024 * 1024 { return Err(CmdError("封面不能超过 20 MB".into())); }
+        bytes.extend_from_slice(&chunk);
+    }
+    image::guess_format(&bytes).map_err(|_| CmdError("封面下载结果不是有效图片".into()))?;
+    Ok(bytes)
+}
+
 /// Identifies this application to the upstream APIs, as their terms require.
 pub const USER_AGENT: &str = concat!(
     "KoiPage/",
@@ -149,6 +173,16 @@ pub const USER_AGENT: &str = concat!(
 
 /// Settings key for the preferred language of a fetched display title.
 pub const TITLE_LANGUAGE_KEY: &str = "metadata_title_language";
+pub const DEFAULT_SOURCE_KEY: &str = "metadata_default_source";
+
+pub fn default_source(value: Option<&str>) -> Provider {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("nextmoe") => Provider::Nextmoe,
+        Some("bangumi") => Provider::Bangumi,
+        Some("2dfan") => Provider::TwoDfan,
+        _ => Provider::Vndb,
+    }
+}
 
 /// Which language should become the game's display title when metadata is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { GameProcessState } from "@/features/launch/process-state";
 
 /**
  * Global UI/session state.
@@ -36,7 +37,9 @@ interface AppState {
    * disabled without every page keeping its own registry.
    */
   launching: Record<number, boolean>;
-  setLaunching: (gameId: number, value: boolean) => void;
+  /** Backend-confirmed process state shared by pages and the launch panel. */
+  gameProcesses: Record<number, GameProcessState>;
+  setGameProcess: (gameId: number, value: GameProcessState) => void;
 
   /**
    * Bumped whenever play sessions change (a game exits), so pages can refetch
@@ -73,12 +76,13 @@ export const useAppStore = create<AppState>((set) => ({
     })),
 
   launching: {},
-  setLaunching: (gameId, value) =>
+  gameProcesses: {},
+  setGameProcess: (gameId, value) =>
     set((state) => {
       const launching = { ...state.launching };
-      if (value) launching[gameId] = true;
+      if (value.status === "starting") launching[gameId] = true;
       else delete launching[gameId];
-      return { launching };
+      return { launching, gameProcesses: { ...state.gameProcesses, [gameId]: value } };
     }),
 
   playTimeRevision: 0,

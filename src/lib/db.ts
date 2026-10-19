@@ -10,7 +10,7 @@
  * issue a command against a database that has not been opened yet.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, recordLog } from './logging';
 import Database from '@tauri-apps/plugin-sql';
 
 import type {
@@ -32,6 +32,11 @@ import type {
  */
 export const DB_URL = 'sqlite:galgame.db';
 
+export interface CoverMigrationReport { copied: number; alreadyManaged: number; missing: number; failed: number }
+export function migrateCovers(): Promise<CoverMigrationReport> {
+  return initDatabase().then(() => invoke<CoverMigrationReport>('covers_migrate'));
+}
+
 let loadPromise: Promise<Database> | null = null;
 
 /**
@@ -44,6 +49,7 @@ let loadPromise: Promise<Database> | null = null;
 export function initDatabase(): Promise<Database> {
   if (!loadPromise) {
     loadPromise = Database.load(DB_URL).catch((error) => {
+      recordLog('ERROR', 'database', '数据库初始化失败', error);
       loadPromise = null;
       throw error;
     });
@@ -430,7 +436,19 @@ export type {
 // `cause instanceof Error ? cause.message : String(cause)` idiom.
 
 /** Providers `metadata_search` / `metadata_detail` understand. */
-export type MetadataProvider = 'nextmoe' | 'vndb' | 'bangumi';
+export type MetadataProvider = 'nextmoe' | 'vndb' | 'bangumi' | '2dfan';
+
+export function backgroundAssetGrant(path: string): Promise<void> {
+  return ready.then(() => invoke<void>('background_asset_grant', { path }));
+}
+
+export function gameCoverImport(gameId: number, sourcePath: string): Promise<string> {
+  return ready.then(() => invoke<string>('game_cover_import', { gameId, sourcePath }));
+}
+
+export function metadataCoverPreview(coverUrl: string): Promise<ArrayBuffer> {
+  return ready.then(() => invoke<ArrayBuffer>('metadata_cover_preview', { coverUrl }));
+}
 
 /**
  * One search hit, normalised across providers.
@@ -515,6 +533,8 @@ export interface ProviderError {
 export interface MetadataSearchResult {
   candidates: MetadataCandidate[];
   errors: ProviderError[];
+  /** Confident matches ranked by the saved default source, then relevance. */
+  automaticCandidates: MetadataCandidate[];
 }
 
 /**

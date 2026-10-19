@@ -8,7 +8,8 @@
 //!
 //! `launch_game` inserts a `play_sessions` row and spawns the child process, then
 //! hands the waiting to a background task so the command returns immediately
-//! with the new session id. When the child exits, that task closes the session,
+//! with the new session id. When the tracked launch and its descendants exit,
+//! that task closes the session,
 //! folds the elapsed time into `games.play_time_seconds`, and emits a
 //! `game-exited` event so the UI can refetch without polling.
 //!
@@ -17,7 +18,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,8 @@ use crate::commands::util::{not_found, now_iso8601};
 pub mod locale;
 pub mod magpie;
 pub mod luna;
+mod process_tree;
+use process_tree::TrackedChild;
 
 /// Settings key holding the path of the locale-emulation tool ("转区工具").
 pub const LOCALE_TOOL_PATH_KEY: &str = "locale_tool_path";
@@ -41,7 +43,7 @@ pub const LOCALE_TOOL_SOURCE_KEY: &str = "locale_tool_source";
 // Running-process registry
 // ---------------------------------------------------------------------------
 
-/// Games with a child process currently alive, keyed by game id.
+/// Games with a tracked launch still alive, keyed by game id.
 ///
 /// Only used so `stop_game` can terminate a launch that this app started; a game
 /// launched outside the manager, or before a restart, is simply not tracked.
@@ -51,10 +53,9 @@ pub struct RunningGames(
     pub tokio::sync::Mutex<()>,
 );
 
-/// One tracked launch: the child handle plus the session it belongs to.
+/// One tracked launch: its process group and the session it belongs to.
 pub struct RunningGame {
-    pub child: Child,
-    pub terminate_tree: bool,
+    child: TrackedChild,
     pub session_id: i64,
     pub started_at: String,
 }
@@ -73,7 +74,7 @@ impl RunningGames {
         let code = match entry.child.try_wait() {
             Ok(None) => return Ok(ProcessState::Alive),
             Ok(Some(status)) => status.code(),
-            Err(_) => None,
+            Err(error) => return Err(CmdError(format!("查询游戏进程失败：{error}"))),
         };
         map.remove(&game_id);
         Ok(ProcessState::Exited(code))
@@ -345,26 +346,13 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     } else {
         (exe_path.clone(), args)
     };
-    // Batch launchers may spawn the real game as a child, so stopping them has
-    // to kill the tree just like the locale helper does.
-    let terminate_tree = locale_use || script;
-
     let mut command = std::process::Command::new(&program);
     command.args(&program_args);
     if workdir.is_dir() {
         command.current_dir(&workdir);
     }
 
-    // CREATE_NO_WINDOW (0x08000000): a galgame is a GUI app, but some launch
-    // helpers are console programs that would otherwise flash a console window.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let mut child = command.spawn().map_err(|e| {
+    let mut child = TrackedChild::spawn(&mut command).map_err(|e| {
         CmdError(format!(
             "启动失败 {}: {e}",
             program.to_string_lossy()
@@ -402,7 +390,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     let session_id = match session_result {
         Ok(id) => id,
         Err(error) => {
-            let _ = terminate_child(&mut child, terminate_tree);
+            let _ = child.kill();
             let _ = child.wait();
             return Err(error);
         }
@@ -418,7 +406,6 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
             game_id,
             RunningGame {
                 child,
-                terminate_tree,
                 session_id,
                 started_at: started_at.clone(),
             },
@@ -438,7 +425,10 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
                 let running = app_for_wait.state::<RunningGames>();
                 let _session_guard = running.1.lock().await;
                 let state = app_for_wait.state::<RunningGames>().poll_exit(game_id, session_id);
-                if matches!(state, Err(_) | Ok(ProcessState::Gone)) { return; }
+                if matches!(state, Ok(ProcessState::Gone)) { return; }
+                if let Err(error) = &state {
+                    crate::app_warn!("[launcher] process query game_id={game_id}: {error}");
+                }
                 if let Ok(ProcessState::Exited(exit_code)) = state {
                     let _ = finish_session(
                         &app_for_wait,
@@ -455,6 +445,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
         }
     });
 
+    crate::logging::record("INFO", "launcher", &format!("游戏启动 game_id={game_id} session_id={session_id} pid={pid}"));
     Ok(LaunchResult { session_id, pid })
 }
 
@@ -476,7 +467,8 @@ pub fn game_running(app: AppHandle, game_id: i64) -> CmdResult<bool> {
         Ok(None) => Ok(true),
         // Keep an exited entry until the watcher closes its play session and
         // emits `game-exited`; removing it here would lose that bookkeeping.
-        _ => Ok(false),
+        Ok(Some(_)) => Ok(false),
+        Err(error) => Err(CmdError(format!("查询游戏进程失败：{error}"))),
     }
 }
 
@@ -535,6 +527,7 @@ async fn finish_session(
         exit_code,
     };
     // A missing webview (app shutting down) must not fail the bookkeeping.
+    crate::logging::record("INFO", "launcher", &format!("游戏退出 game_id={game_id} session_id={session_id} duration_seconds={duration} exit_code={exit_code:?}"));
     let _ = app.emit("game-exited", payload.clone());
     Ok(payload)
 }
@@ -559,9 +552,9 @@ pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
         return Ok(false);
     };
 
-    // A locale helper waits for the game child; stopping only LE would leave
-    // the game running and prematurely settle its play session.
-    if let Err(error) = terminate_child(&mut entry.child, entry.terminate_tree) {
+    // The original patch/locale launcher may already be gone. Terminate the
+    // tracked launch, including its remaining game descendants.
+    if let Err(error) = entry.child.kill() {
         if !matches!(entry.child.try_wait(), Ok(Some(_))) {
             // A failed termination must keep the process controllable and
             // tracked by its existing watcher.
@@ -578,22 +571,6 @@ pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
     finish_session(&app, game_id, entry.session_id, &entry.started_at, exit_code).await?;
 
     Ok(true)
-}
-
-fn terminate_child(child: &mut Child, tree: bool) -> std::io::Result<()> {
-    #[cfg(windows)]
-    if tree {
-        use std::os::windows::process::CommandExt;
-        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        let result = std::process::Command::new(PathBuf::from(system_root).join("System32").join("taskkill.exe"))
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .creation_flags(0x0800_0000).output()?;
-        return if result.status.success() { Ok(()) } else {
-            Err(std::io::Error::other(String::from_utf8_lossy(&result.stderr).trim().to_owned()))
-        };
-    }
-    let _ = tree;
-    child.kill()
 }
 
 /// Whole seconds between two ISO8601 timestamps, if both parse.
@@ -1019,6 +996,16 @@ pub async fn import_games(app: AppHandle, path: String) -> CmdResult<ImportResul
     }
     tx.commit().await?;
 
+    if imported > 0 {
+        let saved = match crate::commands::covers::directory(&app) {
+            Ok(directory) => crate::commands::covers::migrate(&db, &directory).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = saved { crate::app_warn!("[covers] imported library cover preservation: {error}"); }
+        if let Err(error) = crate::commands::scan_roots::sync_asset_scope(app).await {
+            crate::app_warn!("[covers] imported library asset grants: {error}");
+        }
+    }
     Ok(ImportResult { imported, skipped })
 }
 
@@ -1094,12 +1081,13 @@ mod tests {
     #[test]
     fn watcher_keeps_live_child_controllable_and_ignores_other_sessions() {
         use std::os::windows::process::CommandExt;
-        let child = std::process::Command::new("powershell.exe")
+        let mut command = std::process::Command::new("powershell.exe");
+        command
             .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 10"])
-            .creation_flags(0x0800_0000)
-            .spawn().unwrap();
+            .creation_flags(0x0800_0000);
+        let child = TrackedChild::spawn(&mut command).unwrap();
         let running = RunningGames::default();
-        running.0.lock().unwrap().insert(1, RunningGame { child, terminate_tree: false, session_id: 42, started_at: now_iso8601() });
+        running.0.lock().unwrap().insert(1, RunningGame { child, session_id: 42, started_at: now_iso8601() });
         let live = matches!(running.poll_exit(1, 42), Ok(ProcessState::Alive));
         let old_watcher_ignored = matches!(running.poll_exit(1, 41), Ok(ProcessState::Gone));
         // Kill and reap the child even when an assertion below would fail.

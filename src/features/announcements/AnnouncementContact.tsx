@@ -5,7 +5,7 @@ import { BRAND } from "@/lib/brand";
 import { AnnouncementMascot } from "./AnnouncementMascot";
 
 /** Project and author information shared by both notices. */
-export function AnnouncementContact({ showMascot = false }: { showMascot?: boolean }) {
+export function AnnouncementContact() {
   const [error, setError] = useState<string | null>(null);
   return <section aria-label="项目与作者" className="border-t border-border pt-4">
     <h3 className="text-sm font-semibold">项目与作者</h3>
@@ -31,7 +31,7 @@ export function AnnouncementContact({ showMascot = false }: { showMascot?: boole
         </div>
         {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       </div>
-      {showMascot ? <AnnouncementMascot /> : null}
+      <AnnouncementMascot />
     </div>
   </section>;
 }

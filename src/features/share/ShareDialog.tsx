@@ -11,11 +11,14 @@ import { hasPlayed, shareGames, SHARE_SORTS } from "./model";
 import type { ShareDirection, ShareSort } from "./model";
 import { renderShare, replacementCover, ShareCoverCache } from "./render";
 import { copyShareImage, copyShareLinks, saveShare, uploadShareImages } from "./io";
+import { loadCoverPreferences, useCoverStore } from '@/features/covers/store';
 
 interface Artifact { key: string; pages: Blob[]; urls: string[]; missing: string[] }
 type Action = "save" | "copy" | "upload" | "links";
 
 export default function ShareDialog({ games, onClose }: { games: Game[]; onClose: () => void }) {
+  const coverPreferences = useCoverStore(state => state.preferences);
+  const coversLoaded = useCoverStore(state => state.loaded);
   const [hidden, setHidden] = useState<Set<number>>(() => new Set());
   const [replaced, setReplaced] = useState<Set<number>>(() => new Set());
   const [sort, setSort] = useState<ShareSort>("lastPlayedAt");
@@ -36,12 +39,13 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
   const played = useMemo(() => games.filter(hasPlayed), [games]);
   const visible = useMemo(() => shareGames(games, hidden, sort, direction), [games, hidden, sort, direction]);
   const listed = useMemo(() => shareGames(games, new Set(), sort, direction).filter(game => [game.title, game.originalTitle].some(title => title?.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))), [games, sort, direction, search]);
-  const composition = useMemo(() => JSON.stringify(visible.map(game => [game.id, game.title, game.originalTitle, game.status, game.rating, game.playTimeSeconds, replaced.has(game.id) ? "replacement" : game.coverPath])), [visible, replaced]);
+  const composition = useMemo(() => JSON.stringify([coversLoaded, visible.map(game => [game.id, game.title, game.originalTitle, game.status, game.rating, game.playTimeSeconds, replaced.has(game.id) ? "replacement" : [game.coverPath, coverPreferences[game.id]]])]), [visible, replaced, coversLoaded, coverPreferences]);
   const current = artifact?.key === composition ? artifact : null;
   const pageIndex = Math.min(page, Math.max(0, (current?.pages.length ?? 1) - 1));
   const ready = Boolean(current?.pages.length) && !generating && !busy;
 
   useEffect(() => {
+    void loadCoverPreferences().catch(cause => setError(errorMessage(cause)));
     const next = new ShareCoverCache(); cache.current = next;
     return () => { next.close(); cache.current = null; };
   }, []);
@@ -120,7 +124,7 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
               {listed.length ? listed.map(game => (
                 <div key={game.id} className={`flex items-center gap-2.5 border-b border-border p-2.5 last:border-0 ${hidden.has(game.id) ? "bg-muted/30" : ""}`} data-share-game-id={game.id}>
                   <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted">
-                    {replaced.has(game.id) ? <img src={replacementCover} alt="已替换封面" className="h-full w-full object-contain" /> : <CoverImage path={game.coverPath} alt="" className="h-full w-full object-cover" fallbackText="" />}
+                    {replaced.has(game.id) ? <img src={replacementCover} alt="已替换封面" className="h-full w-full object-contain" /> : <CoverImage gameId={game.id} path={game.coverPath} alt="" className="h-full w-full object-cover" fallbackText="" />}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium" title={game.title}>{game.title}</p>

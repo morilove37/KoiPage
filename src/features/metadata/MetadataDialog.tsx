@@ -4,7 +4,7 @@
  * Flow: type a title → tick the sources to query → pick one candidate → review
  * the merged detail → tick the fields to write → apply. Covers are handled
  * separately from the text fields because `metadata_apply` only knows about
- * columns: the cover is downloaded by `metadata_cover_cache` into the install
+ * columns: the cover is downloaded by `metadata_cover_cache` into managed
  * directory and then stored with `game_update`.
  *
  * Two things this dialog must never hide:
@@ -70,6 +70,7 @@ import {
 } from "./fields";
 import { ManualEntryForm } from "./ManualEntryForm";
 import { createGameFromMetadata } from "./create-game";
+import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from "./preferences";
 
 export interface MetadataDialogProps {
   open: boolean;
@@ -79,7 +80,7 @@ export interface MetadataDialogProps {
   onCreated?: (game: Game) => void;
   onCancelBatch?: () => void;
   progressLabel?: string;
-  /** Where `metadata_cover_cache` writes the cover; empty disables caching. */
+  /** Installation path retained for import compatibility; covers use app storage. */
   installPath: string;
   /** Pre-fills the search box, typically the game's current title. */
   initialQuery?: string;
@@ -145,16 +146,20 @@ export default function MetadataDialog({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
-  // Preview the eventual game name with the same language policy the auto-fetch
-  // path writes; manual confirmation still names the game after the search query.
+  // Use the same title-language preference for confirmation and auto-fetch.
   const [titlePreference, setTitlePreference] = useState<MetadataTitlePreference>("zh");
+  const [defaultSource, setDefaultSource] = useState<MetadataProvider>("vndb");
+  const orderedProviders = useMemo(() => [defaultSource, ...ALL_PROVIDERS.filter(provider => provider !== defaultSource)], [defaultSource]);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void settingsGet(TITLE_LANGUAGE_KEY)
-      .then((value) => {
-        if (!cancelled) setTitlePreference(normalizeTitlePreference(value));
+    void Promise.all([settingsGet(TITLE_LANGUAGE_KEY), settingsGet(DEFAULT_SOURCE_KEY)])
+      .then(([value, source]) => {
+        if (!cancelled) {
+          setTitlePreference(normalizeTitlePreference(value));
+          setDefaultSource(normalizeDefaultSource(source));
+        }
       })
       .catch(() => {
         // The preview falls back to the Chinese-first default.
@@ -167,17 +172,14 @@ export default function MetadataDialog({
   // Use the submitted query that produced these candidates. Editing the input
   // without searching again must not attach an unrelated name to stale results.
   const searchName = searchedTitle || query.trim() || draft?.title.trim() || initialQuery?.trim() || "";
-  // Chinese/Japanese searches keep exactly what the user typed. An English query
-  // is only a lookup key: it must not become the game name when the provider
-  // knows a Chinese title (VNDB carries zh-Hans/zh-Hant localizations) or the
-  // original-script title.
-  const searchNameHasCjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(searchName);
   const importDraft = useMemo(() => draft ? { ...draft, title: searchName } : undefined, [draft, searchName]);
   const detailForWrite = useMemo(() => {
     if (!detail) return null;
-    const title = searchNameHasCjk ? searchName : (titleFor(detail, titlePreference) || searchName);
+    // The query is only a lookup key, regardless of its script. With the default
+    // Chinese preference, a known Chinese title also replaces Japanese folders.
+    const title = titleFor(detail, titlePreference) || searchName;
     return { ...detail, title, titleZh: null };
-  }, [detail, searchName, searchNameHasCjk, titlePreference]);
+  }, [detail, searchName, titlePreference]);
   const displayDetail = useMemo(() => detailForWrite ? {
     ...detailForWrite, tags: detailForWrite.tags.map(t),
   } : null, [detailForWrite, t]);
@@ -356,17 +358,12 @@ export default function MetadataDialog({
       let coverPath: string | null = null;
       let coverError: string | null = null;
       if (wantsCover && detail.coverUrl) {
-        const install = installPath.trim();
-        if (install === "") {
-          coverError = "该游戏没有安装路径，封面无法缓存到本地。";
-        } else {
-          try {
-            const localPath = await metadataCoverCache(gameId, detail.coverUrl, install);
-            await gameUpdate(gameId, { coverPath: localPath });
-            coverPath = localPath;
-          } catch (cause) {
-            coverError = errorMessage(cause);
-          }
+        try {
+          const localPath = await metadataCoverCache(gameId, detail.coverUrl, installPath.trim());
+          await gameUpdate(gameId, { coverPath: localPath });
+          coverPath = localPath;
+        } catch (cause) {
+          coverError = errorMessage(cause);
         }
       }
 
@@ -449,7 +446,7 @@ export default function MetadataDialog({
       description={
         mode === "manual"
           ? "填写游戏资料后保存，也可以返回搜索修改名称重新匹配。"
-          : "从鲲 Galgame 论坛 / VNDB / Bangumi 搜索。请核对封面、名称和发售日，确认是同一作品后保存。"
+          : "从鲲 Galgame 论坛 / VNDB / Bangumi / 2DFan 搜索。请核对封面、名称和发售日，确认是同一作品后保存。"
       }
       footer={
         mode === "manual" ? (
@@ -538,7 +535,7 @@ export default function MetadataDialog({
 
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">数据源</span>
-              {ALL_PROVIDERS.map((provider) => (
+              {orderedProviders.map((provider) => (
                 <label
                   key={provider}
                   className="flex cursor-pointer items-center gap-1.5 text-xs"
@@ -550,11 +547,11 @@ export default function MetadataDialog({
                     disabled={searching || applying}
                     onChange={(event) => toggleSource(provider, event.target.checked)}
                   />
-                  {PROVIDER_LABELS[provider]}
+                  {PROVIDER_LABELS[provider]}{provider === defaultSource ? '（默认）' : ''}
                 </label>
               ))}
               <span className="text-xs text-muted-foreground">
-                NextMoe 覆盖率约 27%，建议三个源都查。
+                NextMoe 覆盖率约 27%，建议多源交叉核对。
               </span>
             </div>
           </form>
@@ -650,7 +647,7 @@ export default function MetadataDialog({
               description={
                 errors.length > 0
                   ? "至少一个数据源查询失败（见上方错误），候选可能因此为空。可以稍后重试，或直接手动填写。"
-                  : "三个数据源都没有返回候选。可以换个关键词，或直接手动填写这些字段。"
+                  : "所选数据源都没有返回候选。可以换个关键词，或直接手动填写这些字段。"
               }
               action={
                 <Button variant="outline" onClick={() => setMode("manual")}>
@@ -881,14 +878,14 @@ export default function MetadataDialog({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-medium">封面（下载到游戏目录）</span>
+                      <span className="font-medium">封面（保存到管理器）</span>
                       {detail.coverUrl ? null : <Badge variant="status">上游无数据</Badge>}
                     </span>
                     <span className="mt-0.5 block break-all text-muted-foreground">
                       {detail.coverUrl ?? "该数据源没有返回封面"}
                     </span>
                     <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                      安装路径：{installPath.trim() === "" ? "（未设置，无法缓存）" : installPath}
+                      删除游戏本体后仍会保留，支持离线查看。
                     </span>
                   </span>
                 </label>
