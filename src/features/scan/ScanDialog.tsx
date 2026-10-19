@@ -615,7 +615,7 @@ export default function ScanDialog({
         {/* footer */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border px-4 py-3">
           <span className="text-xs text-muted-foreground">
-            一键导入采用每款搜索的第一项；若要确保准确性，请使用「逐款确认」逐条导入。
+            一键导入优先选择默认数据源的结果，没有结果时再选择搜索结果第一项；若要确保准确性，请使用「逐款确认」逐条导入。
           </span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">

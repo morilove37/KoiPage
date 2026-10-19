@@ -691,6 +691,7 @@ export default function LibraryPage() {
             <span className="w-14 text-right">评分</span>
             <span className="w-24 text-right">游玩时长</span>
             <span className="w-28 text-right">最近游玩</span>
+            {!selectMode ? <span className="w-20 text-center">封面</span> : null}
             <span className="w-8" />
           </div>
           {visibleGames.map((game) => (

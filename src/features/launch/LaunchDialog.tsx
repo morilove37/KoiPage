@@ -16,17 +16,15 @@
  * is what the caller uses to refresh the displayed totals.
  */
 
-import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { errorMessage, gameRunning, launchGame, stopGame } from "@/features/io/io";
-import type { GameExitedPayload } from "@/features/io/io";
-import { useAppStore } from "@/store/app";
+import { errorMessage } from "@/features/io/io";
 import { formatPlayTime } from "@/types/game";
 import type { Game } from "@/types/game";
+import { gameProcesses } from "./game-process";
+import { useGameProcess } from "./useGameProcess";
 
 export interface LaunchDialogProps {
   open: boolean;
@@ -61,92 +59,62 @@ export default function LaunchDialog({
   onClose,
   onLaunched,
 }: LaunchDialogProps) {
-  const launching = useAppStore((state) => state.launching[game.id] === true);
-  const setLaunching = useAppStore((state) => state.setLaunching);
+  const process = useGameProcess(game.id, open);
+  const launching = process.status === "starting";
+  const running = process.status === "running";
+  const pid = process.pid;
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [pid, setPid] = useState<number | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const exePath = game.exePath?.trim() ?? "";
   const canLaunch = exePath !== "";
 
-  // Re-read the process registry per open. A dialog-local boolean becomes stale
-  // as soon as the panel is closed while the game keeps running.
   useEffect(() => {
     if (!open) return;
     setError(null);
-    setPid(null);
-    setBusy(false);
-    let cancelled = false;
-    void gameRunning(game.id)
-      .then((value) => {
-        if (!cancelled) setRunning(value);
-      })
-      .catch((cause) => {
-        if (!cancelled) setError(errorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
   }, [open, game.id]);
 
-  useEffect(() => {
-    if (!open) return;
-    let unlisten: UnlistenFn | null = null;
-    let cancelled = false;
-    void listen<GameExitedPayload>("game-exited", (event) => {
-      if (event.payload.gameId !== game.id) return;
-      setRunning(false);
-      setPid(null);
-      onLaunched?.();
-    }).then((dispose) => {
-      if (cancelled) dispose();
-      else unlisten = dispose;
-    }).catch((cause) => {
-      if (!cancelled) setError(errorMessage(cause));
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [open, game.id, onLaunched]);
-
   async function start() {
-    if (!canLaunch) return;
+    if (!canLaunch || running || launching || pending.current) return;
+    pending.current = true;
     setBusy(true);
     setError(null);
-    setLaunching(game.id, true);
     try {
-      const result = await launchGame(game.id);
-      setRunning(true);
-      setPid(result.pid ?? null);
-      onLaunched?.();
+      const outcome = await gameProcesses.start(game.id);
+      if (mounted.current && outcome.kind === "started") onLaunched?.();
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (mounted.current) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
-      setLaunching(game.id, false);
+      pending.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
 
   async function stop() {
+    if (pending.current || launching) return;
+    pending.current = true;
     setBusy(true);
     setError(null);
     try {
-      const stopped = await stopGame(game.id);
+      const stopped = await gameProcesses.stop(game.id);
+      if (!mounted.current) return;
       if (!stopped) {
         // Not an error: the process may already have exited on its own.
         setError("没有找到正在运行的进程（可能已经退出）。");
       }
-      setRunning(false);
-      setPid(null);
       onLaunched?.();
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (mounted.current) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      pending.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -172,7 +140,7 @@ export default function LaunchDialog({
             onClick={() => void start()}
             title={canLaunch ? undefined : "未设置 exe 路径"}
           >
-            {running ? "运行中" : "启动游戏"}
+            {launching ? "启动中…" : running ? "运行中" : "启动游戏"}
           </Button>
         </>
       }

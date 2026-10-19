@@ -37,9 +37,13 @@ import { BRAND } from '@/lib/brand';
 import { loadLocalizationPreference, OFFLINE_TAG_COUNT, setLocalizationEnabled, useLocalizationStore } from '@/lib/localization';
 import {
   TITLE_LANGUAGE_KEY,
+  ALL_PROVIDERS,
+  PROVIDER_LABELS,
   normalizeTitlePreference,
   type MetadataTitlePreference,
 } from '@/features/metadata/fields';
+import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from '@/features/metadata/preferences';
+import type { MetadataProvider } from '@/lib/db';
 import {
   CLOSE_BEHAVIOR_KEY,
   CLOSE_BEHAVIOR_OPTIONS,
@@ -78,6 +82,8 @@ import { UpdateSettings } from '@/features/updates/UpdateSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
 import { useScanFolderTip } from '@/features/scan/ScanFolderTip';
 import { SettingsSectionNav } from './SettingsSectionNav';
+import { AccentSettings } from './AccentSettings';
+import { LogSettings } from './LogSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
   type ExportFormat,
@@ -718,6 +724,7 @@ function ThemeSection() {
         {THEME_DESCRIPTIONS[theme]}
       </p>
 
+      <AccentSettings />
       {loaded && isGlassTheme(theme) ? <BackdropControls /> : null}
 
       {error ? (
@@ -1027,15 +1034,19 @@ function WindowSection() {
 
 function MetadataSection() {
   const [preference, setPreference] = useState<MetadataTitlePreference>('zh');
+  const [defaultSource, setDefaultSource] = useState<MetadataProvider>('vndb');
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    void settingsGet(TITLE_LANGUAGE_KEY)
-      .then((value) => {
-        if (alive) setPreference(normalizeTitlePreference(value));
+    void Promise.all([settingsGet(TITLE_LANGUAGE_KEY), settingsGet(DEFAULT_SOURCE_KEY)])
+      .then(([value, source]) => {
+        if (alive) {
+          setPreference(normalizeTitlePreference(value));
+          setDefaultSource(normalizeDefaultSource(source));
+        }
       })
       .catch((cause) => {
         if (alive) setError(errorMessage(cause));
@@ -1061,12 +1072,36 @@ function MetadataSection() {
     }
   }
 
+  async function changeSource(next: MetadataProvider) {
+    setSaving(true);
+    setError(null);
+    try {
+      await settingsSet(DEFAULT_SOURCE_KEY, next);
+      setDefaultSource(next);
+    } catch (cause) { setError(errorMessage(cause)); }
+    finally { setSaving(false); }
+  }
+
   return (
     <Section
       id="settings-metadata"
       title="资料匹配"
-      description="联网补全（导入后自动抓取）时选择游戏名的语言；手动确认资料时仍以你填写的搜索名称为准。"
+      description="设置导入和联网补全时优先采用的数据源，以及游戏标题的语言。"
     >
+      <div className="mb-4 max-w-sm space-y-1.5">
+        <label htmlFor="metadata-default-source" className="text-xs font-medium text-muted-foreground">默认数据源</label>
+        <Select<MetadataProvider>
+          id="metadata-default-source"
+          aria-label="默认数据源"
+          value={defaultSource}
+          disabled={!loaded || saving}
+          options={ALL_PROVIDERS.map(value => ({ value, label: PROVIDER_LABELS[value] }))}
+          onValueChange={value => void changeSource(value)}
+        />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          未设置时使用 VNDB。导入优先采用默认源的可信匹配，没有合适结果或请求失败时使用其他来源；手动搜索仍可调整来源并选择候选。更改后即时保存。
+        </p>
+      </div>
       <div className="max-w-sm space-y-1.5">
         <label htmlFor="metadata-title-language" className="text-xs font-medium text-muted-foreground">标题语言</label>
         <Select<MetadataTitlePreference>
@@ -1084,7 +1119,7 @@ function MetadataSection() {
       </div>
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
         中文名优先：中文标题 → 日文原名 → 数据源标题；日文原名优先：日文原名 → 中文标题 → 数据源标题。
-        搜索结果也会优先显示中文或日文名；已经入库的英文标题，用中文或日文名重新匹配资料即可修正。
+        搜索名称仅用于查找作品，不会盖过资料中的中文标题；已有游戏可重新匹配资料并应用游戏名。
       </p>
       {error ? <Status tone="error">{error}</Status> : null}
     </Section>
@@ -1119,6 +1154,9 @@ export default function SettingsPage() {
         <LocalizationSection />
         <MetadataSection />
         <DataSection />
+        <Section id="settings-logs" title="日志" description="保存故障排查信息，并导出用于反馈问题的诊断日志。">
+          <LogSettings />
+        </Section>
         <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
           <AnnouncementSettings />
         </Section>

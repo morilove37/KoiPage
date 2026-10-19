@@ -4,7 +4,7 @@ use tauri::AppHandle;
 use super::error::{CmdError, CmdResult};
 
 const MAX_PNG_BYTES: usize = 24 * 1024 * 1024;
-const MAX_COVER_BYTES: usize = 12 * 1024 * 1024;
+const MAX_COVER_BYTES: usize = 20 * 1024 * 1024;
 const SHARE_HOST: &str = "https://beacon.host";
 
 fn validate_png(bytes: &[u8]) -> CmdResult<()> {
@@ -61,25 +61,17 @@ pub async fn share_cover_read(app: AppHandle, game_id: i64) -> CmdResult<tauri::
     let db = super::games::pool(&app).await?;
     let path: Option<String> = sqlx::query_scalar("SELECT cover_path FROM games WHERE id = ?")
         .bind(game_id).fetch_optional(&db).await?.flatten();
+    let path = super::covers::custom_path(&db, game_id).await?.or(path);
     let path = path.filter(|value| !value.trim().is_empty()).ok_or_else(|| CmdError("未找到游戏封面".into()))?;
     let bytes = if path.starts_with("https://") || path.starts_with("http://") {
-        let client = crate::metadata::http_client()?;
-        let mut response = client.get(&path).send().await
-            .map_err(|_| CmdError("封面下载失败".into()))?.error_for_status()
-            .map_err(|_| CmdError("封面服务器返回错误".into()))?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| CmdError("封面读取失败".into()))? {
-            if bytes.len() + chunk.len() > MAX_COVER_BYTES { return Err(CmdError("封面超过 12 MB".into())); }
-            bytes.extend_from_slice(&chunk);
-        }
-        bytes
+        crate::metadata::download_cover(&path).await?
     } else {
         tauri::async_runtime::spawn_blocking(move || -> CmdResult<Vec<u8>> {
             use std::io::Read;
             let file = std::fs::File::open(&path).map_err(|_| CmdError("封面文件不存在或不可读".into()))?;
             let mut bytes = Vec::new();
             file.take((MAX_COVER_BYTES + 1) as u64).read_to_end(&mut bytes).map_err(|_| CmdError("封面读取失败".into()))?;
-            if bytes.len() > MAX_COVER_BYTES { return Err(CmdError("封面超过 12 MB".into())); }
+            if bytes.len() > MAX_COVER_BYTES { return Err(CmdError("封面超过 20 MB".into())); }
             Ok(bytes)
         }).await.map_err(|error| CmdError(error.to_string()))??
     };

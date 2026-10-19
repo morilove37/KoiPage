@@ -32,6 +32,7 @@ impl From<tauri::Error> for CmdError {
 
 impl serde::Serialize for CmdError {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::logging::record("ERROR", "command", &self.0);
         serializer.serialize_str(&self.0)
     }
 }

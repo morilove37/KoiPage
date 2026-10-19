@@ -2,6 +2,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { CoverImage } from "@/components/ui/cover-image";
+import { CoverCensorButton } from "@/features/covers/CoverControls";
 import { cn } from "@/lib/utils";
 import { formatRating } from "@/lib/rating";
 import { openGameWithTransition } from "@/lib/game-opening";
@@ -71,6 +72,7 @@ export function GameRow({
 
       <div data-game-cover className="h-10 w-8 shrink-0 overflow-hidden rounded bg-muted">
         <CoverImage
+          gameId={game.id}
           path={game.coverPath}
           alt=""
           fallbackText=""
@@ -129,6 +131,8 @@ export function GameRow({
       <span className="hidden w-28 shrink-0 text-right text-xs text-muted-foreground md:block">
         {formatLastPlayed(game.lastPlayedAt)}
       </span>
+
+      {!selectable ? <CoverCensorButton gameId={game.id} title={game.title} className="w-20 shrink-0 text-center" /> : null}
 
       <button
         type="button"

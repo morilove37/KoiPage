@@ -491,7 +491,7 @@ fn ensure_default_config(exe: Option<&Path>) -> Option<PathBuf> {
     match write_default_config(&target) {
         Ok(_) => Some(target),
         Err(error) => {
-            eprintln!("[magpie] could not seed the bundled default config: {error}");
+            crate::app_warn!("[magpie] could not seed the bundled default config: {error}");
             None
         }
     }
@@ -531,7 +531,7 @@ fn apply_stored_scaling_mode(config: Option<&Path>, mode: Option<&str>) {
         return;
     };
     if let Err(error) = write_scaling_mode(config, mode) {
-        eprintln!("[magpie] could not apply the stored scaling mode: {error}");
+        crate::app_warn!("[magpie] could not apply the stored scaling mode: {error}");
     }
 }
 
@@ -770,7 +770,7 @@ fn build_status(app: &AppHandle, source_setting: Option<&str>, custom: Option<&s
         match bundled_path(app) {
             Ok(path) => (Some(path), "bundled"),
             Err(error) => {
-                eprintln!("[magpie] bundled extraction failed: {error}");
+                crate::app_warn!("[magpie] bundled extraction failed: {error}");
                 (None, "none")
             }
         }
@@ -1001,7 +1001,7 @@ pub fn autostart(
         match bundled_path(app) {
             Ok(path) => path,
             Err(error) => {
-                eprintln!("[magpie] autostart skipped: {error}");
+                crate::app_warn!("[magpie] autostart skipped: {error}");
                 return;
             }
         }
@@ -1009,7 +1009,7 @@ pub fn autostart(
     let config = ensure_default_config(Some(&exe));
     apply_stored_scaling_mode(config.as_deref(), scaling_mode);
     if let Err(error) = spawn_magpie(&exe) {
-        eprintln!("[magpie] autostart failed: {error}");
+        crate::app_warn!("[magpie] autostart failed: {error}");
     }
 }
 

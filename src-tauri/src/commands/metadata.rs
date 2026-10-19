@@ -12,7 +12,7 @@
 use tauri::AppHandle;
 
 use crate::metadata::{
-    self, bangumi, merge, nextmoe, resolve_title, vndb, MetadataCandidate, MetadataDetail, Provider,
+    self, bangumi, merge, nextmoe, resolve_title, vndb, twodfan, MetadataCandidate, MetadataDetail, Provider,
     TitlePreference, TITLE_LANGUAGE_KEY,
 };
 
@@ -30,6 +30,19 @@ async fn title_preference(pool: &sqlx::Pool<sqlx::Sqlite>) -> TitlePreference {
     TitlePreference::parse(stored.as_deref())
 }
 
+async fn source_preference(pool: &sqlx::SqlitePool) -> CmdResult<Provider> {
+    let value = settings_get_impl(pool, metadata::DEFAULT_SOURCE_KEY).await?;
+    Ok(metadata::default_source(value.as_deref()))
+}
+
+fn search_result(query: &str, mut candidates: Vec<MetadataCandidate>, errors: Vec<ProviderError>, preferred: Provider) -> MetadataSearchResult {
+    let automatic_candidates = metadata::matching::ranked_candidates(query, &candidates, preferred)
+        .into_iter().map(|(candidate, _)| candidate.clone()).collect();
+    // Stable grouping keeps each source's own relevance order intact.
+    candidates.sort_by_key(|candidate| candidate.provider != preferred);
+    MetadataSearchResult { candidates, errors, automatic_candidates }
+}
+
 /// Which providers a search should query.
 ///
 /// Public because [`search_all`] takes it as a parameter, which is what lets the
@@ -39,6 +52,7 @@ pub enum Sources {
     Nextmoe,
     Vndb,
     Bangumi,
+    TwoDfan,
 }
 
 impl Sources {
@@ -47,6 +61,7 @@ impl Sources {
             "nextmoe" => Some(Self::Nextmoe),
             "vndb" => Some(Self::Vndb),
             "bangumi" => Some(Self::Bangumi),
+            "2dfan" => Some(Self::TwoDfan),
             _ => None,
         }
     }
@@ -101,7 +116,12 @@ pub async fn search_all(
         }
     };
 
-    let (n, v, b) = tokio::join!(nextmoe_fut, vndb_fut, bangumi_fut);
+    let twodfan_fut = async {
+        if wanted.contains(&Sources::TwoDfan) {
+            Some(twodfan::search(query, limit).await)
+        } else { None }
+    };
+    let (n, v, b, d) = tokio::join!(nextmoe_fut, vndb_fut, bangumi_fut, twodfan_fut);
 
     let mut candidates: Vec<MetadataCandidate> = Vec::new();
     let mut errors: Vec<ProviderError> = Vec::new();
@@ -110,14 +130,18 @@ pub async fn search_all(
         (Provider::Nextmoe, n),
         (Provider::Vndb, v),
         (Provider::Bangumi, b),
+        (Provider::TwoDfan, d),
     ] {
         match outcome {
             None => {}
-            Some(Ok(mut found)) => candidates.append(&mut found),
-            Some(Err(error)) => errors.push(ProviderError {
-                provider,
-                message: error.0,
-            }),
+            Some(Ok(mut found)) => {
+                crate::logging::record("INFO", "metadata", &format!("搜索完成 source={} candidates={}", provider.as_str(), found.len()));
+                candidates.append(&mut found);
+            }
+            Some(Err(error)) => {
+                crate::logging::record("WARN", "metadata", &format!("搜索失败 source={} error={}", provider.as_str(), error.0));
+                errors.push(ProviderError { provider, message: error.0 });
+            }
         }
     }
 
@@ -136,20 +160,21 @@ pub async fn metadata_search(
     let limit = limit.unwrap_or(10).clamp(1, 30);
 
     let wanted: Vec<Sources> = if sources.is_empty() {
-        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi]
+        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan]
     } else {
         sources.iter().filter_map(|s| Sources::parse(s)).collect()
     };
     if wanted.is_empty() {
         return Err(CmdError(
-            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi）".to_string(),
+            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi / 2dfan）".to_string(),
         ));
     }
 
     let key = nextmoe_key(&app).await;
+    let preferred = source_preference(&pool(&app).await?).await?;
     let (candidates, errors) = search_all(&query, &wanted, limit, key.as_deref()).await;
 
-    Ok(MetadataSearchResult { candidates, errors })
+    Ok(search_result(&query, candidates, errors, preferred))
 }
 
 /// `metadata_detail` — resolve one provider record into merged metadata.
@@ -185,16 +210,18 @@ async fn resolve_detail(
         Sources::Nextmoe => nextmoe::detail(external_id, nextmoe_key).await?,
         Sources::Vndb => vndb::detail(external_id).await?,
         Sources::Bangumi => bangumi::detail(external_id).await?,
+        Sources::TwoDfan => twodfan::detail(external_id).await?,
     };
 
     // Failure is expected (NextMoe may not know the work) and must not break
     // the lookup.
     let mut detail = primary;
-    if provider != Sources::Nextmoe {
+    if matches!(provider, Sources::Vndb | Sources::Bangumi) {
         let source_name = match provider {
             Sources::Vndb => "vndb",
             Sources::Bangumi => "bangumi",
             Sources::Nextmoe => unreachable!(),
+            Sources::TwoDfan => unreachable!(),
         };
         let reference = format!("{source_name}:{external_id}");
         if let Ok(Some(extra)) = nextmoe::detail_by_ref(&reference, nextmoe_key).await {
@@ -425,21 +452,26 @@ pub async fn metadata_apply(
     .await
 }
 
-/// `metadata_cover_cache` — download a remote cover next to the game and return
-/// the local path.
-///
-/// Caching locally keeps the library rendering when offline (or when the
-/// upstream CDN blocks us), which the user asked for. The file is written
-/// beside the game folder so that moving the install folder keeps the cover.
+/// Download to managed app storage, independent of the game's install folder.
 #[tauri::command]
 pub async fn metadata_cover_cache(
+    app: AppHandle,
     game_id: i64,
     cover_url: String,
     install_path: String,
 ) -> CmdResult<String> {
     let url = required_string(&cover_url, "coverUrl")?;
-    let install = required_string(&install_path, "installPath")?;
-    cache_cover(game_id, &url, &install).await
+    let _ = (game_id, install_path); // Retain the existing IPC argument contract.
+    let path = cache_cover(&url, &super::covers::directory(&app)?).await?;
+    crate::allow_asset_file(&app, &path);
+    Ok(path)
+}
+
+/// Browser previews for the protected 2DFan CDN use the same download path as imports.
+#[tauri::command]
+pub async fn metadata_cover_preview(cover_url: String) -> CmdResult<tauri::ipc::Response> {
+    if !metadata::protected_cover(&cover_url) { return Err(CmdError("不支持此封面预览地址".into())); }
+    Ok(tauri::ipc::Response::new(metadata::download_cover(&cover_url).await?))
 }
 
 /// Search result: merged candidates plus per-provider failures.
@@ -448,6 +480,8 @@ pub async fn metadata_cover_cache(
 pub struct MetadataSearchResult {
     pub candidates: Vec<MetadataCandidate>,
     pub errors: Vec<ProviderError>,
+    /// Only confident matches, default source first, for automatic imports.
+    pub automatic_candidates: Vec<MetadataCandidate>,
 }
 
 /// One provider that failed during a search.
@@ -592,13 +626,13 @@ pub async fn metadata_autofetch(
     let delay = delay_ms.unwrap_or(DEFAULT_AUTOFETCH_DELAY_MS).min(10_000);
 
     let wanted: Vec<Sources> = if sources.is_empty() {
-        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi]
+        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan]
     } else {
         sources.iter().filter_map(|s| Sources::parse(s)).collect()
     };
     if wanted.is_empty() {
         return Err(CmdError(
-            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi）".to_string(),
+            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi / 2dfan）".to_string(),
         ));
     }
 
@@ -610,6 +644,7 @@ pub async fn metadata_autofetch(
     // Read once per batch: the preference decides which language becomes the
     // stored game name (Chinese by default, so autofetch stops writing English).
     let preference = title_preference(&pool).await;
+    let preferred = source_preference(&pool).await?;
     let total = game_ids.len();
     let mut summary = AutofetchSummary::default();
 
@@ -621,7 +656,7 @@ pub async fn metadata_autofetch(
                 .fetch_optional(&pool)
                 .await?;
 
-        let Some((title, install_path)) = row else {
+        let Some((title, _install_path)) = row else {
             summary.push(AutofetchOutcome {
                 game_id: *game_id,
                 title: String::new(),
@@ -669,7 +704,9 @@ pub async fn metadata_autofetch(
             continue;
         }
 
-        match metadata::matching::best_match(&title, &candidates) {
+        let ranked = metadata::matching::ranked_candidates(&title, &candidates, preferred);
+        let best = ranked.first().copied().or_else(|| metadata::matching::best_match(&title, &candidates));
+        match best {
             None => {
                 outcome.status = AutofetchStatus::NoMatch;
             }
@@ -679,9 +716,6 @@ pub async fn metadata_autofetch(
                 outcome.matched_title = Some(candidate.title.clone());
                 outcome.confidence = confidence_label(strength);
 
-                let provider = candidate.provider;
-                let external_id = candidate.external_id.clone();
-
                 if !strength.is_confident() {
                     // Deliberately write nothing: confirm with the user first.
                     outcome.status = AutofetchStatus::NeedsReview;
@@ -689,7 +723,23 @@ pub async fn metadata_autofetch(
                     // Caller asked for a dry run.
                     outcome.status = AutofetchStatus::NeedsReview;
                 } else {
-                    match fetch_detail(provider, &external_id, key_ref).await {
+                    let mut resolved = None;
+                    let mut failures = Vec::new();
+                    for (alternative, confidence) in &ranked {
+                        match fetch_detail(alternative.provider, &alternative.external_id, key_ref).await {
+                            Ok(detail) => {
+                                outcome.provider = Some(alternative.provider);
+                                outcome.external_id = Some(alternative.external_id.clone());
+                                outcome.matched_title = Some(alternative.title.clone());
+                                outcome.confidence = confidence_label(*confidence);
+                                resolved = Some(detail);
+                                break;
+                            }
+                            Err(error) => failures.push(format!("{}：{}", alternative.provider.as_str(), error.0)),
+                        }
+                    }
+                    let resolved = resolved.ok_or_else(|| CmdError(failures.join("；")));
+                    match resolved {
                         Err(error) => {
                             outcome.status = AutofetchStatus::Failed;
                             outcome.message = Some(error.0);
@@ -709,7 +759,11 @@ pub async fn metadata_autofetch(
                             // Cover is best-effort: a missing image must not
                             // downgrade a successful metadata write.
                             if let Some(url) = detail.cover_url.as_deref() {
-                                match cache_cover(*game_id, url, &install_path).await {
+                                let cached = match super::covers::directory(&app) {
+                                    Ok(directory) => cache_cover(url, &directory).await,
+                                    Err(error) => Err(error),
+                                };
+                                match cached {
                                     Ok(path) => {
                                         if let Err(error) = sqlx::query(
                                             "UPDATE games SET cover_path = ? WHERE id = ?",
@@ -719,13 +773,14 @@ pub async fn metadata_autofetch(
                                         .execute(&pool)
                                         .await
                                         {
-                                            eprintln!("[autofetch] cover_path update failed: {error}");
+                                            crate::app_warn!("[autofetch] cover_path update failed: {error}");
                                         } else {
+                                            crate::allow_asset_file(&app, &path);
                                             outcome.cover_path = Some(path);
                                         }
                                     }
                                     Err(error) => {
-                                        eprintln!("[autofetch] cover cache failed: {}", error.0);
+                                        crate::app_warn!("[autofetch] cover cache failed: {}", error.0);
                                     }
                                 }
                             }
@@ -758,7 +813,7 @@ fn emit_progress(app: &AppHandle, outcome: &AutofetchOutcome, index: usize, tota
     };
     if let Err(error) = app.emit("metadata-autofetch-progress", payload) {
         // The UI missing a progress tick must not abort the batch.
-        eprintln!("[autofetch] could not emit progress: {error}");
+        crate::app_warn!("[autofetch] could not emit progress: {error}");
     }
 }
 
@@ -782,65 +837,63 @@ async fn fetch_detail(
         Provider::Nextmoe => Sources::Nextmoe,
         Provider::Vndb => Sources::Vndb,
         Provider::Bangumi => Sources::Bangumi,
+        Provider::TwoDfan => Sources::TwoDfan,
     };
     resolve_detail(sources, external_id, nextmoe_key).await
 }
 
-/// Download a cover next to the game and return the local path.
-///
-/// Split out from the command so auto-fetch can reuse it without an
-/// `AppHandle`.
-async fn cache_cover(game_id: i64, url: &str, install_path: &str) -> CmdResult<String> {
-    use crate::metadata::http_client;
-
-    let response = http_client()?
-        .get(url)
-        .header("Accept", "image/*")
-        .send()
-        .await
-        .map_err(|error| CmdError(format!("封面下载失败：{error}")))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(CmdError(format!("封面下载返回 HTTP {status}")));
-    }
-
-    // Derive the extension from the URL path. The upstream CDNs serve
-    // webp/jpg/png and the URL suffix is a reliable enough signal.
-    let ext = url
-        .split('?')
-        .next()
-        .and_then(|u| u.rsplit('.').next())
-        .filter(|e| {
-            matches!(
-                e.to_ascii_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "webp" | "bmp"
-            )
-        })
-        .unwrap_or("jpg");
-
-    let directory = std::path::Path::new(install_path);
-    if !directory.is_dir() {
-        return Err(CmdError(format!("安装目录不存在：{install_path}")));
-    }
-
-    let target = directory.join(format!("cover_cache_{game_id}.{ext}"));
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| CmdError(format!("封面数据读取失败：{error}")))?;
-    if bytes.is_empty() {
-        return Err(CmdError("封面下载内容为空".to_string()));
-    }
-    std::fs::write(&target, &bytes)
-        .map_err(|error| CmdError(format!("封面写入失败：{error}")))?;
-
-    Ok(target.to_string_lossy().into_owned())
+/// Shared by manual matching and automatic metadata imports.
+async fn cache_cover(url: &str, directory: &std::path::Path) -> CmdResult<String> {
+    super::covers::retain(directory, url).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_candidate(provider: Provider, title: &str) -> MetadataCandidate {
+        MetadataCandidate { provider, external_id: provider.as_str().into(), title: title.into(), original_title: None,
+            aliases: vec![], release_date: None, cover_url: None, rating: None, source_label: provider.as_str().into() }
+    }
+
+    #[tokio::test]
+    async fn default_source_setting_drives_search_recommendations_and_missing_source_falls_back() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)").execute(&db).await.unwrap();
+        assert_eq!(source_preference(&db).await.unwrap(), Provider::Vndb);
+        sqlx::query("INSERT INTO settings VALUES('metadata_default_source','2dfan')").execute(&db).await.unwrap();
+        let preferred = source_preference(&db).await.unwrap();
+        assert_eq!(preferred, Provider::TwoDfan);
+        let result = search_result("CLANNAD", vec![source_candidate(Provider::Vndb,"CLANNAD"), source_candidate(Provider::TwoDfan,"CLANNAD")], vec![], preferred);
+        assert_eq!(result.candidates[0].provider, Provider::TwoDfan);
+        assert_eq!(result.automatic_candidates[0].provider, Provider::TwoDfan);
+        assert!(serde_json::to_value(&result).unwrap()["automaticCandidates"].is_array());
+
+        let result = search_result("CLANNAD", vec![source_candidate(Provider::Bangumi,"CLANNAD")],
+            vec![ProviderError { provider: preferred, message: "request failed".into() }], preferred);
+        assert_eq!(result.automatic_candidates[0].provider, Provider::Bangumi);
+        assert_eq!(result.errors.len(), 1);
+        let weak = search_result("CLANNAD", vec![source_candidate(preferred,"CLANNAD -Happy Birthday-")], vec![], preferred);
+        assert_eq!(weak.candidates.len(), 1);
+        assert!(weak.automatic_candidates.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads a live 2DFan cover"]
+    async fn twodfan_cover_cache_downloads_a_decodable_image() {
+        let root = std::env::temp_dir().join(format!("koipage-2dfan-cover-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let detail = twodfan::detail("21").await.unwrap();
+        let result = cache_cover(detail.cover_url.as_deref().unwrap(), &root).await;
+        if let Ok(path) = &result {
+            let bytes = std::fs::read(path).unwrap();
+            let decoded = image::load_from_memory(&bytes).unwrap();
+            assert!(decoded.width() > 0 && decoded.height() > 0);
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_dir(root).unwrap();
+        result.unwrap();
+    }
 
     #[tokio::test]
     async fn applying_metadata_rounds_rating_to_hundredths() {
