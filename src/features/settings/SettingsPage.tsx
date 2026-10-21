@@ -80,8 +80,12 @@ import { Select } from '@/components/ui/select';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
+import { BirthdayReminderSettings } from '@/features/birthdays/BirthdayReminderSettings';
 import { useScanFolderTip } from '@/features/scan/ScanFolderTip';
 import { SettingsSectionNav } from './SettingsSectionNav';
+import { BackupPanel } from '@/features/backup/BackupPanel';
+import { PathRepairPanel } from './PathRepairPanel';
+import { AnnouncementContact } from '@/features/announcements/AnnouncementContact';
 import { AccentSettings } from './AccentSettings';
 import { LogSettings } from './LogSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
@@ -906,9 +910,10 @@ function DataSection() {
     <Section
       id="settings-data"
       title="数据管理"
-      description="备份会复制真实存在的数据库文件；导入按安装路径去重，已存在的记录会被跳过。"
+      description="完整备份可用于换机与恢复；JSON / CSV 用于交换游戏条目，导入按安装路径去重。"
     >
       <div className="space-y-4">
+        <BackupPanel />
         <div>
           <h3 className="mb-2 text-sm font-medium">备份数据库</h3>
           <Button
@@ -1153,7 +1158,13 @@ export default function SettingsPage() {
         <WindowSection />
         <LocalizationSection />
         <MetadataSection />
+        <Section id="settings-birthdays" title="角色生日" description="在特别的日子，为喜欢的角色送上祝福。">
+          <BirthdayReminderSettings />
+        </Section>
         <DataSection />
+        <Section id="settings-paths" title="游戏路径" description="检查离线或缺失的游戏，并在搬盘后批量修复路径。">
+          <PathRepairPanel />
+        </Section>
         <Section id="settings-logs" title="日志" description="保存故障排查信息，并导出用于反馈问题的诊断日志。">
           <LogSettings />
         </Section>
@@ -1171,6 +1182,8 @@ export default function SettingsPage() {
             </div>
           </div>
           <UpdateSettings />
+          <p className="mt-4 text-xs text-muted-foreground">开源协议：GNU GPL v3（GPL-3.0-only）。第三方工具、角色与资料遵循各自的许可声明。</p>
+          <AnnouncementContact />
         </Section>
       </div>
     </div>

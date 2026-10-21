@@ -69,6 +69,7 @@ import {
   type MetadataTitlePreference,
 } from "./fields";
 import { ManualEntryForm } from "./ManualEntryForm";
+import { ImportWaitDialog } from "./ImportWaitDialog";
 import { createGameFromMetadata } from "./create-game";
 import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from "./preferences";
 
@@ -146,6 +147,12 @@ export default function MetadataDialog({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
+  const [waitNoticeOpen, setWaitNoticeOpen] = useState(false);
+  const busy = searching || detailLoading || applying || manualSaving;
+
+  useEffect(() => {
+    if (!open || !busy) setWaitNoticeOpen(false);
+  }, [open, busy]);
   // Use the same title-language preference for confirmation and auto-fetch.
   const [titlePreference, setTitlePreference] = useState<MetadataTitlePreference>("zh");
   const [defaultSource, setDefaultSource] = useState<MetadataProvider>("vndb");
@@ -242,6 +249,7 @@ export default function MetadataDialog({
     setResult(null);
     setSelected(null);
     setDetail(null);
+    setDetailLoading(false); // This search supersedes any pending detail lookup.
     setDetailError(null);
     setChecked(null);
     setCoverChecked(false);
@@ -427,20 +435,32 @@ export default function MetadataDialog({
     [detailForWrite],
   );
 
-  /** Escape and backdrop clicks reach this; never interrupt a write. */
+  /** Deliberate close buttons may cancel a lookup, but never interrupt a write. */
   const requestClose = useCallback(() => {
     if (applying || manualSaving) return;
     onClose();
   }, [applying, manualSaving, onClose]);
+
+  const requestDismiss = useCallback(() => {
+    // Both dialogs listen for Escape. Only the notice may dismiss itself while
+    // it is on top; the metadata operation and its results stay mounted.
+    if (waitNoticeOpen) return;
+    if (busy) {
+      setWaitNoticeOpen(true);
+      return;
+    }
+    requestClose();
+  }, [busy, waitNoticeOpen, requestClose]);
 
   const candidates = result?.candidates ?? [];
   const errors = result?.errors ?? [];
   const searched = result !== null || searchError !== null;
 
   return (
+    <>
     <Dialog
       open={open}
-      onClose={requestClose}
+      onClose={requestDismiss}
       className="max-w-3xl"
       title={`${progressLabel ? `${progressLabel} · ` : ""}${mode === "manual" ? "自定义游戏资料" : "确认游戏作品"}`}
       description={
@@ -913,5 +933,7 @@ export default function MetadataDialog({
         </div>
       )}
     </Dialog>
+    <ImportWaitDialog open={open && busy && waitNoticeOpen} onClose={() => setWaitNoticeOpen(false)} />
+    </>
   );
 }

@@ -22,9 +22,11 @@ export function CloseBehaviorDialog() {
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runningCount, setRunningCount] = useState(0);
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
+    let quitUnlisten: UnlistenFn | null = null;
     let cancelled = false;
 
     void listen("close-requested", () => {
@@ -36,6 +38,11 @@ export function CloseBehaviorDialog() {
             return;
           }
           if (behavior === "exit") {
+            const count = await invoke<number>('manager_running_count');
+            if (count > 0) {
+              if (!cancelled) { setRunningCount(count); setRemember(false); setError(null); setOpen(true); }
+              return;
+            }
             await invoke("app_quit");
             return;
           }
@@ -45,6 +52,7 @@ export function CloseBehaviorDialog() {
           console.warn("[window] close behaviour:", cause);
         }
         if (!cancelled) {
+          setRunningCount(await invoke<number>('manager_running_count').catch(() => 0));
           setRemember(false);
           setError(null);
           setOpen(true);
@@ -57,9 +65,18 @@ export function CloseBehaviorDialog() {
       })
       .catch((cause) => console.warn("[window] close listener:", cause));
 
+    void listen('quit-requested', () => {
+      void invoke<number>('manager_running_count').then(async count => {
+        if (cancelled) return;
+        if (count === 0) { await invoke('app_quit'); return; }
+        setRunningCount(count); setRemember(false); setError(null); setOpen(true);
+      }).catch(cause => { if (!cancelled) { setError(String(cause)); setOpen(true); } });
+    }).then(stop => { if (cancelled) stop(); else quitUnlisten = stop; }).catch(cause => console.warn('[window] quit listener:', cause));
+
     return () => {
       cancelled = true;
       unlisten?.();
+      quitUnlisten?.();
     };
   }, []);
 
@@ -104,12 +121,13 @@ export function CloseBehaviorDialog() {
             今后不再提示
           </label>
           <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>取消</Button>
-          <Button variant="outline" disabled={busy} onClick={() => void choose("exit")}>直接关闭</Button>
+          <Button variant="outline" disabled={busy} onClick={() => void choose("exit")}>{runningCount ? '结算并退出' : '直接关闭'}</Button>
           <Button loading={busy} onClick={() => void choose("tray")}>缩小至托盘</Button>
         </>
       }
     >
       <div className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+        {runningCount > 0 ? <p className="rounded-md border border-primary/40 bg-primary/10 p-3">还有 {runningCount} 款游戏正在运行。缩小至托盘可以继续计时；结算并退出会保存截至此刻的时长，游戏继续运行，退出后的时间不再记录。</p> : null}
         <p>
           <span className="font-medium text-foreground">缩小至托盘</span>：窗口隐藏，应用继续在系统托盘运行；点击托盘图标或菜单「显示恋页」即可恢复。
         </p>

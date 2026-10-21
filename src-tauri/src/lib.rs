@@ -9,6 +9,7 @@ pub mod metadata;
 pub mod scanner;
 mod rating;
 pub mod logging;
+pub mod file_ops;
 
 use commands::DB_URL;
 
@@ -49,7 +50,11 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "tray-show" => commands::window::show_main_window(app),
-            "tray-quit" => app.exit(0),
+            "tray-quit" => {
+                use tauri::Emitter;
+                commands::window::show_main_window(app);
+                let _ = app.emit("quit-requested", ());
+            },
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -68,14 +73,15 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Only one manager may run: a second launch wakes the existing window and
-    // exits before any window, tray icon or database connection is created.
+    // A second launch shows a notice and activates the existing window, then
+    // exits before another manager, tray icon or database connection is created.
     if instance::acquire() == instance::Role::Duplicate {
         return;
     }
     logging::init();
 
     tauri::Builder::default()
+        .plugin(commands::backup::restore_plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -121,6 +127,12 @@ pub fn run() {
             logging::logs_open_directory,
             // games
             commands::games::games_list,
+            commands::library_batch::games_batch_update,
+            commands::launch_profiles::launch_profile_get,
+            commands::launch_profiles::launch_profile_save,
+            commands::relocation::game_paths_check,
+            commands::relocation::game_paths_preview,
+            commands::relocation::game_paths_apply,
             commands::games::game_get,
             commands::games::game_create,
             commands::games::game_update,
@@ -195,10 +207,20 @@ pub fn run() {
             launcher::export_games,
             launcher::import_games,
             launcher::backup_database,
+            commands::backup::backup_create,
+            commands::backup::backup_preview,
+            commands::backup::backup_restore_prepare,
+            commands::backup::backup_restore_notice,
+            launcher::sessions::recover_play_sessions,
+            launcher::sessions::settle_orphan_session,
+            launcher::sessions::play_session_save,
+            launcher::sessions::play_session_delete,
+            launcher::sessions::prepare_manager_exit,
             // window / tray lifecycle
             commands::window::app_show_window,
             commands::window::app_hide_to_tray,
             commands::window::app_quit,
+            commands::window::manager_running_count,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

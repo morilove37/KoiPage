@@ -14,5 +14,9 @@ export const BRAND = {
   githubUrl: `https://github.com/${GITHUB_USERNAME}`,
   repositoryUrl: REPOSITORY_URL,
   releasesUrl: `${REPOSITORY_URL}/releases`,
+  douyinName: '女友为了我变成4i',
+  douyinId: 'shuiwuyueying.',
+  douyinUrl: 'https://www.douyin.com/user/MS4wLjABAAAAcKXZbXNLc87TzVG6SzTXl4hUtoA0QbGgt57arDh-HxvVRSovn5fPvJvcD2mbrX8f?from_tab_name=main',
+  license: 'GPL-3.0-only',
   version,
 } as const;

@@ -275,7 +275,7 @@ fn cache_image(dir: &Path, bytes: &[u8]) -> CmdResult<String> {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let result =
-            std::fs::write(&temporary, bytes).and_then(|_| std::fs::rename(&temporary, &path));
+            std::fs::write(&temporary, bytes).and_then(|_| crate::file_ops::rename(&temporary, &path));
         if let Err(error) = result {
             let _ = std::fs::remove_file(&temporary);
             return Err(CmdError(format!("无法保存封面：{error}")));
@@ -328,6 +328,16 @@ pub async fn custom_path(db: &sqlx::SqlitePool, game_id: i64) -> CmdResult<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn encrypted_qa_cache_publish_repairs_interrupted_partial_copy() {
+        let Some(base)=std::env::var_os("KOIPAGE_TEST_ENCRYPTED_ROOT") else { return; };
+        let root=PathBuf::from(base).join(format!("cover-publish-test-{}",time::OffsetDateTime::now_utc().unix_timestamp_nanos()));
+        let bytes=png(); let path=cache_image(&root,&bytes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(),bytes);
+        std::fs::write(&path,b"interrupted partial publication").unwrap();
+        cache_image(&root,&bytes).unwrap(); assert_eq!(std::fs::read(&path).unwrap(),bytes);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn custom_cover_is_copied_to_managed_storage_and_keeps_original_bytes() {
         let mut png = std::io::Cursor::new(Vec::new());

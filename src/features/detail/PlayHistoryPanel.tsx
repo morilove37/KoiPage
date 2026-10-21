@@ -5,6 +5,7 @@ import { GeometryIcon } from "@/components/ui/geometry-icon";
 import { cn } from "@/lib/utils";
 import type { GameDetail, PlaySession } from "@/types/game";
 import { formatPlayTime } from "@/types/game";
+import SessionEditor from './SessionEditor';
 
 function timestamp(value: string): number {
   const result = Date.parse(value);
@@ -56,6 +57,8 @@ export default function PlayHistoryPanel({ game, sessions }: { game: GameDetail;
         <p className="text-xs text-muted-foreground">显示最近 {ordered.length} 次记录（最多 50 次）；近期平均与最长仅计算本页已结束的记录。</p>
       </CardHeader>
       <CardContent className="space-y-4">
+        <SessionEditor gameId={game.id} />
+        <p className="text-xs text-muted-foreground">每 30 秒保存时长；异常退出后仅结算最后保存的时长，停机期间不计时。管理器重启后不会继续跟踪此前运行的游戏。</p>
         <div className="grid grid-cols-2 gap-2" aria-label="游玩历史概览">
           {([
             { icon: "clock", label: "累计游玩", value: formatPlayTime(game.playTimeSeconds), hint: "全部历史累计", key: "total" },
@@ -134,6 +137,7 @@ export default function PlayHistoryPanel({ game, sessions }: { game: GameDetail;
                     <span className="flex items-center gap-1 text-xs font-semibold tabular-nums"><GeometryIcon name="clock" className="size-3.5 text-primary" />{session.endedAt ? duration(seconds(session)) : "记录未结束"}</span>
                   </div>
                   <div className="mt-2 grid gap-1.5 text-[11px] text-muted-foreground">
+                    <SessionEditor gameId={game.id} session={session} />
                     <span className="flex items-start gap-1.5"><GeometryIcon name="play" className="size-3.5" /><span>开始 <time dateTime={session.startedAt}>{dateTime(session.startedAt)}</time></span></span>
                     <span className="flex items-start gap-1.5"><GeometryIcon name="stop" className="size-3.5" /><span>结束 {session.endedAt ? <time dateTime={session.endedAt}>{dateTime(session.endedAt)}</time> : "未记录结束时间"}</span></span>
                   </div>

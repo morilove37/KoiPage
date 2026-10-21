@@ -983,6 +983,8 @@ pub fn magpie_quit() -> CmdResult<bool> {
 ///
 /// Best effort by design: a missing tool must not block the launch. The bundled
 /// release is unpacked here too, so the very first game launch already works.
+pub fn is_running() -> bool { !running_processes().is_empty() }
+
 pub fn autostart(
     app: &AppHandle,
     source_setting: Option<&str>,

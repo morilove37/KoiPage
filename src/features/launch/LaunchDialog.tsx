@@ -25,6 +25,9 @@ import { formatPlayTime } from "@/types/game";
 import type { Game } from "@/types/game";
 import { gameProcesses } from "./game-process";
 import { useGameProcess } from "./useGameProcess";
+import { launchProfileGet } from './profile-api';
+import type { EffectiveLaunchProfile } from './profile-api';
+import { magpieQuit, magpieStatus } from '@/features/tools/io';
 
 export interface LaunchDialogProps {
   open: boolean;
@@ -66,6 +69,8 @@ export default function LaunchDialog({
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [effective, setEffective] = useState<EffectiveLaunchProfile | null>(null);
+  const [restartMagpie, setRestartMagpie] = useState(false);
   const pending = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -79,6 +84,13 @@ export default function LaunchDialog({
   useEffect(() => {
     if (!open) return;
     setError(null);
+    let alive = true;
+    setRestartMagpie(false);
+    void launchProfileGet(game.id).then(async value => {
+      const restart = value.magpie && Boolean(value.profile.scalingMode) && (await magpieStatus()).running;
+      if (alive) { setEffective(value); setRestartMagpie(restart); }
+    }).catch(cause => { if (alive) setError(errorMessage(cause)); });
+    return () => { alive = false; };
   }, [open, game.id]);
 
   async function start() {
@@ -87,6 +99,11 @@ export default function LaunchDialog({
     setBusy(true);
     setError(null);
     try {
+      if (restartMagpie) {
+        await magpieQuit();
+        if ((await magpieStatus()).running) throw new Error('Magpie 尚未退出，请在其实用工具页面或托盘中退出后重试。');
+        if (mounted.current) setRestartMagpie(false);
+      }
       const outcome = await gameProcesses.start(game.id);
       if (mounted.current && outcome.kind === "started") onLaunched?.();
     } catch (cause) {
@@ -140,12 +157,13 @@ export default function LaunchDialog({
             onClick={() => void start()}
             title={canLaunch ? undefined : "未设置 exe 路径"}
           >
-            {launching ? "启动中…" : running ? "运行中" : "启动游戏"}
+            {launching ? "启动中…" : running ? "运行中" : restartMagpie ? '退出 Magpie 并启动游戏' : "启动游戏"}
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-4">
+        {restartMagpie ? <p className="rounded-md border border-primary/40 bg-primary/10 p-3 text-xs leading-relaxed">Magpie 已在运行，应用本款缩放模式需要重新启动它。确认启动会先退出当前 Magpie，再按本款配置启动；其他游戏正在使用的缩放也会结束。</p> : null}
         {!canLaunch ? (
           <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs">
             还没有设置 exe 路径，无法启动。请先到上方的「路径与启动」标签里填写并保存。
@@ -169,6 +187,7 @@ export default function LaunchDialog({
         ) : null}
 
         <dl className="flex flex-col gap-3">
+          {effective ? <Row label="本次启动配置" value={`转区${effective.locale ? '开启' : '关闭'} · Magpie ${effective.magpie ? '开启' : '关闭'} · Luna ${effective.luna ? '开启' : '关闭'}`} /> : null}
           <Row label="可执行文件" value={game.exePath} />
           <Row label="工作目录" value={game.workdir} />
           <Row label="启动参数" value={game.launchArgs} />

@@ -6,9 +6,9 @@
 //! and one bundled-tool directory, and each owns its own tray icon: confusing at
 //! best, corrupting at worst.
 //!
-//! The rule enforced here: **at most one manager process exists**. A second
-//! launch never builds a full app; it brings the running manager to the front and
-//! exits silently.
+//! The rule enforced here: **at most one manager is initialized**. A second
+//! launch never builds a full app; it explains that the app is already running,
+//! then activates the incumbent and exits after acknowledgement.
 //!
 //! Ownership is a named kernel mutex, not a process scan. A scan cannot decide a
 //! cold start: two processes launched at the same moment both see "no manager
@@ -55,7 +55,7 @@ pub fn listen_for_activation(app: tauri::AppHandle) {
 pub enum Role {
     /// This process owns the manager; keep going.
     Primary,
-    /// Another manager is alive and has been activated; exit now.
+    /// Another manager is alive; activation and the notice are complete.
     Duplicate,
 }
 
@@ -90,7 +90,9 @@ mod windows_guard {
     use windows_sys::Win32::System::Threading::{
         CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, OpenEventW, SetEvent, WaitForSingleObject,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    };
 
     use super::{Role, object_name};
 
@@ -134,8 +136,30 @@ mod windows_guard {
         // Someone else owns the manager. Let go of our handle first: we must not
         // look like a second owner.
         unsafe { CloseHandle(handle) };
+        show_duplicate_notice();
+        // Restore only after acknowledgement: the incumbent's focus retries
+        // must not cover the notice while the user is reading it.
         wake_owner(&image);
         Role::Duplicate
+    }
+
+    /// Show the notice without initializing Tauri, a second tray or the database.
+    fn show_duplicate_notice() {
+        let title: Vec<u16> = "恋页 KoiPage\0".encode_utf16().collect();
+        let message: Vec<u16> =
+            "恋页 KoiPage 已在运行，只能同时运行一个应用。\n\n点击“确定”唤出已有窗口，继续使用。\0"
+                .encode_utf16()
+                .collect();
+        // No Tauri window belongs to this process. Both UTF-16 buffers remain
+        // alive for the duration of the synchronous native message box.
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+            );
+        }
     }
 
     /// Ask the running manager to show itself.

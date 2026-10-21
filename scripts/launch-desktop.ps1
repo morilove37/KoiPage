@@ -42,30 +42,9 @@ try {
         }
     }
 
-    $existing = Get-Process -Name 'galgame-manager' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appPath } | Select-Object -First 1
-    if (-not $existing) {
-        $existing = Start-Process -FilePath $appPath -WorkingDirectory $projectRoot -WindowStyle Normal -PassThru
-    }
-    # Restore an existing minimized window and bring it forward.
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class KoiPageDesktopWindow {
-    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
-}
-'@
-    $windowDeadline = [DateTime]::UtcNow.AddSeconds(8)
-    do {
-        $existing.Refresh()
-        if ($existing.HasExited) { throw 'KoiPage closed before its window became ready.' }
-        if ($existing.MainWindowHandle -ne [IntPtr]::Zero) {
-            [KoiPageDesktopWindow]::ShowWindowAsync($existing.MainWindowHandle, 9) | Out-Null
-            [KoiPageDesktopWindow]::SetForegroundWindow($existing.MainWindowHandle) | Out-Null
-            break
-        }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $windowDeadline)
+    # Let the app's atomic single-instance guard handle both first launch and
+    # re-launch. It owns the notice, tray restore and foreground handoff.
+    Start-Process -FilePath $appPath -WorkingDirectory $projectRoot -WindowStyle Normal | Out-Null
 } catch {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KoiPage', 'OK', 'Error') | Out-Null
