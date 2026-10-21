@@ -28,7 +28,10 @@ jobs:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
       - run: pnpm check:ipc
+      - run: pnpm test
       - run: pnpm check:release
+      - run: cargo test --lib --locked
+        working-directory: src-tauri
       - name: Read release notes
         id: notes
         shell: pwsh

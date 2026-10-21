@@ -48,7 +48,11 @@ let loadPromise: Promise<Database> | null = null;
  */
 export function initDatabase(): Promise<Database> {
   if (!loadPromise) {
-    loadPromise = Database.load(DB_URL).catch((error) => {
+    loadPromise = Database.load(DB_URL).then(async db => {
+      // Runs once per connection lifetime before launch controls can become available.
+      await invoke<number>('recover_play_sessions');
+      return db;
+    }).catch((error) => {
       recordLog('ERROR', 'database', '数据库初始化失败', error);
       loadPromise = null;
       throw error;

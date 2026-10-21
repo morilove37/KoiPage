@@ -226,6 +226,18 @@ html.glass #lg-backdrop {
   background-color: hsl(var(--glass-scrim));
 }
 
+/* Keep all application content above the fixed wallpaper, including static
+   text that has no stacking context of its own (detail titles and labels).
+   Only the shell fill is transparent; cards and controls keep their surfaces. */
+html.glass #root {
+  position: relative;
+  z-index: 1;
+}
+
+html.glass #root > .bg-background {
+  background-color: transparent;
+}
+
 /* --- 3b. The user's custom wallpaper ------------------------------------
    Optional, and only ever visible under `.glass`: the block below inherits the
    `display: none` above through `#lg-backdrop`, so a custom image never leaks

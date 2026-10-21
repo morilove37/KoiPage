@@ -11,6 +11,7 @@ import { loadLocalizationPreference } from "@/lib/localization";
 import { BRAND } from "@/lib/brand";
 import { UpdateDialog } from "@/features/updates/UpdateDialog";
 import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog";
+import { BirthdayCelebrationDialog } from "@/features/birthdays/BirthdayCelebrationDialog";
 import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
 import { useGameProcessSync } from "@/features/launch/useGameProcess";
 
@@ -172,6 +173,7 @@ export default function App() {
       </main>
       <UpdateDialog />
       <AnnouncementDialog />
+      <BirthdayCelebrationDialog />
       <CloseBehaviorDialog />
     </div>
   );

@@ -26,8 +26,14 @@ export function AnnouncementContact() {
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">查看源代码、下载新版本，或在 Issues 中反馈问题与建议。</p>
         </div>
         <div>
-          <p className="font-medium">作者抖音 · 空苍若叶</p>
-          <p className="mt-1 text-xs text-muted-foreground">抖音号：84398786679</p>
+          <p className="font-medium">作者抖音 · {BRAND.douyinName}</p>
+          <p className="mt-1 text-xs text-muted-foreground">抖音号：{BRAND.douyinId}</p>
+          <a href={BRAND.douyinUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-primary underline-offset-4 hover:underline"
+            onClick={event => {
+              if (!isTauri()) return;
+              event.preventDefault(); setError(null);
+              void openUrl(BRAND.douyinUrl).catch(() => setError('无法打开抖音主页，请复制抖音号后搜索。'));
+            }}>打开抖音主页 <span aria-hidden="true">↗</span></a>
         </div>
         {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       </div>

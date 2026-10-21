@@ -34,6 +34,14 @@ export function useGameProcess(gameId: number, enabled = true) {
 /** App owns this listener, so closing a panel or changing routes never loses
  * process exits. The fallback poll only checks games currently marked running. */
 export function useGameProcessSync() {
+  useEffect(() => {
+    let disposed = false;
+    let remove: UnlistenFn | undefined;
+    void listen('play-history-changed', () => {
+      if (!disposed) useAppStore.getState().bumpPlayTimeRevision();
+    }).then(unlisten => { if (disposed) unlisten(); else remove = unlisten; }).catch(cause => console.warn('[history] listener:', cause));
+    return () => { disposed = true; remove?.(); };
+  }, []);
   const runningIds = useAppStore(state => Object.entries(state.gameProcesses)
     .filter(([, process]) => process.status === "running")
     .map(([id]) => id).join(","));

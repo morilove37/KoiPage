@@ -19,16 +19,18 @@ import { Tabs } from "@/components/ui/tabs";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import { useGameProcess } from "@/features/launch/useGameProcess";
+import { LaunchProfilePanel } from '@/features/launch/LaunchProfilePanel';
+import { launchProfileGet, launchProfileSave } from '@/features/launch/profile-api';
+import { normalizeLaunchProfile } from '@/features/launch/profile-model';
+import type { LaunchProfile } from '@/features/launch/profile-model';
 import MetadataDialog from "@/features/metadata/MetadataDialog";
-import { errorMessage, localeToolStatus } from "@/features/io/io";
+import { errorMessage } from "@/features/io/io";
 import type { GameExitedPayload } from "@/features/io/io";
 import {
   gameDelete,
   gameGet,
   gameUpdate,
   playSessionsList,
-  settingsGet,
-  settingsSet,
   tagsList,
 } from "@/lib/db";
 import { cn } from "@/lib/utils";
@@ -97,11 +99,6 @@ function formatDateTime(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-/** Truthy spellings shared by the launch-option settings. */
-function isOn(value: string | null | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
 }
 
 /** Batch launchers (.bat/.cmd) are started through cmd.exe, not directly. */
@@ -190,40 +187,28 @@ export default function GameDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // 启动选项与「实用工具」共用同一批全局设置；详情页的开关只是快捷入口，
-  // 因此这里读写的是 locale_tool_use / magpie_autostart 本身。
+  // Header shortcuts write only this game's overrides.
+  const [launchProfile, setLaunchProfile] = useState<LaunchProfile>(normalizeLaunchProfile(null));
+  const [profileRevision, setProfileRevision] = useState(0);
   const [localeUse, setLocaleUse] = useState(false);
   const [magpieAutostart, setMagpieAutostart] = useState(false);
-  const [localeReady, setLocaleReady] = useState<boolean | null>(null);
   const [optionBusy, setOptionBusy] = useState<"locale" | "magpie" | null>(null);
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
-        const [use, autostart, source, toolPath] = await Promise.all([
-          settingsGet("locale_tool_use"),
-          settingsGet("magpie_autostart"),
-          settingsGet("locale_tool_source"),
-          settingsGet("locale_tool_path"),
-        ]);
-        let ready = false;
-        try {
-          const status = await localeToolStatus();
-          ready = source === "custom" ? Boolean(toolPath?.trim()) : status.available;
-        } catch {
-          ready = false;
-        }
+        const effective = await launchProfileGet(gameId);
         if (!alive) return;
-        setLocaleUse(isOn(use));
-        setMagpieAutostart(isOn(autostart));
-        setLocaleReady(ready);
+        setLaunchProfile(normalizeLaunchProfile(effective.profile));
+        setLocaleUse(effective.locale);
+        setMagpieAutostart(effective.magpie);
       } catch (cause) {
         if (alive) setError(errorMessage(cause));
       }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [gameId, profileRevision]);
 
   async function toggleLaunchOption(kind: "locale" | "magpie", next: boolean) {
     if (optionBusy) return;
@@ -231,12 +216,9 @@ export default function GameDetailPage() {
     setError(null);
     setNotice(null);
     try {
-      await settingsSet(kind === "locale" ? "locale_tool_use" : "magpie_autostart", next ? "1" : "0");
-      if (kind === "locale") setLocaleUse(next);
-      else setMagpieAutostart(next);
-      setNotice(kind === "locale"
-        ? next ? "已开启转区启动（全局设置）。" : "已关闭转区启动（全局设置）。"
-        : next ? "已开启启动时缩放（全局设置）。" : "已关闭启动时缩放（全局设置）。");
+      await launchProfileSave(gameId, { ...launchProfile, [kind]: next ? 'on' : 'off' });
+      setProfileRevision(value => value + 1);
+      setNotice('已保存本款游戏的启动设置。');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -611,17 +593,17 @@ export default function GameDetailPage() {
             </Link>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             <div
               className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1"
-              title="启动选项（全局设置，与「实用工具」同步）：转区使用内置 LE 启动；缩放会在启动前自动启动 Magpie，仍需按快捷键放大窗口。"
+              title="本款启动选项；在「路径与启动」中可恢复为跟随全局。"
             >
               <span className="text-[11px] text-muted-foreground">转区</span>
               <MiniSwitch
                 checked={localeUse}
-                disabled={optionBusy !== null || (!localeUse && localeReady !== true)}
+                disabled={optionBusy !== null}
                 label="转区启动"
-                title={localeReady === false ? "转区工具不可用，请先在「实用工具 → 转区启动」检查" : "启动游戏时使用日语区域（内置 LE）"}
+                title="只切换本款游戏的转区启动"
                 onChange={next => void toggleLaunchOption("locale", next)}
               />
               <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-border" />
@@ -868,7 +850,7 @@ export default function GameDetailPage() {
               </Field>
               {isScriptPath(form.exePath) ? (
                 <p className="text-xs leading-relaxed text-muted-foreground sm:col-span-2">
-                  当前使用 .bat/.cmd 启动脚本（通过 cmd 运行）。如果脚本启动游戏后立即退出，本次游玩时长可能无法统计；转区启动暂不支持脚本，需要转区时请改用游戏 exe。
+                  当前使用 .bat/.cmd 启动脚本（通过 cmd 运行），会继续跟踪本次启动产生的后续游戏进程。转区启动暂不支持脚本，需要转区时请改用游戏 exe。
                 </p>
               ) : null}
               <Field label="启动参数">
@@ -888,6 +870,7 @@ export default function GameDetailPage() {
                   onChange={value => setForm(before => before ? { ...before, savePath: value } : before)} />
               </Field>
               <p className="text-xs text-muted-foreground sm:col-span-2">路径可直接输入、粘贴或点击按钮选择。修改后点击右上角「保存」生效；工作目录留空时使用可执行文件所在目录。</p>
+              <LaunchProfilePanel key={`${gameId}-${profileRevision}`} gameId={gameId} onSaved={() => setProfileRevision(value => value + 1)} />
             </CardContent>
           </Card>
         ) : null}

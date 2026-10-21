@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { ImportWaitDialog } from "@/features/metadata/ImportWaitDialog";
 import { metadataDetail, metadataSearch } from "@/lib/db";
 import type { GameInput, MetadataCandidate, MetadataDetail } from "@/lib/db";
 import { createGameFromMetadata } from "@/features/metadata/create-game";
@@ -28,9 +29,14 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
   const [rows, setRows] = useState<ImportRow[]>(() => drafts.map(draft => ({ draft, status: "pending", message: "" })));
   const [running, setRunning] = useState(true);
   const [stopping, setStopping] = useState(false);
+  const [waitNoticeOpen, setWaitNoticeOpen] = useState(false);
   const stopRef = useRef(false);
   const started = useRef(false);
   const alive = useRef(false);
+
+  useEffect(() => {
+    if (!running) setWaitNoticeOpen(false);
+  }, [running]);
 
   useEffect(() => {
     alive.current = true;
@@ -100,8 +106,16 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
   const done = rows.filter(row => ["imported", "review", "manual", "failed"].includes(row.status)).length;
   const remaining = rows.filter(row => row.status !== "imported");
 
+  const requestDismiss = () => {
+    // Escape should close only the notice when it is above the import dialog.
+    if (waitNoticeOpen) return;
+    if (running) setWaitNoticeOpen(true);
+    else onClose();
+  };
+
   return (
-    <Dialog open title="一键导入" className="max-w-2xl" onClose={() => { if (!running) onClose(); }}
+    <>
+    <Dialog open title="一键导入" className="max-w-2xl" onClose={requestDismiss}
       description="优先采用设置中默认数据源的可信匹配，没有合适结果或资料读取失败时使用其他来源；不确定的匹配交由逐款确认。"
       footer={running ? (
         <Button variant="outline" disabled={stopping} onClick={() => { stopRef.current = true; setStopping(true); }}>
@@ -137,5 +151,7 @@ export default function BatchImportDialog({ drafts, onFinished, onClose, onManua
         </li>)}
       </ul>
     </Dialog>
+    <ImportWaitDialog open={running && waitNoticeOpen} onClose={() => setWaitNoticeOpen(false)} />
+    </>
   );
 }

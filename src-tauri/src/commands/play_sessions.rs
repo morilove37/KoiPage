@@ -70,58 +70,19 @@ pub async fn play_session_end(
     session_id: i64,
     duration_seconds: Option<i64>,
 ) -> CmdResult<PlaySession> {
-    let pool = pool(&app).await?;
-
-    let existing = sqlx::query_as::<_, PlaySession>(
-        "SELECT id, game_id, started_at, ended_at, duration_seconds FROM play_sessions WHERE id = ?",
-    )
-    .bind(session_id)
-    .fetch_optional(&pool)
-    .await?;
-    let existing = existing.ok_or_else(|| not_found("play session", session_id))?;
-
-    if existing.ended_at.is_some() {
-        return Ok(existing);
+    use tauri::Manager;
+    let state = app.state::<crate::launcher::RunningGames>();
+    let _guard = state.1.lock().await;
+    if state.0.lock().map_err(|_| CmdError("进程表已损坏".into()))?.values().any(|entry| entry.session_id == session_id) {
+        return Err(CmdError("请通过结束游戏来结算运行中的记录".into()));
     }
-
-    let ended_at = now_iso8601();
-    // Prefer the client-reported duration (it knows about pauses); otherwise
-    // derive it from the wall-clock span.
-    let duration = match duration_seconds {
-        Some(d) if d >= 0 => d,
-        Some(d) => return Err(CmdError(format!("durationSeconds must be >= 0, got {d}"))),
-        None => elapsed_seconds(&existing.started_at, &ended_at).unwrap_or(0),
-    };
-
-    let mut tx = pool.begin().await?;
-
-    sqlx::query("UPDATE play_sessions SET ended_at = ?, duration_seconds = ? WHERE id = ?")
-        .bind(&ended_at)
-        .bind(duration)
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(
-        "UPDATE games SET play_time_seconds = play_time_seconds + ?, last_played_at = ?, \
-         updated_at = ? WHERE id = ?",
-    )
-    .bind(duration)
-    .bind(&ended_at)
-    .bind(&ended_at)
-    .bind(existing.game_id)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-
-    Ok(PlaySession {
-        id: existing.id,
-        game_id: existing.game_id,
-        started_at: existing.started_at,
-        ended_at: Some(ended_at),
-        duration_seconds: duration,
-    })
+    if duration_seconds.is_some_and(|seconds| seconds < 0) {
+        return Err(CmdError("时长不能为负数".into()));
+    }
+    let db = pool(&app).await?;
+    crate::launcher::sessions::settle(&db, session_id, duration_seconds).await?;
+    Ok(sqlx::query_as("SELECT id,game_id,started_at,ended_at,duration_seconds FROM play_sessions WHERE id=?")
+        .bind(session_id).fetch_one(&db).await?)
 }
 
 /// Recent sessions, or every completed session overlapping a bounded period.
@@ -203,13 +164,6 @@ async fn sessions_in_period(
     .fetch_all(pool).await?)
 }
 
-/// Whole seconds between two ISO8601 timestamps, if both parse.
-fn elapsed_seconds(start: &str, end: &str) -> Option<i64> {
-    use time::format_description::well_known::Rfc3339;
-    let start = time::OffsetDateTime::parse(start, &Rfc3339).ok()?;
-    let end = time::OffsetDateTime::parse(end, &Rfc3339).ok()?;
-    Some((end - start).whole_seconds().max(0))
-}
 
 #[cfg(test)]
 mod period_tests {

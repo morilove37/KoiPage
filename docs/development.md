@@ -13,6 +13,7 @@
 ```bash
 pnpm build
 pnpm check:ipc
+pnpm test
 pnpm check:release
 cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
 ```

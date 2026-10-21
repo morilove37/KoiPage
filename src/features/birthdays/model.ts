@@ -39,3 +39,34 @@ export function birthdayLabel(entry: BirthdayOccurrence): string {
 export function birthdayDate(character: BirthdayCharacter): string {
   return character.birthdayMonth && character.birthdayDay ? `${character.birthdayMonth} 月 ${character.birthdayDay} 日` : '生日未知';
 }
+
+export interface BirthdayReminderPreferences { enabled: boolean; lastShownDate: string | null }
+export interface BirthdayCelebration { date: string; entries: BirthdayEntry[] }
+
+export function localBirthdayDate(now = new Date()): string {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+export function parseBirthdayReminderPreferences(raw: string | null): BirthdayReminderPreferences {
+  const defaults = { enabled: true, lastShownDate: null };
+  try {
+    const value: unknown = raw ? JSON.parse(raw) : null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults;
+    const stored = value as Record<string, unknown>;
+    let lastShownDate: string | null = null;
+    if (typeof stored.lastShownDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(stored.lastShownDate)) {
+      const parsed = new Date(`${stored.lastShownDate}T00:00:00Z`);
+      if (Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === stored.lastShownDate) lastShownDate = stored.lastShownDate;
+    }
+    return { enabled: typeof stored.enabled === 'boolean' ? stored.enabled : true, lastShownDate };
+  } catch { return defaults; }
+}
+
+export function planBirthdayCelebration(
+  preferences: BirthdayReminderPreferences, characters: BirthdayCharacter[], now = new Date(),
+): BirthdayCelebration | null {
+  const date = localBirthdayDate(now);
+  if (!preferences.enabled || preferences.lastShownDate === date) return null;
+  const entries = buildBirthdayEntries(characters.filter(c => c.games.length > 0), now, 0);
+  return entries.length > 0 ? { date, entries } : null;
+}

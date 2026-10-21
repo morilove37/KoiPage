@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,12 @@ import {
 } from "@/types/game";
 import type { Game, GameInput, GameStats, Tag } from "@/types/game";
 
+import { gamesBatchUpdate } from "./api";
+import type { LibraryBatchPatch } from "./api";
+import { visibleSelection } from "./preferences";
+import type { LibraryFilters } from "./preferences";
+import type { GameStatus } from "@/types/game";
+
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
 import ScanDialog from "@/features/scan/ScanDialog";
@@ -34,8 +40,11 @@ import type { PendingImport } from "@/features/scan/BatchImportDialog";
 import { takePendingScanRoots } from "@/features/scan/pendingScan";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 
+let libraryScrollTop = 0;
+
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "title", label: "标题" },
+  { value: "createdAt", label: "最近添加" },
   { value: "releaseDate", label: "发售日" },
   { value: "rating", label: "评分" },
   { value: "lastPlayedAt", label: "最近游玩" },
@@ -74,7 +83,7 @@ function compareNullable<T>(
 }
 
 export default function LibraryPage() {
-  const { viewMode, sortKey, sortDirection } = useAppStore((s) => s.library);
+  const { viewMode, sortKey, sortDirection, filters, presets } = useAppStore((s) => s.library);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const setSort = useAppStore((s) => s.setSort);
   const playTimeRevision = useAppStore((s) => s.playTimeRevision);
@@ -86,11 +95,45 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [activeTagIds, setActiveTagIds] = useState<number[]>([]);
-  const [developer, setDeveloper] = useState("");
+  const setLibraryFilters = useAppStore(s => s.setLibraryFilters);
+  const saveLibraryPreset = useAppStore(s => s.saveLibraryPreset);
+  const deleteLibraryPreset = useAppStore(s => s.deleteLibraryPreset);
+  const { search, status, favoriteOnly, activeTagIds, developer } = filters;
+  const setFilter = <K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K] | ((current: LibraryFilters[K]) => LibraryFilters[K])) => {
+    const current = useAppStore.getState().library.filters;
+    setLibraryFilters({ ...current, [key]: typeof value === "function" ? value(current[key]) : value });
+  };
+  const setSearch = (value: string) => setFilter("search", value);
+  const setStatus = (value: string) => setFilter("status", value);
+  const setFavoriteOnly = (value: boolean | ((current: boolean) => boolean)) => setFilter("favoriteOnly", value);
+  const setDeveloper = (value: string) => setFilter("developer", value);
+  const setActiveTagIds = useCallback((value: number[] | ((current: number[]) => number[])) => {
+    const current = useAppStore.getState().library.filters;
+    setLibraryFilters({ ...current, activeTagIds: typeof value === "function" ? value(current.activeTagIds) : value });
+  }, [setLibraryFilters]);
+  const [presetName, setPresetName] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchStatus, setBatchStatus] = useState("");
+  const [batchTag, setBatchTag] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const restoredScroll = useRef(false);
+  useEffect(() => {
+    const main = rootRef.current?.closest("main");
+    if (!main) return;
+    const remember = () => { libraryScrollTop = main.scrollTop; };
+    main.addEventListener("scroll", remember);
+    return () => { main.removeEventListener("scroll", remember); };
+  }, []);
+  useEffect(() => {
+    if (loading || restoredScroll.current) return;
+    const saved = libraryScrollTop;
+    const frame = requestAnimationFrame(() => {
+      const main = rootRef.current?.closest("main");
+      if (main) main.scrollTop = saved;
+      restoredScroll.current = true;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loading]);
   const [scanOpen, setScanOpen] = useState(false);
   // Folders extracted in 实用工具 are handed over through sessionStorage; the
   // scan dialog opens preloaded so the user lands on the review list.
@@ -203,12 +246,13 @@ export default function LibraryPage() {
   }, [finishMetadataStep, reload]);
 
   useEffect(() => {
+    if (loading) return;
     const ids = new Set(usedTags.map((tag) => tag.id));
     setActiveTagIds((current) => {
       const next = current.filter((id) => ids.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [usedTags]);
+  }, [usedTags, loading, setActiveTagIds]);
 
   const developers = useMemo(() => {
     const set = new Set<string>();
@@ -246,6 +290,8 @@ export default function LibraryPage() {
             compareNullable(a.title, b.title, sortDirection) ||
             compareNullable(a.id, b.id, "asc")
           );
+        case "createdAt":
+          return compareNullable(a.createdAt, b.createdAt, sortDirection) || compareNullable(a.id, b.id, sortDirection);
         case "releaseDate":
           return compareNullable(a.releaseDate, b.releaseDate, sortDirection);
         case "rating":
@@ -330,7 +376,7 @@ export default function LibraryPage() {
   );
 
   const bulkDelete = useCallback(async () => {
-    const ids = [...selectedIds];
+    const ids = visibleSelection(selectedIds, visibleGames);
     if (ids.length === 0) return;
     setDeleting(true);
     setError(null);
@@ -352,7 +398,21 @@ export default function LibraryPage() {
     } finally {
       setDeleting(false);
     }
-  }, [selectedIds, reload]);
+  }, [selectedIds, visibleGames, reload]);
+
+  const applyBatch = async (patch: LibraryBatchPatch) => {
+    const ids = visibleSelection(selectedIds, visibleGames);
+    if (!ids.length || batchBusy) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      const count = await gamesBatchUpdate(ids, patch);
+      setSelectedIds(new Set());
+      await reload();
+      setImportNotice(`已更新 ${count} 部游戏。`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBatchBusy(false); }
+  };
 
   const toggleTag = (tagId: number) => {
     setActiveTagIds((current) =>
@@ -397,7 +457,7 @@ export default function LibraryPage() {
     activeTagIds.length > 0;
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3" data-library-state={loading ? "loading" : error ? "error" : "ready"}>
+    <div ref={rootRef} className="flex flex-col gap-3 px-4 py-3" data-library-state={loading ? "loading" : error ? "error" : "ready"}>
       {/* Header ---------------------------------------------------------- */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -445,7 +505,7 @@ export default function LibraryPage() {
               title={
                 visibleGames.length === 0
                   ? "当前没有可选的游戏"
-                  : "进入多选，可批量删除"
+                  : "进入多选，可批量管理"
               }
             >
               多选
@@ -469,7 +529,14 @@ export default function LibraryPage() {
           <span className="text-xs text-muted-foreground">
             （当前显示 {visibleGames.length} 部）
           </span>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2" aria-busy={batchBusy}>
+            <LabeledSelect label="批量状态" className="w-28" value={batchStatus} onValueChange={setBatchStatus} options={[{value:"",label:"选择状态"}, ...STATUS_OPTIONS.slice(1)]} />
+            <Button variant="outline" disabled={!selectedGames.length || !batchStatus || batchBusy} onClick={() => void applyBatch({ status: batchStatus as GameStatus })}>设定状态</Button>
+            <Button variant="outline" disabled={!selectedGames.length || batchBusy} onClick={() => void applyBatch({ favorite: true })}>收藏</Button>
+            <Button variant="outline" disabled={!selectedGames.length || batchBusy} onClick={() => void applyBatch({ favorite: false })}>取消收藏</Button>
+            <LabeledSelect label="批量标签" className="w-28" value={batchTag} onValueChange={setBatchTag} options={[{value:"",label:"选择标签"}, ...tags.map(tag => ({value:String(tag.id),label:t(tag.name)}))]} />
+            <Button variant="outline" disabled={!selectedGames.length || !batchTag || batchBusy} onClick={() => void applyBatch({ addTagIds: [Number(batchTag)] })}>添加标签</Button>
+            <Button variant="outline" disabled={!selectedGames.length || !batchTag || batchBusy} onClick={() => void applyBatch({ removeTagIds: [Number(batchTag)] })}>移除标签</Button>
             <Button
               variant="outline"
               onClick={selectAllVisible}
@@ -487,14 +554,14 @@ export default function LibraryPage() {
             <Button
               variant="outline"
               onClick={clearSelection}
-              disabled={selectedIds.size === 0}
+              disabled={selectedIds.size === 0 || batchBusy}
             >
               清除选择
             </Button>
             <Button
               variant="destructive"
               onClick={() => setConfirmBulkDelete(true)}
-              disabled={selectedIds.size === 0}
+              disabled={selectedIds.size === 0 || batchBusy}
             >
               删除选中{selectedIds.size > 0 ? `（${selectedIds.size}）` : ""}
             </Button>
@@ -585,6 +652,15 @@ export default function LibraryPage() {
           ) : null}
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <Input className="w-36" aria-label="筛选名称" placeholder="常用筛选名称" maxLength={40} value={presetName} onChange={event => setPresetName(event.target.value)} />
+          <Button variant="outline" disabled={!presetName.trim()} onClick={() => { saveLibraryPreset(presetName); setPresetName(""); }}>保存筛选</Button>
+          {presets.map(preset => <span key={preset.name} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs">
+            <button type="button" className="hover:text-primary" onClick={() => setLibraryFilters(preset.filters)}>{preset.name}</button>
+            <button type="button" className="text-muted-foreground hover:text-destructive" aria-label={`删除筛选 ${preset.name}`} onClick={() => deleteLibraryPreset(preset.name)}>×</button>
+          </span>)}
+        </div>
+
         {usedTags.length > 0 ? (
           <div className="flex items-start gap-1.5">
             <span className="mr-1 shrink-0 py-1 text-xs font-medium text-muted-foreground">
@@ -636,7 +712,7 @@ export default function LibraryPage() {
 
       {error ? (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          加载失败：{error}
+          操作失败：{error}
         </div>
       ) : null}
       {importNotice ? (

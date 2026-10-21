@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { settingsGet } from "@/lib/db";
+import { launchProfileGet } from './profile-api';
+import { magpieStatus } from '@/features/tools/io';
 import { errorMessage } from "@/features/io/io";
 import { useAppStore } from "@/store/app";
 import type { Game } from "@/types/game";
@@ -26,10 +27,11 @@ export function useGameLauncher(onLaunched?: () => void) {
     try {
       const outcome = await gameProcesses.start(game.id, async () => {
         if (!game.exePath?.trim()) throw new Error("尚未设置可执行文件，请在游戏详情的「路径与启动」中选择文件并保存。");
-        const useTool = await settingsGet("locale_tool_use");
+        const effective = await launchProfileGet(game.id);
+        const restartMagpie = effective.magpie && Boolean(effective.profile.scalingMode) && (await magpieStatus()).running;
         // Avoid launching from a page that was left during the preflight.
         if (!mounted.current) return false;
-        return !["1", "true", "yes", "on"].includes(useTool?.trim().toLowerCase() ?? "");
+        return !effective.locale && !restartMagpie;
       });
       if (!mounted.current) return;
       if (outcome.kind === "running" || outcome.kind === "panel") {

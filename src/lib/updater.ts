@@ -9,6 +9,7 @@ export const DEVELOPMENT_BUILD = import.meta.env.DEV;
 type UpdateStatus = "idle" | "checking" | "latest" | "available" | "downloading" | "installing" | "error";
 
 interface UpdateState {
+  startupPending: boolean;
   preferenceLoaded: boolean;
   automatic: boolean;
   status: UpdateStatus;
@@ -21,6 +22,7 @@ interface UpdateState {
 }
 
 export const useUpdateStore = create<UpdateState>(() => ({
+  startupPending: !DEVELOPMENT_BUILD && isTauri(),
   preferenceLoaded: false, automatic: true, status: "idle", version: null,
   notes: "", dialogOpen: false, downloaded: 0, total: null, error: null,
 }));
@@ -88,12 +90,18 @@ export async function checkForUpdates(): Promise<void> {
 
 /** One delayed startup check. Failures stay in Settings and never open a modal. */
 export function scheduleStartupUpdateCheck(): () => void {
+  if (DEVELOPMENT_BUILD || !isTauri()) {
+    useUpdateStore.setState({ startupPending: false });
+    return () => {};
+  }
+  useUpdateStore.setState({ startupPending: true });
   let cancelled = false;
   const timer = window.setTimeout(() => {
-    if (DEVELOPMENT_BUILD || !isTauri()) return;
     void loadUpdatePreference().then(() => {
       if (!cancelled && useUpdateStore.getState().automatic) return checkForUpdates();
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) useUpdateStore.setState({ startupPending: false });
+    });
   }, 3_000);
   return () => { cancelled = true; window.clearTimeout(timer); };
 }

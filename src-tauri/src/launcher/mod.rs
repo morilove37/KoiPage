@@ -31,6 +31,7 @@ pub mod locale;
 pub mod magpie;
 pub mod luna;
 mod process_tree;
+pub mod sessions;
 use process_tree::TrackedChild;
 
 /// Settings key holding the path of the locale-emulation tool ("转区工具").
@@ -58,6 +59,7 @@ pub struct RunningGame {
     child: TrackedChild,
     pub session_id: i64,
     pub started_at: String,
+    clock: std::time::Instant,
 }
 
 enum ProcessState {
@@ -267,6 +269,9 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     // cannot both pass the registry check before either inserts its child.
     let running_state = app.state::<RunningGames>();
     let _launch_guard = running_state.1.lock().await;
+    if app.path().app_config_dir()?.join(".koipage-restore/ready").is_file() {
+        return Err(CmdError("恢复已准备完成，请完全退出恋页后重新打开，再启动游戏。".into()));
+    }
     let db = pool(&app).await?;
 
     let target = sqlx::query_as::<_, LaunchTarget>(
@@ -309,24 +314,32 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     // Start Magpie first when the user opted in, so the scaling hotkey is ready
     // by the time the game window appears. Best effort only — a missing or
     // broken Magpie install must never stop the game from launching.
-    if flag_is_on(setting(&db, magpie::AUTOSTART_KEY).await?.as_deref()) {
+    let launch_profile = crate::commands::launch_profiles::resolve(&db, game_id).await?;
+    if launch_profile.magpie && !launch_profile.profile.scaling_mode.trim().is_empty() && magpie::is_running() {
+        return Err(CmdError("Magpie 正在运行。请在启动面板中确认退出并重新启动 Magpie，以应用本款缩放模式。".into()));
+    }
+    if launch_profile.magpie {
         let source = setting(&db, magpie::SOURCE_KEY).await?;
         let custom = setting(&db, magpie::PATH_KEY).await?;
-        let scaling = setting(&db, magpie::SCALING_MODE_KEY).await?;
+        let scaling = launch_profile.scaling_mode.clone();
         magpie::autostart(&app, source.as_deref(), custom.as_deref(), scaling.as_deref());
     }
 
-    luna::autostart(&app).await;
+    if launch_profile.luna {
+        if let Err(error) = luna::luna_launch(app.clone()).await {
+            crate::app_warn!("[luna] optional per-game autostart: {error}");
+        }
+    }
 
-    let locale_use = flag_is_on(setting(&db, LOCALE_TOOL_USE_KEY).await?.as_deref());
+    let locale_use = launch_profile.locale;
     if locale_use && script {
         return Err(CmdError(
             "转区启动暂不支持 .bat/.cmd 启动脚本；请改用游戏 exe，或先关闭转区启动。".into(),
         ));
     }
     let (program, program_args): (PathBuf, Vec<String>) = if locale_use {
-        if setting(&db, LOCALE_TOOL_SOURCE_KEY).await?.as_deref() == Some("custom") {
-            let tool = setting(&db, LOCALE_TOOL_PATH_KEY).await?
+        if launch_profile.locale_source == "custom" {
+            let tool = launch_profile.locale_path.clone()
                 .filter(|path| Path::new(path).is_file())
                 .ok_or_else(|| CmdError("转区工具不存在，请在设置中选择工具，或改用内置 LE。".into()))?;
             let tool = PathBuf::from(tool);
@@ -408,6 +421,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
                 child,
                 session_id,
                 started_at: started_at.clone(),
+                clock: std::time::Instant::now(),
             },
         );
     }
@@ -417,6 +431,8 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     // launch checks lose sight of a process for its entire lifetime.
     let app_for_wait = app.clone();
     tauri::async_runtime::spawn(async move {
+        let mut checkpoint_clock = std::time::Instant::now();
+        let session_clock = std::time::Instant::now();
         loop {
             {
                 // Serialize removal and database settlement with launches, stops
@@ -429,15 +445,23 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
                 if let Err(error) = &state {
                     crate::app_warn!("[launcher] process query game_id={game_id}: {error}");
                 }
+                if checkpoint_clock.elapsed().as_secs() >= 30 {
+                    if let Err(error) = sessions::checkpoint(&db, session_id, session_clock.elapsed().as_secs() as i64).await {
+                        crate::app_warn!("[launcher] checkpoint session_id={session_id}: {error}");
+                    }
+                    checkpoint_clock = std::time::Instant::now();
+                }
                 if let Ok(ProcessState::Exited(exit_code)) = state {
-                    let _ = finish_session(
+                    if let Err(error) = finish_session(
                         &app_for_wait,
                         game_id,
                         session_id,
-                        &started_at,
+                        session_clock.elapsed().as_secs() as i64,
                         exit_code,
                     )
-                    .await;
+                    .await {
+                        crate::app_warn!("[launcher] settlement session_id={session_id}: {error}");
+                    }
                     return;
                 }
             }
@@ -480,45 +504,12 @@ async fn finish_session(
     app: &AppHandle,
     game_id: i64,
     session_id: i64,
-    started_at: &str,
+    elapsed: i64,
     exit_code: Option<i32>,
 ) -> CmdResult<GameExitedPayload> {
     let db = pool(app).await?;
-    let ended_at = now_iso8601();
-
-    let existing: Option<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT ended_at, duration_seconds FROM play_sessions WHERE id = ?",
-    )
-    .bind(session_id)
-    .fetch_optional(&db)
-    .await?;
-
-    let duration = match existing {
-        None => elapsed_seconds(started_at, &ended_at).unwrap_or(0),
-        Some((Some(_), stored)) => stored,
-        Some((None, _)) => {
-            let duration = elapsed_seconds(started_at, &ended_at).unwrap_or(0);
-            let mut tx = db.begin().await?;
-            sqlx::query("UPDATE play_sessions SET ended_at = ?, duration_seconds = ? WHERE id = ?")
-                .bind(&ended_at)
-                .bind(duration)
-                .bind(session_id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query(
-                "UPDATE games SET play_time_seconds = play_time_seconds + ?, last_played_at = ?, \
-                 updated_at = ? WHERE id = ?",
-            )
-            .bind(duration)
-            .bind(&ended_at)
-            .bind(&ended_at)
-            .bind(game_id)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            duration
-        }
-    };
+    let duration = sessions::settle(&db, session_id,
+        Some(elapsed)).await?;
 
     let payload = GameExitedPayload {
         game_id,
@@ -568,18 +559,11 @@ pub async fn stop_game(app: AppHandle, game_id: i64) -> CmdResult<bool> {
 
     // Reap the session here; the wait task in `launch_game` finds the map entry
     // already gone and returns without touching it.
-    finish_session(&app, game_id, entry.session_id, &entry.started_at, exit_code).await?;
+    finish_session(&app, game_id, entry.session_id, entry.clock.elapsed().as_secs() as i64, exit_code).await?;
 
     Ok(true)
 }
 
-/// Whole seconds between two ISO8601 timestamps, if both parse.
-fn elapsed_seconds(start: &str, end: &str) -> Option<i64> {
-    use time::format_description::well_known::Rfc3339;
-    let start = time::OffsetDateTime::parse(start, &Rfc3339).ok()?;
-    let end = time::OffsetDateTime::parse(end, &Rfc3339).ok()?;
-    Some((end - start).whole_seconds().max(0))
-}
 
 // ---------------------------------------------------------------------------
 // Export / import
@@ -1087,7 +1071,7 @@ mod tests {
             .creation_flags(0x0800_0000);
         let child = TrackedChild::spawn(&mut command).unwrap();
         let running = RunningGames::default();
-        running.0.lock().unwrap().insert(1, RunningGame { child, session_id: 42, started_at: now_iso8601() });
+        running.0.lock().unwrap().insert(1, RunningGame { child, session_id: 42, started_at: now_iso8601(), clock: std::time::Instant::now() });
         let live = matches!(running.poll_exit(1, 42), Ok(ProcessState::Alive));
         let old_watcher_ignored = matches!(running.poll_exit(1, 41), Ok(ProcessState::Gone));
         // Kill and reap the child even when an assertion below would fail.
