@@ -63,6 +63,10 @@ function Announcement({ kind, blocked }: { kind: AnnouncementKind; blocked: bool
     </div>}
   >
     <div data-announcement={kind} className="space-y-4">
+      <section aria-label="交流群" className="rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm">
+        <h3 className="font-semibold">欢迎进群交流、反馈问题～</h3>
+        <p className="mt-1 text-muted-foreground">QQ 群号：<span className="select-all font-semibold tabular-nums text-primary">{BRAND.communityGroup}</span></p>
+      </section>
       {kind === "welcome" ? <WelcomeContent /> : <VersionContent />}
       <AnnouncementContact />
       {state.error ? <p role="alert" className="text-sm text-destructive">{state.error}</p> : null}

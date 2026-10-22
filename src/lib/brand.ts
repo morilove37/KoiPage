@@ -18,5 +18,6 @@ export const BRAND = {
   douyinId: 'shuiwuyueying.',
   douyinUrl: 'https://www.douyin.com/user/MS4wLjABAAAAcKXZbXNLc87TzVG6SzTXl4hUtoA0QbGgt57arDh-HxvVRSovn5fPvJvcD2mbrX8f?from_tab_name=main',
   license: 'GPL-3.0-only',
+  communityGroup: '1055772679',
   version,
 } as const;

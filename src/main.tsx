@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import { initGlassAppearance } from "./features/settings/GlassAppearanceSettings";
 import { initBackdrop } from "./lib/backdrop";
 import { initTheme } from "./lib/theme";
 import { migrateCovers } from './lib/db';
@@ -31,7 +32,7 @@ if (import.meta.hot) import.meta.hot.dispose(disposeLogging);
  */
 async function bootstrap(): Promise<void> {
   try {
-    await Promise.all([initTheme(), initBackdrop()]);
+    await Promise.all([initTheme(), initBackdrop(), initGlassAppearance()]);
   } catch (error) {
     console.warn("[theme] could not apply the stored theme:", error);
   }

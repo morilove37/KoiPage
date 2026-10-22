@@ -1,8 +1,11 @@
 import { Link, useNavigate } from "react-router-dom";
 
+import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
 import { CoverImage } from "@/components/ui/cover-image";
 import { CoverCensorButton } from "@/features/covers/CoverControls";
+import { useGameCover } from "@/features/covers/store";
+import { effectiveCoverCrop } from "@/features/covers/model";
 import { cn } from "@/lib/utils";
 import { formatRating } from "@/lib/rating";
 import { openGameWithTransition } from "@/lib/game-opening";
@@ -29,6 +32,8 @@ export function GameCard({
   onToggleSelected,
 }: GameCardProps) {
   const favorite = isFavorite(game);
+  const { archived } = useGameInstallation(game.id);
+  const { preferences: coverPreferences } = useGameCover(game.id);
   const navigate = useNavigate();
 
   /**
@@ -79,12 +84,14 @@ export function GameCard({
           <CoverImage
             gameId={game.id}
             path={game.coverPath}
+            crop={effectiveCoverCrop(game.coverPath, coverPreferences)}
             alt={game.title}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
           </div>
 
           <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
+            {archived ? <Badge variant="secondary">已卸载 / 已归档</Badge> : null}
             <Badge variant="status" className="backdrop-blur">
               {GAME_STATUS_LABELS[game.status]}
             </Badge>

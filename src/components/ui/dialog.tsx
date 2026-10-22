@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
 
@@ -40,7 +41,9 @@ export function Dialog({
 
   if (!open) return null;
 
-  return (
+  // Filters/transforms on glass cards establish a containing block for fixed
+  // descendants. Portal outside scrolling cards so the modal uses the viewport.
+  return createPortal(
     <div
       role="presentation"
       onMouseDown={(event) => {
@@ -77,7 +80,7 @@ export function Dialog({
           <div className="flex flex-col gap-1 border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">{title}</h2>
             {description ? (
-              <p className="text-xs text-muted-foreground">{description}</p>
+              <div className="text-xs text-muted-foreground">{description}</div>
             ) : null}
           </div>
         ) : null}
@@ -90,7 +93,8 @@ export function Dialog({
           </div>
         ) : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

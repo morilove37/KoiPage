@@ -34,3 +34,12 @@ test('storage restart restores preferences and unavailable storage stays usable'
   else delete globalThis.localStorage;
  }
 });
+
+test('installation filter defaults safely and survives named preset storage', () => {
+ assert.equal(normalizeFilters({}).installation, 'all');
+ assert.equal(normalizeFilters({installation:'invalid'}).installation, 'all');
+ let p = parseLibraryPreferences(JSON.stringify({filters:{installation:'archived'}}));
+ p = savePreset(p,'已卸载');
+ assert.equal(parseLibraryPreferences(JSON.stringify(p)).presets[0].filters.installation,'archived');
+ assert.equal(normalizeFilters({installation:'installed'}).installation,'installed');
+});

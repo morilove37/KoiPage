@@ -1,5 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
+import { matchesInstallation } from "@/features/installation/model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/card";
@@ -98,7 +100,8 @@ export default function LibraryPage() {
   const setLibraryFilters = useAppStore(s => s.setLibraryFilters);
   const saveLibraryPreset = useAppStore(s => s.saveLibraryPreset);
   const deleteLibraryPreset = useAppStore(s => s.deleteLibraryPreset);
-  const { search, status, favoriteOnly, activeTagIds, developer } = filters;
+  const { search, status, favoriteOnly, activeTagIds, developer, installation } = filters;
+  const archived = useInstallationStore(state => state.archived);
   const setFilter = <K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K] | ((current: LibraryFilters[K]) => LibraryFilters[K])) => {
     const current = useAppStore.getState().library.filters;
     setLibraryFilters({ ...current, [key]: typeof value === "function" ? value(current[key]) : value });
@@ -176,6 +179,7 @@ export default function LibraryPage() {
         tagsList(),
         gamesTagsGet(),
         gamesStats(),
+        loadInstallationState(),
       ]);
       setGames(nextGames);
       setTags(nextTags);
@@ -265,6 +269,7 @@ export default function LibraryPage() {
   const visibleGames = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const filtered = games.filter((game) => {
+      if (!matchesInstallation(installation, Boolean(archived[game.id]))) return false;
       if (needle) {
         const haystack = [game.title, game.originalTitle, game.developer]
           .filter((value): value is string => Boolean(value))
@@ -309,6 +314,8 @@ export default function LibraryPage() {
       }
     });
   }, [
+    archived,
+    installation,
     games,
     search,
     status,
@@ -423,6 +430,7 @@ export default function LibraryPage() {
   };
 
   const resetFilters = () => {
+    setFilter("installation", "all");
     setSearch("");
     setStatus("");
     setFavoriteOnly(false);
@@ -450,6 +458,7 @@ export default function LibraryPage() {
   };
 
   const hasFilters =
+    installation !== "all" ||
     search.trim() !== "" ||
     status !== "" ||
     favoriteOnly ||
@@ -596,6 +605,8 @@ export default function LibraryPage() {
               placeholder="标题 / 原名 / 开发商"
             />
           </div>
+
+          <LabeledSelect label="安装状态" className="w-36 gap-1" value={installation} onValueChange={value => setFilter("installation", value as LibraryFilters["installation"])} options={[{value:"all",label:"全部安装状态"},{value:"installed",label:"已安装"},{value:"archived",label:"已卸载 / 已归档"}]} />
 
           <LabeledSelect
             label="状态"

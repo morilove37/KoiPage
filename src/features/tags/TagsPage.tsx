@@ -55,7 +55,16 @@ export default function TagsPage() {
   const [editName, setEditName] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const [pendingDelete, setPendingDelete] = useState<Tag | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Tag[] | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const selectedTags = tags.filter(tag => selectedIds.has(tag.id));
+  const toggleSelected = (id: number) => setSelectedIds(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const [deleting, setDeleting] = useState(false);
 
   /** Tag ids whose "games using this tag" panel is open. */
@@ -299,16 +308,26 @@ export default function TagsPage() {
   };
 
   const remove = async () => {
-    if (!pendingDelete) return;
+    if (!pendingDelete?.length || deleting) return;
     setDeleting(true);
+    setDeleteError(null);
     setError(null);
     try {
-      await tagDelete(pendingDelete.id);
-      setNotice(`已删除标签「${pendingDelete.name}」。`);
-      setPendingDelete(null);
-      await reload();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const results = await Promise.allSettled(pendingDelete.map(tag => tagDelete(tag.id)));
+      const removed = new Set(pendingDelete.filter((_, i) => results[i].status === 'fulfilled').map(tag => tag.id));
+      const failed = pendingDelete.filter(tag => !removed.has(tag.id));
+      setTags(current => current.filter(tag => !removed.has(tag.id)));
+      setLinks(current => current.filter(([, tagId]) => !removed.has(tagId)));
+      setSelectedIds(current => new Set([...current].filter(id => !removed.has(id))));
+      setExpandedTagIds(current => new Set([...current].filter(id => !removed.has(id))));
+      if (removed.size) setNotice(`已删除 ${removed.size} 个标签，游戏和游玩记录保留。`);
+      if (failed.length) {
+        setPendingDelete(failed);
+        setDeleteError(`${failed.length} 个标签删除失败，可重试：${summariseNames(failed.map(tag => t(tag.name)))}`);
+      } else {
+        setPendingDelete(null);
+        setSelecting(false);
+      }
     } finally {
       setDeleting(false);
     }
@@ -360,6 +379,18 @@ export default function TagsPage() {
         </p>
       ) : null}
 
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3" data-tag-selection>
+        <Button size="sm" variant="outline" disabled={loading || deleting || !tags.length || creating || savingEdit} aria-pressed={selecting} onClick={() => {
+          setSelecting(!selecting); setSelectedIds(new Set()); setEditingId(null);
+        }}>{selecting ? '取消多选' : '多选删除'}</Button>
+        {selecting && <>
+          <span className="text-xs text-muted-foreground">已选 {selectedTags.length} / {tags.length} 个标签</span>
+          <Button size="sm" variant="ghost" disabled={deleting} onClick={() => setSelectedIds(new Set(tags.map(tag => tag.id)))}>全选</Button>
+          <Button size="sm" variant="ghost" disabled={deleting || !selectedTags.length} onClick={() => setSelectedIds(new Set())}>清空选择</Button>
+          <Button size="sm" variant="destructive" disabled={deleting || !selectedTags.length} onClick={() => { setDeleteError(null); setPendingDelete(selectedTags); }}>删除选中（{selectedTags.length}）</Button>
+        </>}
+      </div>
+
       {/* Create ---------------------------------------------------------- */}
       <Card>
         <CardContent className="flex flex-col gap-3 p-4">
@@ -399,7 +430,7 @@ export default function TagsPage() {
           {tags.map((tag) => {
             const editing = editingId === tag.id;
             const used = usageCount.get(tag.id) ?? 0;
-            const expanded = expandedTagIds.has(tag.id) && !editing;
+            const expanded = expandedTagIds.has(tag.id) && !editing && !selecting;
             const taggedGames = gamesByTag.get(tag.id) ?? [];
             const panelId = `tag-games-${tag.id}`;
 
@@ -417,21 +448,22 @@ export default function TagsPage() {
                   role={editing ? undefined : "button"}
                   tabIndex={editing ? undefined : 0}
                   aria-current={targetTagId === tag.id ? "location" : undefined}
-                  aria-expanded={editing ? undefined : expanded}
+                  aria-expanded={editing || selecting ? undefined : expanded}
+                  aria-pressed={selecting ? selectedIds.has(tag.id) : undefined}
                   aria-controls={expanded ? panelId : undefined}
                   title={
                     editing
                       ? undefined
-                      : `点击${expanded ? "收起" : "展开"}使用「${t(tag.name)}」的作品`
+                      : selecting ? `选择「${t(tag.name)}」` : `点击${expanded ? "收起" : "展开"}使用「${t(tag.name)}」的作品`
                   }
                   onClick={() => {
-                    if (!editing) toggleExpanded(tag.id);
+                    if (!editing && !deleting) { if (selecting) toggleSelected(tag.id); else toggleExpanded(tag.id); }
                   }}
                   onKeyDown={(event) => {
                     if (editing || event.target !== event.currentTarget) return;
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      toggleExpanded(tag.id);
+                      if (!deleting) { if (selecting) toggleSelected(tag.id); else toggleExpanded(tag.id); }
                     }
                   }}
                   className={cn(
@@ -440,9 +472,12 @@ export default function TagsPage() {
                       ? ""
                       : "cursor-pointer hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     expanded ? "bg-accent/30" : "",
+                    selecting && selectedIds.has(tag.id) ? "bg-primary/10 ring-1 ring-inset ring-primary/50" : "",
                     targetTagId === tag.id ? "bg-primary/10 ring-2 ring-inset ring-primary" : "",
                   )}
                 >
+                  {selecting && <input type="checkbox" className="size-4 shrink-0 accent-primary" checked={selectedIds.has(tag.id)} disabled={deleting}
+                    aria-label={`选择标签「${t(tag.name)}」`} onClick={event => event.stopPropagation()} onChange={() => toggleSelected(tag.id)} />}
                   {editing ? (
                     <>
                       <div className="flex flex-1 flex-col gap-2">
@@ -494,6 +529,7 @@ export default function TagsPage() {
                         <Button
                           size="sm"
                           variant="outline"
+                          disabled={selecting || deleting}
                           onClick={(event) => {
                             event.stopPropagation();
                             startEdit(tag);
@@ -505,9 +541,10 @@ export default function TagsPage() {
                           size="sm"
                           variant="ghost"
                           className="text-destructive hover:bg-destructive/10"
+                          disabled={selecting || deleting}
                           onClick={(event) => {
                             event.stopPropagation();
-                            setPendingDelete(tag);
+                            setDeleteError(null); setPendingDelete([tag]);
                           }}
                         >
                           删除
@@ -568,19 +605,15 @@ export default function TagsPage() {
         open={pendingDelete !== null}
         destructive
         busy={deleting}
-        title="删除标签？"
-        description={
-          pendingDelete
-            ? (usageCount.get(pendingDelete.id) ?? 0) > 0
-              ? `「${pendingDelete.name}」已用于 ${
-                  usageCount.get(pendingDelete.id) ?? 0
-                } 部游戏。删除后这些游戏的标签关联也会一并移除。`
-              : `「${pendingDelete.name}」没有被任何游戏使用。删除后无法恢复。`
-            : undefined
-        }
-        confirmText="删除"
+        title={pendingDelete && pendingDelete.length > 1 ? `删除 ${pendingDelete.length} 个标签？` : '删除标签？'}
+        description={pendingDelete ? <div className="space-y-2">
+          <p>将删除 {pendingDelete.length} 个标签：{summariseNames(pendingDelete.map(tag => t(tag.name)), 12)}。</p>
+          <p>这些标签与游戏的关联会一并移除，游戏和游玩记录保留。删除后无法恢复。</p>
+          {deleteError && <p role="alert" className="text-destructive">{deleteError}</p>}
+        </div> : undefined}
+        confirmText={deleting ? '删除中…' : '确定删除'}
         onConfirm={() => void remove()}
-        onCancel={() => setPendingDelete(null)}
+        onCancel={() => { if (!deleting) setPendingDelete(null); }}
       />
     </div>
   );

@@ -32,7 +32,37 @@ async fn title_preference(pool: &sqlx::Pool<sqlx::Sqlite>) -> TitlePreference {
 
 async fn source_preference(pool: &sqlx::SqlitePool) -> CmdResult<Provider> {
     let value = settings_get_impl(pool, metadata::DEFAULT_SOURCE_KEY).await?;
-    Ok(metadata::default_source(value.as_deref()))
+    let preferred = metadata::default_source(value.as_deref());
+    let enabled = enabled_sources(pool).await?;
+    Ok(enabled.iter().find(|source| source.provider() == preferred)
+        .or_else(|| enabled.first()).map(|source| source.provider()).unwrap_or(preferred))
+}
+
+const ENABLED_SOURCES_KEY: &str = "metadata_enabled_sources";
+const ALL_SOURCES: [Sources; 4] = [Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan];
+
+async fn enabled_sources(pool: &sqlx::SqlitePool) -> CmdResult<Vec<Sources>> {
+    let Some(stored) = settings_get_impl(pool, ENABLED_SOURCES_KEY).await? else {
+        return Ok(ALL_SOURCES.to_vec());
+    };
+    // Malformed/empty explicit settings must never silently re-enable a source.
+    let values = serde_json::from_str::<Vec<serde_json::Value>>(&stored).unwrap_or_default();
+    let mut enabled = Vec::new();
+    for value in values {
+        if let Some(source) = value.as_str().and_then(Sources::parse) {
+            if !enabled.contains(&source) { enabled.push(source); }
+        }
+    }
+    Ok(enabled)
+}
+
+fn requested_sources(requested: &[String], enabled: &[Sources]) -> CmdResult<Vec<Sources>> {
+    let wanted: Vec<_> = enabled.iter().copied().filter(|source| requested.is_empty()
+        || requested.iter().any(|name| Sources::parse(name) == Some(*source))).collect();
+    if wanted.is_empty() {
+        return Err(CmdError("没有可用的搜索数据源，请在设置中启用至少一个数据源。".into()));
+    }
+    Ok(wanted)
 }
 
 fn search_result(query: &str, mut candidates: Vec<MetadataCandidate>, errors: Vec<ProviderError>, preferred: Provider) -> MetadataSearchResult {
@@ -56,6 +86,14 @@ pub enum Sources {
 }
 
 impl Sources {
+    fn provider(self) -> Provider {
+        match self {
+            Self::Nextmoe => Provider::Nextmoe,
+            Self::Vndb => Provider::Vndb,
+            Self::Bangumi => Provider::Bangumi,
+            Self::TwoDfan => Provider::TwoDfan,
+        }
+    }
     fn parse(value: &str) -> Option<Self> {
         match value {
             "nextmoe" => Some(Self::Nextmoe),
@@ -159,19 +197,12 @@ pub async fn metadata_search(
     let query = required_string(&query, "query")?;
     let limit = limit.unwrap_or(10).clamp(1, 30);
 
-    let wanted: Vec<Sources> = if sources.is_empty() {
-        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan]
-    } else {
-        sources.iter().filter_map(|s| Sources::parse(s)).collect()
-    };
-    if wanted.is_empty() {
-        return Err(CmdError(
-            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi / 2dfan）".to_string(),
-        ));
-    }
+    let pool = pool(&app).await?;
+    let enabled = enabled_sources(&pool).await?;
+    let wanted = requested_sources(&sources, &enabled)?;
 
     let key = nextmoe_key(&app).await;
-    let preferred = source_preference(&pool(&app).await?).await?;
+    let preferred = source_preference(&pool).await?;
     let (candidates, errors) = search_all(&query, &wanted, limit, key.as_deref()).await;
 
     Ok(search_result(&query, candidates, errors, preferred))
@@ -193,8 +224,12 @@ pub async fn metadata_detail(
         .ok_or_else(|| CmdError(format!("未知的数据源：{provider}")))?;
     let external_id = required_string(&external_id, "externalId")?;
 
+    let enabled = enabled_sources(&pool(&app).await?).await?;
+    if !enabled.contains(&provider) {
+        return Err(CmdError("该数据源已停用，请在设置中启用后重试。".into()));
+    }
     let key = nextmoe_key(&app).await;
-    resolve_detail(provider, &external_id, key.as_deref()).await
+    resolve_detail(provider, &external_id, key.as_deref(), &enabled).await
 }
 
 /// Resolve one provider id into merged metadata, enriching from NextMoe.
@@ -205,6 +240,7 @@ async fn resolve_detail(
     provider: Sources,
     external_id: &str,
     nextmoe_key: Option<&str>,
+    enabled: &[Sources],
 ) -> CmdResult<MetadataDetail> {
     let primary = match provider {
         Sources::Nextmoe => nextmoe::detail(external_id, nextmoe_key).await?,
@@ -216,7 +252,7 @@ async fn resolve_detail(
     // Failure is expected (NextMoe may not know the work) and must not break
     // the lookup.
     let mut detail = primary;
-    if matches!(provider, Sources::Vndb | Sources::Bangumi) {
+    if enabled.contains(&Sources::Nextmoe) && matches!(provider, Sources::Vndb | Sources::Bangumi) {
         let source_name = match provider {
             Sources::Vndb => "vndb",
             Sources::Bangumi => "bangumi",
@@ -625,18 +661,9 @@ pub async fn metadata_autofetch(
     let apply = apply.unwrap_or(true);
     let delay = delay_ms.unwrap_or(DEFAULT_AUTOFETCH_DELAY_MS).min(10_000);
 
-    let wanted: Vec<Sources> = if sources.is_empty() {
-        vec![Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan]
-    } else {
-        sources.iter().filter_map(|s| Sources::parse(s)).collect()
-    };
-    if wanted.is_empty() {
-        return Err(CmdError(
-            "sources 里没有可识别的数据源（可用：nextmoe / vndb / bangumi / 2dfan）".to_string(),
-        ));
-    }
-
     let pool = pool(&app).await?;
+    let enabled = enabled_sources(&pool).await?;
+    let wanted = requested_sources(&sources, &enabled)?;
     let key = settings_get_impl(&pool, NEXTMOE_KEY).await.ok().flatten();
     let key_ref = key.as_deref();
 
@@ -726,7 +753,7 @@ pub async fn metadata_autofetch(
                     let mut resolved = None;
                     let mut failures = Vec::new();
                     for (alternative, confidence) in &ranked {
-                        match fetch_detail(alternative.provider, &alternative.external_id, key_ref).await {
+                        match fetch_detail(alternative.provider, &alternative.external_id, key_ref, &enabled).await {
                             Ok(detail) => {
                                 outcome.provider = Some(alternative.provider);
                                 outcome.external_id = Some(alternative.external_id.clone());
@@ -832,6 +859,7 @@ async fn fetch_detail(
     provider: Provider,
     external_id: &str,
     nextmoe_key: Option<&str>,
+    enabled: &[Sources],
 ) -> CmdResult<MetadataDetail> {
     let sources = match provider {
         Provider::Nextmoe => Sources::Nextmoe,
@@ -839,7 +867,7 @@ async fn fetch_detail(
         Provider::Bangumi => Sources::Bangumi,
         Provider::TwoDfan => Sources::TwoDfan,
     };
-    resolve_detail(sources, external_id, nextmoe_key).await
+    resolve_detail(sources, external_id, nextmoe_key, enabled).await
 }
 
 /// Shared by manual matching and automatic metadata imports.
@@ -850,6 +878,25 @@ async fn cache_cover(url: &str, directory: &std::path::Path) -> CmdResult<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn enabled_sources_filter_all_entry_points_and_disabled_default() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)").execute(&db).await.unwrap();
+        assert_eq!(enabled_sources(&db).await.unwrap(), ALL_SOURCES);
+        sqlx::query("INSERT INTO settings VALUES('metadata_enabled_sources', '[\"bangumi\",\"2dfan\",\"unknown\",\"bangumi\"]')").execute(&db).await.unwrap();
+        let enabled = enabled_sources(&db).await.unwrap();
+        assert_eq!(enabled, vec![Sources::Bangumi, Sources::TwoDfan]);
+        assert_eq!(requested_sources(&[], &enabled).unwrap(), enabled);
+        assert_eq!(requested_sources(&fields(&["nextmoe", "2dfan"]), &enabled).unwrap(), vec![Sources::TwoDfan]);
+        assert!(requested_sources(&fields(&["vndb"]), &enabled).is_err());
+        assert_eq!(source_preference(&db).await.unwrap(), Provider::Bangumi);
+        for invalid in ["[]", "broken", "{}", "[\"unknown\"]"] {
+            sqlx::query("UPDATE settings SET value = ? WHERE key = 'metadata_enabled_sources'").bind(invalid).execute(&db).await.unwrap();
+            assert!(enabled_sources(&db).await.unwrap().is_empty());
+            assert!(requested_sources(&[], &enabled_sources(&db).await.unwrap()).is_err());
+        }
+    }
 
     fn source_candidate(provider: Provider, title: &str) -> MetadataCandidate {
         MetadataCandidate { provider, external_id: provider.as_str().into(), title: title.into(), original_title: None,

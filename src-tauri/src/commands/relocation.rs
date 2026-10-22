@@ -92,6 +92,15 @@ fn fingerprint(row: &Paths, old: &str, new: &str) -> String {
     ]);
     format!("{:x}", Sha256::digest(data.to_string().as_bytes()))
 }
+async fn archived_ids(db: &SqlitePool) -> CmdResult<HashSet<i64>> {
+    let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM settings WHERE value='true' AND key LIKE 'game_archived:%'")
+        .fetch_all(db).await?;
+    Ok(keys.into_iter().filter_map(|key| {
+        let suffix = key.strip_prefix("game_archived:")?;
+        let id = suffix.parse::<i64>().ok()?;
+        (id > 0 && id.to_string() == suffix).then_some(id)
+    }).collect())
+}
 async fn rows(db: &SqlitePool) -> CmdResult<Vec<Paths>> {
     Ok(sqlx::query_as(
         "SELECT id,title,install_path,exe_path,workdir,save_path FROM games ORDER BY id",
@@ -183,6 +192,7 @@ fn plan(all: &[Paths], ids: &[i64], old: &str, new: &str) -> CmdResult<Vec<Reloc
 pub async fn game_paths_check(app: AppHandle) -> CmdResult<Vec<PathCheck>> {
     let db = pool(&app).await?;
     let all = rows(&db).await?;
+    let archived = archived_ids(&db).await?;
     tauri::async_runtime::spawn_blocking(move || {
         all.into_iter()
             .map(|row| {
@@ -190,7 +200,9 @@ pub async fn game_paths_check(app: AppHandle) -> CmdResult<Vec<PathCheck>> {
                     .components()
                     .take(2)
                     .collect::<std::path::PathBuf>();
-                let state = if !root.exists() {
+                let state = if archived.contains(&row.id) {
+                    "archived"
+                } else if !root.exists() {
                     "offline"
                 } else if !Path::new(&row.install_path).is_dir() {
                     "missingFolder"
@@ -222,8 +234,14 @@ pub async fn game_paths_preview(
     old_root: String,
     new_root: String,
 ) -> CmdResult<Vec<RelocationRow>> {
-    let all = rows(&pool(&app).await?).await?;
-    tauri::async_runtime::spawn_blocking(move || plan(&all, &[], &old_root, &new_root))
+    let db = pool(&app).await?;
+    let archived = archived_ids(&db).await?;
+    let all = rows(&db).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let result: Vec<_> = plan(&all, &[], &old_root, &new_root)?.into_iter().filter(|row| !archived.contains(&row.id)).collect();
+        if result.is_empty() { return Err(CmdError("没有匹配旧目录的已安装游戏".into())); }
+        Ok(result)
+    })
         .await
         .map_err(|e| CmdError(e.to_string()))?
 }
@@ -249,6 +267,10 @@ async fn apply(
         sqlx::query_as("SELECT id,title,install_path,exe_path,workdir,save_path FROM games")
             .fetch_all(&mut *tx)
             .await?;
+    for id in ids {
+        let archived: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key=?").bind(format!("game_archived:{id}")).fetch_optional(&mut *tx).await?.flatten();
+        if archived.as_deref() == Some("true") { return Err(CmdError("所选游戏已归档，请重新预览路径变更".into())); }
+    }
     let changes = plan(&all, ids, old, new)?;
     if changes.len() != ids.len() || changes.iter().any(|r| !r.ready) {
         return Err(CmdError(
@@ -321,7 +343,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE games(id INTEGER PRIMARY KEY,title TEXT,install_path TEXT UNIQUE,exe_path TEXT,workdir TEXT,save_path TEXT,updated_at TEXT); INSERT INTO games VALUES(1,'A','D:\\Gal\\A','D:\\Gal\\A\\game.exe',NULL,NULL,'');").execute(&db).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE games(id INTEGER PRIMARY KEY,title TEXT,install_path TEXT UNIQUE,exe_path TEXT,workdir TEXT,save_path TEXT,updated_at TEXT); INSERT INTO games VALUES(1,'A','D:\\Gal\\A','D:\\Gal\\A\\game.exe',NULL,NULL,'');").execute(&db).await.unwrap();
         assert!(
             apply(&db, r"D:\Gal", r"Z:\missing-test-target", &[1], &[])
                 .await
@@ -337,6 +359,10 @@ mod tests {
                 .await
                 .is_err()
         );
+        sqlx::query("INSERT INTO settings(key,value) VALUES('game_archived:1','true')").execute(&db).await.unwrap();
+        assert!(archived_ids(&db).await.unwrap().contains(&1));
+        let error = apply(&db, r"D:\Gal", r"Z:\missing-test-target", &[1], &[]).await.unwrap_err();
+        assert!(error.0.contains("已归档"));
         db.close().await;
     }
 
@@ -355,7 +381,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::raw_sql("CREATE TABLE games(id INTEGER PRIMARY KEY,title TEXT,install_path TEXT UNIQUE,exe_path TEXT,workdir TEXT,save_path TEXT,updated_at TEXT); INSERT INTO games VALUES(7,'A','D:\\Gal\\A','D:\\Gal\\A\\game.exe','D:\\Gal\\A','D:\\Gal\\A\\save','');").execute(&db).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE games(id INTEGER PRIMARY KEY,title TEXT,install_path TEXT UNIQUE,exe_path TEXT,workdir TEXT,save_path TEXT,updated_at TEXT); INSERT INTO games VALUES(7,'A','D:\\Gal\\A','D:\\Gal\\A\\game.exe','D:\\Gal\\A','D:\\Gal\\A\\save','');").execute(&db).await.unwrap();
         let preview = plan(&rows(&db).await.unwrap(), &[7], r"D:\Gal", &target).unwrap();
         let expected = vec![PathExpectation {
             id: 7,

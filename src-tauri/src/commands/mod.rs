@@ -8,6 +8,8 @@
 
 pub mod error;
 pub mod backup;
+pub mod installation;
+pub mod save_backups;
 pub mod launch_profiles;
 pub mod relocation;
 pub mod library_batch;

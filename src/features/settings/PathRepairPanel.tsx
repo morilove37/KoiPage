@@ -8,9 +8,9 @@ import { invoke } from '@/lib/logging';
 import { errorMessage } from '@/features/io/io';
 import { useAppStore } from '@/store/app';
 
-interface PathCheck { id: number; title: string; installPath: string; exePath: string | null; state: 'ok' | 'offline' | 'missingFolder' | 'missingExe' }
+interface PathCheck { id: number; title: string; installPath: string; exePath: string | null; state: 'archived' | 'ok' | 'offline' | 'missingFolder' | 'missingExe' }
 interface Relocation { id: number; title: string; oldInstallPath: string; newInstallPath: string; newExePath: string | null; newWorkdir: string | null; newSavePath: string | null; ready: boolean; message: string; fingerprint: string }
-const stateLabels = { ok: '正常', offline: '磁盘离线或不可访问', missingFolder: '安装目录缺失', missingExe: '启动文件缺失' };
+const stateLabels = { archived: '已卸载 / 已归档', ok: '正常', offline: '磁盘离线或不可访问', missingFolder: '安装目录缺失', missingExe: '启动文件缺失' };
 
 export function PathRepairPanel() {
   const [checks, setChecks] = useState<PathCheck[] | null>(null);
@@ -40,8 +40,8 @@ export function PathRepairPanel() {
   }); }
   const updateRoot = (kind: 'old' | 'new', value: string) => { if (kind === 'old') setOldRoot(value); else setNewRoot(value); setPreview(null); setSelected(new Set()); };
   return <div className="space-y-4">
-    <div><Button variant="outline" loading={busy} onClick={() => void check()}>检查游戏路径</Button><p className="mt-2 text-xs leading-relaxed text-muted-foreground">检查安装目录与启动程序。外接硬盘暂未连接时保留收藏，重新连接后再检查即可。</p></div>
-    {checks ? <div className="space-y-2 text-xs"><p>已检查 {checks.length} 部，正常 {checks.filter(row => row.state === 'ok').length} 部，需检查 {checks.filter(row => row.state !== 'ok').length} 部。</p><ul className="max-h-48 divide-y divide-border overflow-y-auto rounded-md border border-border">{checks.filter(row => row.state !== 'ok').map(row => <li key={row.id} className="space-y-1 p-2"><p className="font-medium">{row.title} · {stateLabels[row.state]}</p><p className="break-all text-muted-foreground">{row.exePath || row.installPath}</p></li>)}</ul></div> : null}
+    <div><Button variant="outline" loading={busy} onClick={() => void check()}>检查游戏路径</Button><p className="mt-2 text-xs leading-relaxed text-muted-foreground">检查安装目录与启动程序；已卸载 / 已归档的游戏不计入路径异常，也不参与批量修复。外接硬盘暂未连接时保留收藏，重新连接后再检查即可。</p></div>
+    {checks ? <div className="space-y-2 text-xs"><p>已检查 {checks.length} 部，正常 {checks.filter(row => row.state === 'ok').length} 部，已归档 {checks.filter(row => row.state === 'archived').length} 部，需检查 {checks.filter(row => row.state !== 'ok' && row.state !== 'archived').length} 部。</p><ul className="max-h-48 divide-y divide-border overflow-y-auto rounded-md border border-border">{checks.filter(row => row.state !== 'ok').map(row => <li key={row.id} className="space-y-1 p-2"><p className="font-medium">{row.title} · {stateLabels[row.state]}</p><p className="break-all text-muted-foreground">{row.exePath || row.installPath}</p></li>)}</ul></div> : null}
     <div className="space-y-3 border-t border-border pt-4"><h3 className="text-sm font-medium">游戏搬盘后的批量修复</h3><p className="text-xs text-muted-foreground">例如将 D:\Galgame 改为 E:\Games。同步更新目录下的启动程序、工作目录与存档路径，只更新记录，不搬动游戏文件。</p>
       <Field label="原游戏根目录"><PathInput label="原游戏根目录" kind="directory" value={oldRoot} disabled={busy} onChange={value => updateRoot('old', value)} /></Field>
       <Field label="新游戏根目录"><PathInput label="新游戏根目录" kind="directory" value={newRoot} disabled={busy} onChange={value => updateRoot('new', value)} /></Field>

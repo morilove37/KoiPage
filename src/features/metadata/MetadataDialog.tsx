@@ -71,7 +71,7 @@ import {
 import { ManualEntryForm } from "./ManualEntryForm";
 import { ImportWaitDialog } from "./ImportWaitDialog";
 import { createGameFromMetadata } from "./create-game";
-import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from "./preferences";
+import { DEFAULT_SOURCE_KEY, ENABLED_SOURCES_KEY, normalizeDefaultSource, normalizeEnabledSources } from "./preferences";
 
 export interface MetadataDialogProps {
   open: boolean;
@@ -156,25 +156,41 @@ export default function MetadataDialog({
   // Use the same title-language preference for confirmation and auto-fetch.
   const [titlePreference, setTitlePreference] = useState<MetadataTitlePreference>("zh");
   const [defaultSource, setDefaultSource] = useState<MetadataProvider>("vndb");
-  const orderedProviders = useMemo(() => [defaultSource, ...ALL_PROVIDERS.filter(provider => provider !== defaultSource)], [defaultSource]);
+  const [enabledSources, setEnabledSources] = useState<MetadataProvider[]>([]);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const orderedProviders = useMemo(() => enabledSources.includes(defaultSource)
+    ? [defaultSource, ...enabledSources.filter(provider => provider !== defaultSource)] : enabledSources, [defaultSource, enabledSources]);
 
   useEffect(() => {
     if (!open) return;
+    setPreferencesReady(false);
+    setEnabledSources([]);
     let cancelled = false;
-    void Promise.all([settingsGet(TITLE_LANGUAGE_KEY), settingsGet(DEFAULT_SOURCE_KEY)])
-      .then(([value, source]) => {
+    void Promise.all([settingsGet(TITLE_LANGUAGE_KEY), settingsGet(DEFAULT_SOURCE_KEY), settingsGet(ENABLED_SOURCES_KEY)])
+      .then(([value, source, enabled]) => {
         if (!cancelled) {
+          const providers = normalizeEnabledSources(enabled);
           setTitlePreference(normalizeTitlePreference(value));
-          setDefaultSource(normalizeDefaultSource(source));
+          setDefaultSource(normalizeDefaultSource(source, providers));
+          setEnabledSources(providers);
+          setSources(providers);
+          setPreferencesReady(providers.length > 0);
+          if (!providers.length) {
+            setSearching(false);
+            setSearchError('没有启用的数据源，请先在设置中勾选搜索数据源。');
+          }
         }
       })
-      .catch(() => {
-        // The preview falls back to the Chinese-first default.
+      .catch((cause) => {
+        if (!cancelled) {
+          setSearching(false);
+          setSearchError(`读取搜索数据源设置失败：${errorMessage(cause)}`);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, gameId, initialQuery, autoSearchOnOpen, initialMode, draft?.installPath]);
   const { t, enabled: localizationEnabled } = useLocalizedTags();
   // Use the submitted query that produced these candidates. Editing the input
   // without searching again must not attach an unrelated name to stale results.
@@ -212,7 +228,7 @@ export default function MetadataDialog({
     setMode(initialMode);
     setQuery(initialQuery?.trim() ?? "");
     setSearchedTitle("");
-    setSources([...ALL_PROVIDERS]);
+    setSources([]);
     setSearching(autoSearchOnOpen);
     setResult(null);
     setSearchError(null);
@@ -276,13 +292,13 @@ export default function MetadataDialog({
   }, []);
 
   const runSearch = useCallback(
-    () => performSearch(query, sources),
-    [performSearch, query, sources],
+    () => preferencesReady ? performSearch(query, sources.filter(provider => enabledSources.includes(provider))) : Promise.resolve(),
+    [performSearch, query, sources, preferencesReady, enabledSources],
   );
 
   useEffect(() => {
     if (!open) { autoSearchKeyRef.current = ""; return; }
-    if (!autoSearchOnOpen) return;
+    if (!autoSearchOnOpen || !preferencesReady) return;
     const initial = initialQuery?.trim() ?? "";
     if (initial === "") return;
     const key = `${gameId ?? draft?.installPath}\n${initial}`;
@@ -291,10 +307,10 @@ export default function MetadataDialog({
     // duplicate network search or reset a live request.
     const timer = window.setTimeout(() => {
       autoSearchKeyRef.current = key;
-      void performSearch(initial, [...ALL_PROVIDERS]);
+      void performSearch(initial, enabledSources);
     }, 0);
     return () => { window.clearTimeout(timer); };
-  }, [open, gameId, draft?.installPath, initialQuery, autoSearchOnOpen, performSearch]);
+  }, [open, gameId, draft?.installPath, initialQuery, autoSearchOnOpen, performSearch, preferencesReady, enabledSources]);
 
   const choose = useCallback(async (candidate: MetadataCandidate) => {
     const seq = detailSeq.current + 1;
@@ -466,7 +482,7 @@ export default function MetadataDialog({
       description={
         mode === "manual"
           ? "填写游戏资料后保存，也可以返回搜索修改名称重新匹配。"
-          : "从鲲 Galgame 论坛 / VNDB / Bangumi / 2DFan 搜索。请核对封面、名称和发售日，确认是同一作品后保存。"
+          : "从设置中启用的数据源搜索。请核对封面、名称和发售日，确认是同一作品后保存。"
       }
       footer={
         mode === "manual" ? (
@@ -548,7 +564,7 @@ export default function MetadataDialog({
                   autoFocus
                 />
               </div>
-              <Button type="submit" loading={searching} disabled={searching || applying}>
+              <Button type="submit" loading={searching} disabled={searching || applying || !preferencesReady}>
                 搜索
               </Button>
             </div>
@@ -571,7 +587,7 @@ export default function MetadataDialog({
                 </label>
               ))}
               <span className="text-xs text-muted-foreground">
-                NextMoe 覆盖率约 27%，建议多源交叉核对。
+                搜索范围可在设置 → 资料匹配中调整。
               </span>
             </div>
           </form>
