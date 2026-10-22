@@ -9,6 +9,10 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
 import { CoverControls } from "@/features/covers/CoverControls";
+import { ArchivePanel } from '@/features/installation/ArchivePanel';
+import { useGameInstallation } from '@/features/installation/store';
+import { SaveBackupPanel } from '@/features/save-backups/SaveBackupPanel';
+import { useCoverCropEditor } from "@/features/covers/CoverCropEditor";
 import { useGameCover } from "@/features/covers/store";
 import { effectiveCoverPath } from "@/features/covers/model";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -151,11 +155,13 @@ export default function GameDetailPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const gameId = Number(id);
+  const installation = useGameInstallation(gameId);
   const { preferences: coverPreferences } = useGameCover(gameId);
   const playTimeRevision = useAppStore((s) => s.playTimeRevision);
 
   const [game, setGame] = useState<GameDetail | null>(null);
   const [coverSize, setCoverSize] = useState<{ path: string | null; width: number; height: number } | null>(null);
+  const cropEditor = useCoverCropEditor({ gameId, sourcePath: game?.coverPath ?? null, title: game?.title ?? '', dimensions: coverSize });
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [sessions, setSessions] = useState<PlaySession[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
@@ -168,7 +174,7 @@ export default function GameDetailPage() {
 
   useEffect(() => {
     const requested = searchParams.get("tab");
-    setTab(requested && ["info", "files", "tags", "history"].includes(requested) ? requested : "info");
+    setTab(requested && ["info", "files", "tags", "history", "saves"].includes(requested) ? requested : "info");
     contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }, [searchParams]);
 
@@ -618,16 +624,18 @@ export default function GameDetailPage() {
             </div>
             <Button
               loading={launching}
+              disabled={!installation.loaded || installation.archived}
               onClick={() => void launcher.launch(game)}
               title={
-                process.status === "running"
+                installation.archived ? "请在「路径与启动」重新指定路径并恢复为已安装"
+                  : process.status === "running"
                   ? "查看正在运行的游戏"
                   : game.exePath?.trim()
                   ? "启动这个游戏"
                   : "请在「路径与启动」选择可执行文件并保存"
               }
             >
-              {launching ? "启动中…" : process.status === "running" ? "运行中" : "启动游戏"}
+              {installation.archived ? "已卸载" : launching ? "启动中…" : process.status === "running" ? "运行中" : "启动游戏"}
             </Button>
             <Button
               variant="outline"
@@ -675,11 +683,16 @@ export default function GameDetailPage() {
           { value: "info", label: "基本信息" },
           { value: "history", label: "游玩历史" },
           { value: "files", label: "路径与启动" },
+          { value: "saves", label: "存档备份" },
           { value: "tags", label: "标签" },
         ]}
       />
 
       <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
+      {installation.archived ? <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
+        <span>已卸载并归档 · 游戏资料、游玩历史和存档备份保留。</span>
+        <Button size="sm" variant="outline" onClick={() => { setTab('files'); contentRef.current?.scrollTo({ top: 0 }); }}>重新指定路径与安装状态</Button>
+      </div> : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
       {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
       {error ? (
@@ -699,7 +712,7 @@ export default function GameDetailPage() {
         {/* Cover --------------------------------------------------------- */}
         <Card className="detail-summary-card h-fit min-w-0">
           <CardContent className="detail-summary-content p-3">
-            <div data-detail-cover className="detail-cover-frame w-full overflow-hidden rounded bg-muted">
+            <div data-detail-cover className="detail-cover-frame relative w-full overflow-hidden rounded bg-muted">
               <CoverImage
                 gameId={game.id}
                 loading="eager"
@@ -708,9 +721,10 @@ export default function GameDetailPage() {
                 className="h-full w-full object-contain"
                 onDimensions={size => setCoverSize(size ? { path: displayCoverPath, ...size } : null)}
               />
+              {cropEditor.overlay}
             </div>
             <div className="detail-summary-information min-w-0">
-            <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} />
+            <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
             <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
               <dt className="text-muted-foreground">评分</dt>
               <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{form.rating === "" ? "未评分" : formatRating(Number(form.rating))}</dd>
@@ -772,6 +786,7 @@ export default function GameDetailPage() {
         </Card>
 
         {/* Panels -------------------------------------------------------- */}
+        <div className="min-w-0 space-y-3" data-detail-panel>
         {tab === "info" ? (
           <Card className="min-w-0">
             <CardHeader>
@@ -835,6 +850,7 @@ export default function GameDetailPage() {
         ) : null}
 
         {tab === "files" ? (
+          <><ArchivePanel key={game.id} gameId={game.id} />
           <Card>
             <CardHeader>
               <CardTitle>路径与启动</CardTitle>
@@ -872,8 +888,15 @@ export default function GameDetailPage() {
               <p className="text-xs text-muted-foreground sm:col-span-2">路径可直接输入、粘贴或点击按钮选择。修改后点击右上角「保存」生效；工作目录留空时使用可执行文件所在目录。</p>
               <LaunchProfilePanel key={`${gameId}-${profileRevision}`} gameId={gameId} onSaved={() => setProfileRevision(value => value + 1)} />
             </CardContent>
-          </Card>
+          </Card></>
         ) : null}
+
+        {tab === 'saves' ? <Card><CardHeader><CardTitle>游戏存档备份</CardTitle></CardHeader><CardContent>
+          <SaveBackupPanel gameId={game.id} savePath={game.savePath} onPathSaved={path => {
+            setGame(current => current?.id === game.id ? { ...current, savePath: path } : current);
+            setForm(current => current ? { ...current, savePath: path } : current);
+          }} />
+        </CardContent></Card> : null}
 
         {tab === "tags" ? (
           <Card>
@@ -972,6 +995,7 @@ export default function GameDetailPage() {
         {tab === "history" ? (
           <PlayHistoryPanel game={game} sessions={sessions} />
         ) : null}
+        </div>
       </div>
 
       </div>

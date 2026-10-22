@@ -4,6 +4,7 @@ import { coverSrc } from "@/lib/asset";
 import { cn } from "@/lib/utils";
 import { useGameCover } from "@/features/covers/store";
 import { effectiveCoverPath } from "@/features/covers/model";
+import type { CropRect } from "@/features/covers/model";
 import { useProtectedCover } from "@/lib/protected-cover";
 
 export interface CoverImageProps {
@@ -19,6 +20,8 @@ export interface CoverImageProps {
   loading?: "eager" | "lazy";
   /** Show landscape artwork in full; portrait artwork keeps the caller's fit. */
   fitLandscape?: boolean;
+  /** Explicitly opt into a crop. Detail, home and exports retain the full artwork. */
+  crop?: CropRect | null;
   /** Report decoded dimensions; null means the image failed to load. */
   onDimensions?: (size: { width: number; height: number } | null) => void;
 }
@@ -51,6 +54,7 @@ function CoverImageSource({
   fitLandscape = false,
   onDimensions,
   censored = false,
+  crop,
 }: Omit<CoverImageProps, "path"> & { src: string | undefined }) {
   const [failed, setFailed] = useState(false);
   const [landscape, setLandscape] = useState(false);
@@ -69,7 +73,7 @@ function CoverImageSource({
     );
   }
 
-  return (
+  const image = (
     <img
       src={resolved.src}
       alt={alt}
@@ -80,15 +84,17 @@ function CoverImageSource({
         onDimensions?.({ width, height });
       }}
       onError={() => { setFailed(true); onDimensions?.(null); }}
-      className={className}
+      className={crop ? "absolute max-w-none" : className}
       data-landscape={fitLandscape ? landscape : undefined}
       data-censored={censored || undefined}
       style={{
-        ...(fitLandscape && landscape ? { objectFit: "contain", objectPosition: "center" } : {}),
-        ...(censored ? { filter: "blur(20px)", transform: "scale(1.18)" } : {}),
+        ...(crop ? { width: `${100 / crop.width}%`, height: `${100 / crop.height}%`, left: `${-crop.x * 100 / crop.width}%`, top: `${-crop.y * 100 / crop.height}%`, objectFit: "fill" as const } : {}),
+        ...(fitLandscape && landscape && !crop ? { objectFit: "contain", objectPosition: "center" } : {}),
+        ...(censored && !crop ? { filter: "blur(20px)", transform: "scale(1.18)" } : {}),
       }}
     />
   );
+  return crop ? <span className={cn("relative block overflow-hidden", className)} style={censored ? { filter: "blur(20px)", transform: "scale(1.18)" } : undefined}>{image}</span> : image;
 }
 
 export default CoverImage;

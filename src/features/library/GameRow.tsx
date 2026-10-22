@@ -1,5 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 
+import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
 import { CoverImage } from "@/components/ui/cover-image";
 import { CoverCensorButton } from "@/features/covers/CoverControls";
@@ -41,6 +42,7 @@ export function GameRow({
   onToggleSelected,
 }: GameRowProps) {
   const favorite = isFavorite(game);
+  const { archived } = useGameInstallation(game.id);
   const navigate = useNavigate();
   const select = () => onToggleSelected?.(game.id);
 
@@ -97,6 +99,7 @@ export function GameRow({
         >
           {game.title}
         </Link>
+        {archived ? <Badge variant="secondary" className="mt-1">已卸载 / 已归档</Badge> : null}
         {tags.length > 0 ? (
           <div className="mt-0.5 flex flex-wrap gap-1">
             {tags.slice(0, 4).map((tag) => (

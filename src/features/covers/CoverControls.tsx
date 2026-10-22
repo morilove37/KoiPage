@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
@@ -25,7 +26,7 @@ export function CoverCensorButton({ gameId, title, className = '' }: { gameId: n
   </div>;
 }
 
-export function CoverControls({ gameId, sourcePath, title }: { gameId: number; sourcePath: string | null; title: string }) {
+export function CoverControls({ gameId, sourcePath, title, cropControls }: { gameId: number; sourcePath: string | null; title: string; cropControls?: ReactNode }) {
   const { preferences, loaded, saving, error: loadError } = useGameCover(gameId);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,6 +39,7 @@ export function CoverControls({ gameId, sourcePath, title }: { gameId: number; s
     finally { setBusy(false); }
   }
   return <div className="mt-3 flex flex-col gap-2" data-cover-controls>
+    {cropControls}
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={!loaded || busy || saving} onClick={() => void run(async () => {
         const path = await open({ title: '选择自定义封面', multiple: false,

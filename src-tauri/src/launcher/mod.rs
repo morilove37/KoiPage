@@ -274,6 +274,10 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     }
     let db = pool(&app).await?;
 
+    if crate::commands::installation::is_archived(&db, game_id).await? {
+        return Err(CmdError("该游戏已卸载并归档，请先重新安装并恢复安装状态后再启动。".into()));
+    }
+
     let target = sqlx::query_as::<_, LaunchTarget>(
         "SELECT exe_path, launch_args, workdir FROM games WHERE id = ?",
     )
@@ -364,6 +368,8 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     if workdir.is_dir() {
         command.current_dir(&workdir);
     }
+
+    automatic_save_backup(&app, game_id, crate::commands::save_backups::BackupReason::BeforeLaunch).await?;
 
     let mut child = TrackedChild::spawn(&mut command).map_err(|e| {
         CmdError(format!(
@@ -462,6 +468,14 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
                     .await {
                         crate::app_warn!("[launcher] settlement session_id={session_id}: {error}");
                     }
+                    // Settle time first. Snapshot I/O must never add to play time.
+                    // Forced stops use the separate stop_game path, never this hook.
+                    if exit_code == Some(0) {
+                        if let Err(error) = automatic_save_backup(&app_for_wait, game_id,
+                            crate::commands::save_backups::BackupReason::AfterExit).await {
+                            crate::app_warn!("[save-backup] game_id={game_id}: {error}");
+                        }
+                    }
                     return;
                 }
             }
@@ -471,6 +485,30 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
 
     crate::logging::record("INFO", "launcher", &format!("游戏启动 game_id={game_id} session_id={session_id} pid={pid}"));
     Ok(LaunchResult { session_id, pid })
+}
+
+/// Called with the launch mutex held. Keep background results available even
+/// when the saves tab is closed and its event listeners are not mounted.
+async fn automatic_save_backup(app: &AppHandle, game_id: i64,
+    reason: crate::commands::save_backups::BackupReason) -> CmdResult<()> {
+    let outcome = crate::commands::save_backups::auto_backup(app, game_id, reason).await;
+    let (success, message) = match &outcome {
+        Ok(Some(_)) => (true, "自动存档备份已完成。".to_string()),
+        Ok(None) => return Ok(()),
+        Err(error) => (false, error.to_string()),
+    };
+    let created_at = now_iso8601();
+    let status = serde_json::json!({ "createdAt": created_at, "success": success, "message": message });
+    if let Ok(db) = pool(app).await {
+        if let Err(error) = sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(format!("game_save_backup_last:{game_id}"))
+            .bind(status.to_string()).execute(&db).await {
+            crate::app_warn!("[save-backup] status persistence game_id={game_id}: {error}");
+        }
+    }
+    let _ = app.emit(if success { "save-backup-completed" } else { "save-backup-failed" },
+        serde_json::json!({ "gameId": game_id, "createdAt": created_at, "success": success, "message": message }));
+    outcome.map(|_| ())
 }
 
 /// `game_running` — whether this app currently tracks a live process for a game.

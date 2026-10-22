@@ -598,6 +598,7 @@ async fn stage_restore(
                     .await?;
             for (key, value) in prefs {
                 if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&value) {
+                    let mut changed = false;
                     if value
                         .get("customPath")
                         .and_then(|v| v.as_str())
@@ -605,6 +606,20 @@ async fn stage_restore(
                         == Some(source.as_str())
                     {
                         value["customPath"] = serde_json::Value::String(dest.to_string());
+                        changed = true;
+                    }
+                    // Crop coordinates belong to this image's identity. Restored
+                    // images move together with their source/custom cover paths.
+                    if value
+                        .get("crop")
+                        .and_then(|v| v.get("path"))
+                        .and_then(|v| v.as_str())
+                        == Some(source.as_str())
+                    {
+                        value["crop"]["path"] = serde_json::Value::String(dest.to_string());
+                        changed = true;
+                    }
+                    if changed {
                         sqlx::query("UPDATE settings SET value=? WHERE key=?")
                             .bind(value.to_string())
                             .bind(key)
@@ -930,8 +945,18 @@ mod tests {
         image::RgbaImage::new(3, 3).save(&custom).unwrap();
         sqlx::query("INSERT INTO settings(key,value) VALUES('game_cover:7',?)")
             .bind(
-                serde_json::json!({"customPath":custom.to_string_lossy(),"censored":true})
+                serde_json::json!({"customPath":custom.to_string_lossy(),"censored":true,
+                    "crop":{"path":custom.to_string_lossy(),"x":0.25,"y":0.1,"width":0.3,"height":0.4}})
                     .to_string(),
+            )
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('game_cover:8',?)")
+            .bind(
+                serde_json::json!({"customPath":null,"censored":false,
+                "crop":{"path":img,"x":0.2,"y":0.1,"width":0.3,"height":0.4}})
+                .to_string(),
             )
             .execute(&db)
             .await
@@ -988,6 +1013,9 @@ mod tests {
                 .unwrap();
         let prefs: serde_json::Value = serde_json::from_str(&prefs).unwrap();
         assert_eq!(prefs["censored"], true);
+        assert_eq!(prefs["crop"]["path"], prefs["customPath"]);
+        assert_eq!(prefs["crop"]["x"], 0.25);
+        assert_eq!(prefs["crop"]["width"], 0.3);
         assert!(
             prefs["customPath"]
                 .as_str()
@@ -1001,6 +1029,15 @@ mod tests {
                 .unwrap(),
             refs[0]
         );
+        let source_prefs: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key='game_cover:8'")
+                .fetch_one(&restored)
+                .await
+                .unwrap();
+        let source_prefs: serde_json::Value = serde_json::from_str(&source_prefs).unwrap();
+        assert_eq!(source_prefs["crop"]["path"], refs[0]);
+        assert_eq!(source_prefs["crop"]["x"], 0.2);
+        assert_eq!(source_prefs["crop"]["height"], 0.4);
         restored.close().await;
     }
     #[tokio::test]

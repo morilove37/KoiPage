@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
@@ -38,6 +38,9 @@ function dateTime(value: string | null): string {
 
 /** Charts describe the fetched sessions; only cumulative time is all-time. */
 export default function PlayHistoryPanel({ game, sessions }: { game: GameDetail; sessions: PlaySession[] }) {
+  const [correcting, setCorrecting] = useState(false);
+  const [editing, setEditing] = useState<PlaySession | null>(null);
+  const timelineRef = useRef<HTMLElement>(null);
   const [range, setRange] = useState<10 | 20>(10);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const ordered = useMemo(() => [...sessions].sort((a, b) => timestamp(b.startedAt) - timestamp(a.startedAt) || b.id - a.id), [sessions]);
@@ -57,7 +60,14 @@ export default function PlayHistoryPanel({ game, sessions }: { game: GameDetail;
         <p className="text-xs text-muted-foreground">显示最近 {ordered.length} 次记录（最多 50 次）；近期平均与最长仅计算本页已结束的记录。</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <SessionEditor gameId={game.id} />
+        <div className="flex flex-wrap gap-2">
+          <SessionEditor gameId={game.id} />
+          <Button size="sm" variant="outline" disabled={!ordered.length} aria-pressed={correcting} onClick={() => {
+            setCorrecting(!correcting);
+            if (!correcting) requestAnimationFrame(() => timelineRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+          }}>{correcting ? '取消修正' : '修正记录'}</Button>
+          {editing && <SessionEditor key={editing.id} gameId={game.id} session={editing} onClose={() => { setEditing(null); setCorrecting(false); }} />}
+        </div>
         <p className="text-xs text-muted-foreground">每 30 秒保存时长；异常退出后仅结算最后保存的时长，停机期间不计时。管理器重启后不会继续跟踪此前运行的游戏。</p>
         <div className="grid grid-cols-2 gap-2" aria-label="游玩历史概览">
           {([
@@ -126,22 +136,24 @@ export default function PlayHistoryPanel({ game, sessions }: { game: GameDetail;
             </> : <p className="py-6 text-center text-xs text-muted-foreground">还没有已结束的记录，结束游玩后将显示时长图表。</p>}
           </section>
 
-          <section aria-labelledby="history-timeline-title">
+          <section ref={timelineRef} aria-labelledby="history-timeline-title">
+            {correcting && <p role="status" className="mb-3 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">点击下面需要修正的那条记录。</p>}
             <h4 id="history-timeline-title" className="mb-3 flex items-center gap-2 text-xs font-medium"><GeometryIcon name="history" className="size-4 text-primary" />记录时间线</h4>
             <ol className="ml-2 border-l border-border">
               {ordered.map(session => <li key={session.id} data-history-session={session.id} className="relative pb-3 pl-4 last:pb-0">
                 <span aria-hidden="true" className={cn("absolute -left-[7px] top-4 size-3 rounded-full border-2 border-card", session.endedAt ? "bg-primary" : "bg-muted-foreground")} />
-                <div className={cn("rounded-lg border p-3", selected?.id === session.id ? "border-primary/50 bg-primary/5" : "border-border")}>
+                <button type="button" disabled={!correcting} onClick={() => setEditing(session)}
+                  aria-label={correcting ? `选择 ${dateTime(session.startedAt)} 的游玩记录` : undefined}
+                  className={cn("w-full rounded-lg border p-3 text-left", correcting ? "cursor-pointer border-primary/50 hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring" : "cursor-default", selected?.id === session.id ? "border-primary/50 bg-primary/5" : "border-border")}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-xs font-medium"><GeometryIcon name="calendar" className="size-3.5 text-muted-foreground" />{dateLabel(session.startedAt)}</span>
                     <span className="flex items-center gap-1 text-xs font-semibold tabular-nums"><GeometryIcon name="clock" className="size-3.5 text-primary" />{session.endedAt ? duration(seconds(session)) : "记录未结束"}</span>
                   </div>
                   <div className="mt-2 grid gap-1.5 text-[11px] text-muted-foreground">
-                    <SessionEditor gameId={game.id} session={session} />
                     <span className="flex items-start gap-1.5"><GeometryIcon name="play" className="size-3.5" /><span>开始 <time dateTime={session.startedAt}>{dateTime(session.startedAt)}</time></span></span>
                     <span className="flex items-start gap-1.5"><GeometryIcon name="stop" className="size-3.5" /><span>结束 {session.endedAt ? <time dateTime={session.endedAt}>{dateTime(session.endedAt)}</time> : "未记录结束时间"}</span></span>
                   </div>
-                </div>
+                </button>
               </li>)}
             </ol>
           </section>

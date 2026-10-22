@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { create } from 'zustand';
 import { settingsGetAll, settingsSet, syncAssetScope } from '@/lib/db';
-import { COVER_SETTING_PREFIX, DEFAULT_COVER, parseCoverPreferences } from './model';
+import { COVER_SETTING_PREFIX, DEFAULT_COVER, parseCoverPreferences, mergeCoverPreferences } from './model';
 import type { CoverPreferences } from './model';
 
 interface CoverState {
@@ -40,7 +40,7 @@ export async function updateCoverPreferences(gameId: number, patch: Partial<Cove
   if (useCoverStore.getState().saving[gameId]) throw new Error('封面正在保存，请稍候。');
   useCoverStore.setState(state => ({ saving: { ...state.saving, [gameId]: true } }));
   try {
-    const next = { ...(useCoverStore.getState().preferences[gameId] ?? DEFAULT_COVER), ...patch };
+    const next = mergeCoverPreferences(useCoverStore.getState().preferences[gameId] ?? DEFAULT_COVER, patch);
     await settingsSet(`${COVER_SETTING_PREFIX}${gameId}`, JSON.stringify(next));
     useCoverStore.setState(state => ({ preferences: { ...state.preferences, [gameId]: next } }));
   } finally {

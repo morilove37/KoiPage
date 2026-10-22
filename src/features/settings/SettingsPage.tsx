@@ -42,6 +42,7 @@ import {
   normalizeTitlePreference,
   type MetadataTitlePreference,
 } from '@/features/metadata/fields';
+import { SearchSourcesSettings } from '@/features/metadata/SearchSourcesSettings';
 import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from '@/features/metadata/preferences';
 import type { MetadataProvider } from '@/lib/db';
 import {
@@ -87,6 +88,7 @@ import { BackupPanel } from '@/features/backup/BackupPanel';
 import { PathRepairPanel } from './PathRepairPanel';
 import { AnnouncementContact } from '@/features/announcements/AnnouncementContact';
 import { AccentSettings } from './AccentSettings';
+import { GlassAppearanceSettings } from './GlassAppearanceSettings';
 import { LogSettings } from './LogSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
@@ -606,11 +608,11 @@ function BackdropControls() {
             max={BACKDROP_OPACITY_RANGE.max}
             step={BACKDROP_OPACITY_RANGE.step}
             value={backdrop.opacity}
-            disabled={!loaded}
+            disabled={!loaded || !backdrop.path}
             onChange={(e) => void commit({ opacity: Number.parseInt(e.target.value, 10) })}
             className="h-4 w-full cursor-pointer accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <span>越低越接近纯光斑背景，越高越看得清壁纸。</span>
+          <span>仅调节所选壁纸；未选择图片时不影响外观。</span>
         </label>
 
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
@@ -624,11 +626,11 @@ function BackdropControls() {
             max={BACKDROP_BLUR_RANGE.max}
             step={BACKDROP_BLUR_RANGE.step}
             value={backdrop.blur}
-            disabled={!loaded}
+            disabled={!loaded || !backdrop.path}
             onChange={(e) => void commit({ blur: Number.parseInt(e.target.value, 10) })}
             className="h-4 w-full cursor-pointer accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <span>模糊越大越柔和，玻璃面板上的文字也越清楚。</span>
+          <span>仅模糊所选壁纸；调节面板请使用上方「玻璃磨砂强度」。</span>
         </label>
       </div>
 
@@ -729,7 +731,7 @@ function ThemeSection() {
       </p>
 
       <AccentSettings />
-      {loaded && isGlassTheme(theme) ? <BackdropControls /> : null}
+      {loaded && isGlassTheme(theme) ? <><GlassAppearanceSettings /><BackdropControls /></> : null}
 
       {error ? (
         <div className="mt-3">
@@ -1040,6 +1042,7 @@ function WindowSection() {
 function MetadataSection() {
   const [preference, setPreference] = useState<MetadataTitlePreference>('zh');
   const [defaultSource, setDefaultSource] = useState<MetadataProvider>('vndb');
+  const [enabledSources, setEnabledSources] = useState<MetadataProvider[]>([...ALL_PROVIDERS]);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1094,17 +1097,18 @@ function MetadataSection() {
       description="设置导入和联网补全时优先采用的数据源，以及游戏标题的语言。"
     >
       <div className="mb-4 max-w-sm space-y-1.5">
+        <SearchSourcesSettings onChange={setEnabledSources} />
         <label htmlFor="metadata-default-source" className="text-xs font-medium text-muted-foreground">默认数据源</label>
         <Select<MetadataProvider>
           id="metadata-default-source"
           aria-label="默认数据源"
-          value={defaultSource}
-          disabled={!loaded || saving}
-          options={ALL_PROVIDERS.map(value => ({ value, label: PROVIDER_LABELS[value] }))}
+          value={normalizeDefaultSource(defaultSource, enabledSources)}
+          disabled={!loaded || saving || !enabledSources.length}
+          options={enabledSources.map(value => ({ value, label: PROVIDER_LABELS[value] }))}
           onValueChange={value => void changeSource(value)}
         />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          未设置时使用 VNDB。导入优先采用默认源的可信匹配，没有合适结果或请求失败时使用其他来源；手动搜索仍可调整来源并选择候选。更改后即时保存。
+          导入优先采用默认源的可信匹配，没有合适结果或请求失败时使用其他已启用来源。默认源被关闭后，会自动使用已启用列表中的首个来源；手动搜索也只使用上方勾选的范围。更改后即时保存。
         </p>
       </div>
       <div className="max-w-sm space-y-1.5">

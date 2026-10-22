@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 
-/** A small, opt-in community invitation tucked beside the author information. */
+/** A small greeting shared by both announcements and the author information. */
 export function AnnouncementMascot() {
   const [open, setOpen] = useState(false);
   const bubbleId = useId();
@@ -17,13 +17,11 @@ export function AnnouncementMascot() {
         close();
       }
     }}>
-    {open ? <div id={bubbleId} role="note" aria-label="悄悄的入群邀请"
-      className="absolute bottom-full right-0 z-10 mb-2 w-64 max-w-[calc(100vw-5rem)] rounded-2xl border border-primary/25 bg-card p-4 text-sm text-card-foreground shadow-lg">
-      <button type="button" aria-label="收起入群气泡" onClick={close}
+    {open ? <div id={bubbleId} role="note" aria-label="水无月萤的气泡"
+      className="absolute bottom-full right-0 z-10 mb-2 w-40 max-w-[calc(100vw-5rem)] rounded-2xl border border-primary/25 bg-card p-4 text-sm text-card-foreground shadow-lg">
+      <button type="button" aria-label="收起气泡" onClick={close}
         className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">×</button>
-      <p className="pr-5 font-semibold text-primary">被你发现啦！</p>
-      <p className="mt-2 leading-relaxed text-muted-foreground">悄悄打个暗广，欢迎进群来玩～</p>
-      <p className="mt-3">群号：<span className="select-all font-semibold tabular-nums">1055772679</span></p>
+      <p className="pr-5 font-semibold text-primary">呀吼——</p>
       <span aria-hidden="true" className="absolute -bottom-[5px] right-10 h-2 w-2 rotate-45 border-b border-r border-primary/25 bg-card" />
     </div> : null}
     <button ref={trigger} type="button" aria-label="水无月萤：发现一个小彩蛋" aria-expanded={open} aria-controls={open ? bubbleId : undefined}

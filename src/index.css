@@ -102,6 +102,7 @@
      underneath to be visible at all. Foreground colours here are deliberately
      light so text stays readable over the blobs. */
   .glass {
+    --glass-blur: var(--lg-pane-blur, 24px);
     --background: 250 42% 9%;
     --foreground: 240 100% 98%;
     --card: 250 34% 15% / 0.55;
@@ -122,9 +123,9 @@
     /* Roomier corners: part of what makes a pane read as a droplet. */
     --radius: 0.95rem;
 
-    --glass: 250 40% 100% / 0.11;
-    --glass-strong: 250 38% 100% / 0.17;
-    --glass-soft: 250 40% 100% / 0.06;
+    --glass: 250 30% 15% / var(--lg-pane-alpha, 0.72);
+    --glass-strong: 250 30% 15% / min(1, calc(var(--lg-pane-alpha, 0.72) + 0.12));
+    --glass-soft: 250 30% 15% / max(0.18, calc(var(--lg-pane-alpha, 0.72) - 0.22));
     --glass-border: 250 100% 100% / 0.28;
     --glass-highlight: 0 0% 100% / 0.4;
     --glass-shadow: hsl(266 80% 5% / 0.55);
@@ -143,9 +144,9 @@
     --accent: 258 32% 20% / 0.6;
     --border: 250 40% 100% / 0.11;
     --input: 250 40% 100% / 0.1;
-    --glass: 250 40% 100% / 0.08;
-    --glass-strong: 250 38% 100% / 0.13;
-    --glass-soft: 250 40% 100% / 0.05;
+    --glass: 250 30% 10% / var(--lg-pane-alpha, 0.72);
+    --glass-strong: 250 30% 10% / min(1, calc(var(--lg-pane-alpha, 0.72) + 0.12));
+    --glass-soft: 250 30% 10% / max(0.18, calc(var(--lg-pane-alpha, 0.72) - 0.22));
     --glass-border: 250 100% 100% / 0.2;
     --glass-highlight: 0 0% 100% / 0.28;
     --glass-shadow: hsl(266 80% 2% / 0.6);
@@ -442,8 +443,8 @@ html.glass #lg-backdrop-image {
    underneath, so it blurs more, is more opaque, and sits higher. */
 .lg-pane-strong {
   background-color: hsl(var(--glass-strong));
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
-  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   box-shadow:
     inset 0 1px 0 0 hsl(var(--glass-highlight)),
     inset 0 -1px 0 0 hsl(0 0% 0% / 0.08),
@@ -476,8 +477,8 @@ html.glass #lg-backdrop-image {
    badges sitting on top of a cover image. */
 .lg-bar {
   background-color: hsl(var(--glass));
-  -webkit-backdrop-filter: blur(20px) saturate(170%);
-  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(170%);
 }
 
 /* ==========================================================================
@@ -509,8 +510,8 @@ html.glass #lg-backdrop-image {
 :is(.glass, .glass.dark) [role="dialog"],
 :is(.glass, .glass.dark) .lg-panel {
   background-color: hsl(var(--glass-strong));
-  -webkit-backdrop-filter: blur(26px) saturate(180%);
-  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   box-shadow:
     inset 0 1px 0 0 hsl(var(--glass-highlight)),
     0 20px 50px -20px var(--glass-shadow);
