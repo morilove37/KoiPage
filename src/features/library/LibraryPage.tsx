@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from 'react-router-dom';
 
 import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
 import { matchesInstallation } from "@/features/installation/model";
@@ -9,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { LabeledSelect } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { GeometryIcon } from '@/components/ui/geometry-icon';
 import { useLocalizedTags } from "@/lib/localization";
 import {
   gamesDelete,
@@ -17,6 +19,8 @@ import {
   gamesTagsGet,
   tagsList,
   gameUpdate,
+  settingsGet,
+  settingsSet,
 } from "@/lib/db";
 import { useAppStore } from "@/store/app";
 import type { SortDirection, SortKey } from "@/store/app";
@@ -30,12 +34,20 @@ import type { Game, GameInput, GameStats, Tag } from "@/types/game";
 
 import { gamesBatchUpdate } from "./api";
 import type { LibraryBatchPatch } from "./api";
-import { visibleSelection } from "./preferences";
+import { normalizeFilters, visibleSelection } from "./preferences";
 import type { LibraryFilters } from "./preferences";
 import type { GameStatus } from "@/types/game";
 
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
+import { FolderPanel } from "./FolderPanel";
+import { FolderTile } from './FolderTile';
+import { FolderGamePicker } from './FolderGamePicker';
+import { FolderMoveDialog } from './FolderMoveDialog';
+import { canResetFolder, folderStatistics, moveFolder, replaceFolderGames, resetEmptyFolder } from './folder-operations';
+import { useFolderDrag } from './useFolderDrag';
+import { assignFolder, FOLDERS_KEY, matchesFolder, parseFolders, groupBySociety, matchesSociety, folderPath, getFolderMode, selectFolderMode } from "./folders";
+import type { LibraryFolder } from "./folders";
 import ScanDialog from "@/features/scan/ScanDialog";
 import BatchImportDialog from "@/features/scan/BatchImportDialog";
 import type { PendingImport } from "@/features/scan/BatchImportDialog";
@@ -43,6 +55,7 @@ import { takePendingScanRoots } from "@/features/scan/pendingScan";
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 
 let libraryScrollTop = 0;
+let folderScrollTop = 0;
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "title", label: "标题" },
@@ -84,7 +97,15 @@ function compareNullable<T>(
   return direction === "asc" ? order : -order;
 }
 
-export default function LibraryPage() {
+export default function LibraryPage({ folderPage = false }: { folderPage?: boolean }) {
+  const [folderParams, setFolderParams] = useSearchParams();
+  const folderTab = folderParams.get('tab') === 'custom' ? 'custom' : folderParams.get('tab') === 'status' ? 'status' : 'society';
+  const activeFolder = folderTab === 'custom' ? folderParams.get('folder') ?? '' : '';
+  const activeSociety = folderParams.get('society');
+  const statusParam = folderParams.get('status');
+  const activeStatus = statusParam && (statusParam === 'waiting' || GAME_STATUSES.some(status => status === statusParam)) ? statusParam : null;
+  const customFolderView = folderPage && folderTab === 'custom' && Boolean(activeFolder);
+  const setActiveFolder = (id: string) => setFolderParams({tab:'custom',folder:id});
   const { viewMode, sortKey, sortDirection, filters, presets } = useAppStore((s) => s.library);
   const setViewMode = useAppStore((s) => s.setViewMode);
   const setSort = useAppStore((s) => s.setSort);
@@ -96,6 +117,19 @@ export default function LibraryPage() {
   const [stats, setStats] = useState<GameStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  const customMode = customFolderView ? getFolderMode(folders,activeFolder) : null;
+  const folderOverview = folderPage && (folderTab === 'society' && activeSociety === null || folderTab === 'status' && activeStatus === null || customFolderView && customMode !== 'games' && customMode !== 'mixed');
+  const [pickerFolderId, setPickerFolderId] = useState<string | null>(null);
+  const [movingFolderId,setMovingFolderId]=useState<string|null>(null);
+  const [folderUndo,setFolderUndo]=useState<{before:LibraryFolder[];after:string;revision:number;message:string}|null>(null);
+  useEffect(() => { setPickerFolderId(null);setMovingFolderId(null); }, [activeFolder, folderTab]);
+  useEffect(()=>{if(!folderUndo)return;const timer=window.setTimeout(()=>setFolderUndo(null),8000);return()=>window.clearTimeout(timer);},[folderUndo]);
+  const [folderTarget, setFolderTarget] = useState('');
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
+  const folderSaving = useRef(false);
+  const folderRevision = useRef(0);
 
   const setLibraryFilters = useAppStore(s => s.setLibraryFilters);
   const saveLibraryPreset = useAppStore(s => s.saveLibraryPreset);
@@ -123,20 +157,20 @@ export default function LibraryPage() {
   useEffect(() => {
     const main = rootRef.current?.closest("main");
     if (!main) return;
-    const remember = () => { libraryScrollTop = main.scrollTop; };
+    const remember = () => { if (folderPage) folderScrollTop = main.scrollTop; else libraryScrollTop = main.scrollTop; };
     main.addEventListener("scroll", remember);
     return () => { main.removeEventListener("scroll", remember); };
-  }, []);
+  }, [folderPage]);
   useEffect(() => {
     if (loading || restoredScroll.current) return;
-    const saved = libraryScrollTop;
+    const saved = folderPage ? folderScrollTop : libraryScrollTop;
     const frame = requestAnimationFrame(() => {
       const main = rootRef.current?.closest("main");
       if (main) main.scrollTop = saved;
       restoredScroll.current = true;
     });
     return () => cancelAnimationFrame(frame);
-  }, [loading]);
+  }, [loading, folderPage]);
   const [scanOpen, setScanOpen] = useState(false);
   // Folders extracted in 实用工具 are handed over through sessionStorage; the
   // scan dialog opens preloaded so the user lands on the review list.
@@ -152,8 +186,16 @@ export default function LibraryPage() {
   const [batchDrafts, setBatchDrafts] = useState<GameInput[] | null>(null);
   const [customImportPaths, setCustomImportPaths] = useState<Set<string>>(() => new Set());
   const [importTotal, setImportTotal] = useState(0);
-  const [importNotice, setImportNotice] = useState<string | null>(null);
-  const [tagsExpanded, setTagsExpanded] = useState(false);
+  const [notice, setNotice] = useState<{ message: string } | null>(null);
+  const importNotice = notice?.message ?? null;
+  // A new object also restarts the timeout for consecutive identical messages.
+  const setImportNotice = useCallback((message: string | null) => setNotice(message === null ? null : {message}), []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => { setNotice(null); }, [activeFolder, folderTab, activeStatus, activeSociety]);
   const [shareOpen, setShareOpen] = useState(false);
 
   /**
@@ -171,26 +213,66 @@ export default function LibraryPage() {
   const [deleting, setDeleting] = useState(false);
 
   const reload = useCallback(async () => {
+    const revision = folderRevision.current;
     setLoading(true);
     setError(null);
     try {
-      const [nextGames, nextTags, nextLinks, nextStats] = await Promise.all([
+      const [nextGames, nextTags, nextLinks, nextStats, , savedFolders] = await Promise.all([
         gamesList(),
         tagsList(),
         gamesTagsGet(),
         gamesStats(),
         loadInstallationState(),
+        folderPage ? settingsGet(FOLDERS_KEY) : Promise.resolve(null),
       ]);
       setGames(nextGames);
       setTags(nextTags);
       setLinks(nextLinks);
       setStats(nextStats);
+      if (!folderSaving.current && revision === folderRevision.current) {
+        setFolders(parseFolders(savedFolders));
+        setFoldersLoaded(true);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [folderPage]);
+
+  const saveFolders = async (next: LibraryFolder[]): Promise<boolean> => {
+    if (folderSaving.current || !foldersLoaded) return false;
+    folderSaving.current = true;
+    setFolderUndo(null);
+    folderRevision.current += 1;
+    setFolderBusy(true);
+    setError(null);
+    try {
+      await settingsSet(FOLDERS_KEY, JSON.stringify(next));
+      folderRevision.current += 1;
+      setFolders(next);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally { folderSaving.current = false; setFolderBusy(false); }
+  };
+
+  const commitFolderOperation=async(next:LibraryFolder[],message:string):Promise<boolean>=>{
+    if(JSON.stringify(next)===JSON.stringify(folders))return true;
+    const before=folders;
+    if(!await saveFolders(next))return false;
+    setImportNotice(null);
+    setFolderUndo({before,after:JSON.stringify(next),revision:folderRevision.current,message});
+    return true;
+  };
+  const undoFolderOperation=async()=>{
+    if(!folderUndo||folderSaving.current)return;
+    if(folderUndo.revision!==folderRevision.current||folderUndo.after!==JSON.stringify(folders)){
+      setFolderUndo(null);setError('分类已发生其他更改，不能撤销旧操作。');return;
+    }
+    if(await saveFolders(folderUndo.before))setImportNotice('已撤销文件夹操作。');
+  };
 
   useEffect(() => {
     void reload();
@@ -265,10 +347,24 @@ export default function LibraryPage() {
     }
     return [...set].sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
   }, [games]);
+  const societyFolders = useMemo(() => groupBySociety(games), [games]);
+  const statusFolders = useMemo(() => [
+    ...GAME_STATUSES.map(value => ({value, name:GAME_STATUS_LABELS[value], count:games.filter(game => game.status === value).length})),
+    {value:'waiting',name:'待开始',count:games.filter(game => game.status === 'unplayed' || game.status === 'wishlist').length},
+  ], [games]);
+  const childFolders = useMemo(() => folders.filter(folder => folder.parentId === activeFolder), [folders, activeFolder]);
+  const existingGameIds = useMemo(() => new Set(games.map(game => game.id)), [games]);
+  const currentFolderGameCount = folders.find(folder => folder.id === activeFolder)?.gameIds.filter(id => existingGameIds.has(id)).length ?? 0;
+  const folderStats=useMemo(()=>folderStatistics(folders,existingGameIds),[folders,existingGameIds]);
+  const folderDrag=useFolderDrag({folders,available:existingGameIds,busy:!foldersLoaded||folderBusy||loading||batchBusy,scopeKey:folderPage?folderParams.toString():'library',
+    commit:commitFolderOperation,onError:setError});
 
   const visibleGames = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const filtered = games.filter((game) => {
+      if (folderPage && folderTab === 'custom' && !matchesFolder(folders, activeFolder, game.id)) return false;
+      if (folderPage && folderTab === 'society' && activeSociety !== null && !matchesSociety(activeSociety, game)) return false;
+      if (folderPage && folderTab === 'status' && activeStatus !== null && (activeStatus === 'waiting' ? game.status !== 'unplayed' && game.status !== 'wishlist' : game.status !== activeStatus)) return false;
       if (!matchesInstallation(installation, Boolean(archived[game.id]))) return false;
       if (needle) {
         const haystack = [game.title, game.originalTitle, game.developer]
@@ -277,7 +373,7 @@ export default function LibraryPage() {
           .toLowerCase();
         if (!haystack.includes(needle)) return false;
       }
-      if (status && game.status !== status) return false;
+      if (!(folderPage && folderTab === 'status' && activeStatus) && status && game.status !== status) return false;
       if (favoriteOnly && !isFavorite(game)) return false;
       if (developer && game.developer !== developer) return false;
       if (activeTagIds.length > 0) {
@@ -314,6 +410,12 @@ export default function LibraryPage() {
       }
     });
   }, [
+    folders,
+    activeFolder,
+    folderPage,
+    folderTab,
+    activeSociety,
+    activeStatus,
     archived,
     installation,
     games,
@@ -421,13 +523,6 @@ export default function LibraryPage() {
     finally { setBatchBusy(false); }
   };
 
-  const toggleTag = (tagId: number) => {
-    setActiveTagIds((current) =>
-      current.includes(tagId)
-        ? current.filter((id) => id !== tagId)
-        : [...current, tagId],
-    );
-  };
 
   const resetFilters = () => {
     setFilter("installation", "all");
@@ -464,15 +559,22 @@ export default function LibraryPage() {
     favoriteOnly ||
     developer !== "" ||
     activeTagIds.length > 0;
+  const pageTitle = !folderPage ? '游戏库'
+    : customFolderView ? folders.find(folder => folder.id === activeFolder)?.name ?? (loading ? '载入中…' : '文件夹不存在')
+    : folderTab === 'status' ? statusFolders.find(folder => folder.value === activeStatus)?.name ?? '游玩状态'
+    : activeSociety !== null ? activeSociety || '未知社团' : '按社团分类';
 
   return (
     <div ref={rootRef} className="flex flex-col gap-3 px-4 py-3" data-library-state={loading ? "loading" : error ? "error" : "ready"}>
       {/* Header ---------------------------------------------------------- */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">游戏库</h1>
+        <div className={folderPage ? 'min-w-[180px] flex-1' : undefined}>
+          <h1 className={cn('flex min-w-0 items-start gap-2 font-semibold tracking-tight', folderPage ? 'text-xl' : 'text-lg')} title={pageTitle}>
+            {folderPage ? <GeometryIcon name="folder" className="mt-1 size-5 text-primary" /> : null}
+            <span className="min-w-0 break-words [overflow-wrap:anywhere]">{pageTitle}</span>
+          </h1>
           <p className="text-xs text-muted-foreground">
-            {loading
+            {customFolderView ? (loading ? '载入中…' : customMode === null ? '请选择创建子文件夹或直接添加游戏' : customMode === 'folders' ? `${childFolders.length} 个子文件夹 · 共 ${folderStats.get(activeFolder)?.gameCount??0} 部游戏（含下级，已去重）` : customMode === 'games' ? `本文件夹 ${currentFolderGameCount} 部游戏` : `${childFolders.length} 个子文件夹 · 共 ${folderStats.get(activeFolder)?.gameCount??0} 部游戏`) : folderPage && folderOverview ? (loading ? '载入中…' : folderTab === 'status' ? `按游玩状态自动分类 · ${games.length} 部游戏` : `按社团自动分类 · ${societyFolders.length} 个社团 · ${games.length} 部游戏`) : loading
               ? "载入中…"
               : `共 ${stats?.total ?? games.length} 部 · 显示 ${visibleGames.length} 部` +
                 (stats && stats.playTimeSeconds > 0
@@ -482,7 +584,7 @@ export default function LibraryPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-md bg-muted p-1">
+          {!folderOverview ? <div className="inline-flex rounded-md bg-muted p-1">
             {(["grid", "list"] as const).map((mode) => (
               <button
                 key={mode}
@@ -499,10 +601,10 @@ export default function LibraryPage() {
                 {mode === "grid" ? "网格" : "列表"}
               </button>
             ))}
-          </div>
-          <Button onClick={() => setScanOpen(true)}>添加游戏</Button>
-          <Button variant="outline" disabled={loading} onClick={() => setShareOpen(true)}>分享足迹</Button>
-          {selectMode ? (
+          </div> : null}
+          {!customFolderView || customMode === 'games' || customMode === 'mixed' ? <Button onClick={() => setScanOpen(true)}>添加游戏</Button> : null}
+          {!folderOverview ? <Button variant="outline" disabled={loading} onClick={() => setShareOpen(true)}>分享足迹</Button> : null}
+          {!folderOverview && (selectMode ? (
             <Button variant="outline" onClick={exitSelectMode}>
               退出多选
             </Button>
@@ -519,18 +621,52 @@ export default function LibraryPage() {
             >
               多选
             </Button>
-          )}
-          <Button variant="outline" onClick={() => void reload()} loading={loading}>
+          ))}
+          <Button variant="outline" disabled={folderBusy} onClick={() => void reload()} loading={loading}>
             刷新
           </Button>
         </div>
       </div>
 
+      {folderPage ? <>
+        <FolderPanel folders={folders} active={activeFolder} society={folderTab === 'society'} statusMode={folderTab === 'status'} busy={!foldersLoaded || folderBusy || loading || batchBusy}
+          dropProps={folderDrag.targetProps} canReset={canResetFolder(folders,activeFolder,existingGameIds)}
+          onReset={async()=>{const next=resetEmptyFolder(folders,activeFolder,existingGameIds);if(await saveFolders(next)){setImportNotice('已重置为空文件夹，可重新选择类型。');return true;}return false;}}
+          onMove={()=>setMovingFolderId(activeFolder)}
+          onClassify={() => { void (async () => {
+            try {
+              if (getFolderMode(folders,activeFolder) === 'games' || getFolderMode(folders,activeFolder) === 'mixed' || await saveFolders(selectFolderMode(folders,activeFolder,'games'))) {
+                setLibraryFilters(normalizeFilters({}));
+                setPickerFolderId(activeFolder);
+              }
+            } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+          })(); }}
+          onStatus={() => { exitSelectMode(); setFolderParams({tab:'status'}); }} onSociety={() => { exitSelectMode(); setFolderParams({}); }} onSelect={id => { exitSelectMode(); setActiveFolder(id); }} onSave={saveFolders} />
+        {customFolderView ? (childFolders.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3" aria-label="子文件夹">
+          {childFolders.map(folder => <FolderTile key={folder.id} name={folder.name} count={folderStats.get(folder.id)?.gameCount??0} interaction={folderDrag.targetProps(folder.id)}
+            description={`${folderStats.get(folder.id)?.childCount??0} 个子文件夹 · 共 ${folderStats.get(folder.id)?.gameCount??0} 部游戏`}
+            onClick={() => { exitSelectMode(); setActiveFolder(folder.id); }} />)}
+        </div> : null) : folderOverview && folderTab === 'status' ? <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+          {statusFolders.map(folder => <FolderTile key={folder.value} name={folder.name} count={folder.count} onClick={() => { setLibraryFilters(normalizeFilters({})); setFolderParams({tab:'status',status:folder.value}); }} />)}
+        </div> : folderOverview ? <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            {societyFolders.map(folder => <FolderTile key={folder.value} name={folder.name} count={folder.gameIds.length} onClick={() => setFolderParams({society:folder.value})} />)}
+            {!loading && games.length === 0 ? <p className="text-sm text-muted-foreground">添加游戏后，会自动按社团分类。</p> : null}
+          </div> : folderTab === 'society' ? <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={() => { exitSelectMode(); setFolderParams({}); }}>← 返回社团</Button>
+          </div> : folderTab === 'status' ? <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={() => { exitSelectMode(); setFolderParams({tab:'status'}); }}>← 返回游玩状态</Button>
+          </div> : null}
+      </> : null}
+      {folderDrag.hint ? <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">{folderDrag.hint}</p> : null}
+      {folderUndo ? <div role="status" className="flex items-center gap-3 rounded-md border border-border bg-accent px-3 py-2 text-sm">
+        <span className="flex-1">{folderUndo.message}</span><Button size="sm" variant="outline" disabled={folderBusy||loading} onClick={()=>void undoFolderOperation()}>撤销</Button>
+      </div> : null}
+
       {/*
         Selection bar. Only rendered in select mode, directly under the header so
         it is impossible to miss what is about to be deleted.
       */}
-      {selectMode ? (
+      {selectMode && !folderOverview ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-3 py-2">
           <span className="text-sm font-medium">
             已选 {selectedIds.size} 部
@@ -539,6 +675,17 @@ export default function LibraryPage() {
             （当前显示 {visibleGames.length} 部）
           </span>
           <div className="ml-auto flex flex-wrap items-center gap-2" aria-busy={batchBusy}>
+            {folderPage ? <><LabeledSelect label="批量文件夹" className="w-48" value={folderTarget} onValueChange={setFolderTarget} options={[{value:'',label:'选择文件夹'}, ...folders.filter(folder => getFolderMode(folders,folder.id) !== 'folders' && getFolderMode(folders,folder.id) !== 'mixed').map(folder => ({value:folder.id,label:folderPath(folders, folder.id).map(item => item.name).join(' / ')}))]} />
+            <Button variant="outline" disabled={!foldersLoaded || !selectedGames.length || !folders.some(folder => folder.id === folderTarget && getFolderMode(folders,folder.id) !== 'folders' && getFolderMode(folders,folder.id) !== 'mixed') || folderBusy || batchBusy || loading}
+              onClick={() => { void (async () => {
+                const ids = visibleSelection(selectedIds, visibleGames);
+                if (await saveFolders(assignFolder(folders, folderTarget, ids, true))) setImportNotice(`已将 ${ids.length} 部游戏加入文件夹。`);
+              })(); }}>加入文件夹</Button>
+            <Button variant="outline" disabled={!foldersLoaded || !selectedGames.length || !folders.some(folder => folder.id === activeFolder) || folderBusy || batchBusy || loading}
+              onClick={() => { void (async () => {
+                const ids = visibleSelection(selectedIds, visibleGames);
+                if (await saveFolders(assignFolder(folders, activeFolder, ids, false))) setImportNotice(`已将 ${ids.length} 部游戏移出当前文件夹。`);
+              })(); }}>移出当前文件夹</Button></> : null}
             <LabeledSelect label="批量状态" className="w-28" value={batchStatus} onValueChange={setBatchStatus} options={[{value:"",label:"选择状态"}, ...STATUS_OPTIONS.slice(1)]} />
             <Button variant="outline" disabled={!selectedGames.length || !batchStatus || batchBusy} onClick={() => void applyBatch({ status: batchStatus as GameStatus })}>设定状态</Button>
             <Button variant="outline" disabled={!selectedGames.length || batchBusy} onClick={() => void applyBatch({ favorite: true })}>收藏</Button>
@@ -579,7 +726,7 @@ export default function LibraryPage() {
       ) : null}
 
       {/* Stats strip ----------------------------------------------------- */}
-      {stats && stats.total > 0 ? (
+      {!folderOverview && stats && stats.total > 0 ? (
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">收藏 {stats.favorite}</Badge>
           {stats.byStatus
@@ -593,7 +740,7 @@ export default function LibraryPage() {
       ) : null}
 
       {/* Filters --------------------------------------------------------- */}
-      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      {!folderOverview ? <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2">
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex min-w-48 flex-1 flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">
@@ -611,9 +758,10 @@ export default function LibraryPage() {
           <LabeledSelect
             label="状态"
             className="w-32 gap-1"
-            value={status}
+            value={folderPage && folderTab === 'status' && activeStatus ? activeStatus : status}
+            disabled={folderPage && folderTab === 'status' && activeStatus !== null}
             onValueChange={setStatus}
-            options={STATUS_OPTIONS}
+            options={[...STATUS_OPTIONS, ...(folderPage && folderTab === 'status' && activeStatus === 'waiting' ? [{value:'waiting',label:'待开始'}] : [])]}
           />
 
           <LabeledSelect
@@ -672,54 +820,7 @@ export default function LibraryPage() {
           </span>)}
         </div>
 
-        {usedTags.length > 0 ? (
-          <div className="flex items-start gap-1.5">
-            <span className="mr-1 shrink-0 py-1 text-xs font-medium text-muted-foreground">
-              标签
-            </span>
-            <div
-              className={cn(
-                "flex min-w-0 flex-1 gap-1.5",
-                tagsExpanded ? "flex-wrap" : "max-h-7 flex-nowrap overflow-hidden",
-              )}
-            >
-            {usedTags.map((tag) => {
-              const active = activeTagIds.includes(tag.id);
-              return (
-                <button
-                  key={tag.id}
-                  type="button"
-                  onClick={() => toggleTag(tag.id)}
-                  title={tag.name}
-                  aria-pressed={active}
-                  className={cn(
-                    "shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs transition-colors",
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                  )}
-                >
-                  {t(tag.name)}
-                </button>
-              );
-            })}
-            </div>
-            <button
-              type="button"
-              className="shrink-0 py-1 text-xs text-primary hover:underline"
-              onClick={() => setTagsExpanded((value) => !value)}
-              aria-expanded={tagsExpanded}
-            >
-              {tagsExpanded ? "收起" : "展开"}
-            </button>
-            {activeTagIds.length > 0 ? (
-              <span className="shrink-0 py-1 text-xs text-muted-foreground">
-                已选 {activeTagIds.length}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      </div> : null}
 
       {error ? (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -733,7 +834,7 @@ export default function LibraryPage() {
       ) : null}
 
       {/* Results --------------------------------------------------------- */}
-      {!loading && games.length === 0 ? (
+      {folderOverview ? null : !loading && games.length === 0 ? (
         <EmptyState
           title="游戏库还是空的"
           description="选择一个或多个 exe，或者扫描装着 galgame 的目录。"
@@ -743,11 +844,11 @@ export default function LibraryPage() {
         />
       ) : !loading && visibleGames.length === 0 ? (
         <EmptyState
-          title="没有匹配的游戏"
-          description="换个关键词，或清除当前筛选条件。"
+          title={folderPage && folderTab === 'custom' && !hasFilters ? '此文件夹内暂无游戏' : '没有匹配的游戏'}
+          description={customFolderView && !hasFilters ? '点击「直接添加游戏」，从库中选择游戏加入当前文件夹。' : '换个关键词，或清除当前筛选条件。'}
           action={
-            <Button variant="outline" onClick={resetFilters}>
-              清除筛选
+            <Button variant="outline" disabled={customFolderView && (!foldersLoaded || folderBusy || loading)} onClick={customFolderView && !hasFilters ? () => setPickerFolderId(activeFolder) : resetFilters}>
+              {customFolderView && !hasFilters ? '直接添加游戏' : '清除筛选'}
             </Button>
           }
         />
@@ -764,22 +865,24 @@ export default function LibraryPage() {
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
           ))}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
-          <div className="hidden items-center gap-3 border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground md:flex">
-            {selectMode ? <span className="w-4" /> : null}
-            <span className="w-8" />
-            <span className="flex-1">标题</span>
-            <span className="w-32">开发商</span>
-            <span className="w-24">状态</span>
-            <span className="w-14 text-right">评分</span>
-            <span className="w-24 text-right">游玩时长</span>
-            <span className="w-28 text-right">最近游玩</span>
-            {!selectMode ? <span className="w-20 text-center">封面</span> : null}
-            <span className="w-8" />
+        <div className="overflow-x-auto rounded-lg border border-border bg-card" role="region" aria-label="游戏列表，可横向滚动" tabIndex={0}>
+          <div className="min-w-[1100px]">
+          <div className="flex items-center gap-3 border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+            {selectMode ? <span className="w-4 shrink-0" /> : null}
+            <span className="w-8 shrink-0" />
+            <span className="min-w-[220px] flex-1">标题</span>
+            <span className="w-32 shrink-0">开发商</span>
+            <span className="w-24 shrink-0">状态</span>
+            <span className="w-14 shrink-0 text-right">评分</span>
+            <span className="w-24 shrink-0 text-right">游玩时长</span>
+            <span className="w-28 shrink-0 text-right">最近游玩</span>
+            {!selectMode ? <span className="w-20 shrink-0 text-center">封面</span> : null}
+            <span className="w-8 shrink-0" />
           </div>
           {visibleGames.map((game) => (
             <GameRow
@@ -792,8 +895,10 @@ export default function LibraryPage() {
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
           ))}
+          </div>
         </div>
       )}
 
@@ -806,6 +911,16 @@ export default function LibraryPage() {
         onConfirmed={handleConfirmed}
         initialRoots={pendingScanRoots ?? undefined}
       />
+      {pickerFolderId && folders.some(folder => folder.id === pickerFolderId) ? <FolderGamePicker
+        key={pickerFolderId} folder={folders.find(folder => folder.id === pickerFolderId)!} games={games} busy={folderBusy}
+        onClose={() => setPickerFolderId(null)} onSave={async ids => {
+          const result=replaceFolderGames(folders,pickerFolderId,ids,existingGameIds);
+          const saved=await saveFolders(result.folders);
+          if(saved){setLibraryFilters(normalizeFilters({}));setImportNotice(`已保存归类：新增 ${result.added} 部，移出 ${result.removed} 部。`);}
+          return saved;
+        }} /> : null}
+      {movingFolderId ? <FolderMoveDialog key={movingFolderId} folderId={movingFolderId} folders={folders} busy={folderBusy||loading} onClose={()=>setMovingFolderId(null)}
+        onMove={async(parentId,beforeId)=>commitFolderOperation(moveFolder(folders,movingFolderId,parentId,beforeId),'已移动文件夹。')} /> : null}
       {shareOpen ? <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">正在打开分享…</p>}><ShareDialog games={games} onClose={() => setShareOpen(false)} /></Suspense> : null}
 
       {metadataGame ? (

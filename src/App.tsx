@@ -48,6 +48,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: "/home", label: "首页", icon: "home" },
   { to: "/library", label: "游戏库", icon: "library", prefix: true },
+  { to: "/folders", label: "游戏文件夹", icon: "folder" },
   { to: "/tools", label: "实用工具", icon: "tools" },
   { to: "/tags", label: "标签管理", icon: "tags" },
   { to: "/settings", label: "设置", icon: "settings" },
@@ -162,6 +163,7 @@ export default function App() {
               <Route path="/" element={<Navigate to="/home" replace />} />
               <Route path="/home" element={<HomePage />} />
               <Route path="/library" element={<LibraryPage />} />
+              <Route path="/folders" element={<LibraryPage folderPage />} />
               <Route path="/library/:id" element={<GameDetailPage />} />
               <Route path="/tools" element={<ToolsPage />} />
               <Route path="/tags" element={<TagsPage />} />

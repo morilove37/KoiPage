@@ -162,6 +162,14 @@ pub async fn save(db: &Pool<Sqlite>, input: SessionInput) -> CmdResult<i64> {
         (id, 0)
     };
     refresh(&mut tx, input.game_id, input.duration_seconds - old).await?;
+    // A positive manual supplement represents resumed play. Commit the status
+    // together with the record and total; correcting history keeps its status.
+    if input.id.is_none() && input.duration_seconds > 0 {
+        sqlx::query("UPDATE games SET status='playing' WHERE id=?")
+            .bind(input.game_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     Ok(id)
 }
@@ -232,7 +240,40 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql("CREATE TABLE games(id INTEGER PRIMARY KEY, play_time_seconds INTEGER, last_played_at TEXT, updated_at TEXT); CREATE TABLE play_sessions(id INTEGER PRIMARY KEY, game_id INTEGER, started_at TEXT, ended_at TEXT, duration_seconds INTEGER); INSERT INTO games VALUES(1,1000,NULL,''); INSERT INTO play_sessions VALUES(1,1,'2020-01-01T00:00:00Z',NULL,60);").execute(&db).await.unwrap();
+        sqlx::query("ALTER TABLE games ADD COLUMN status TEXT NOT NULL DEFAULT 'unplayed'")
+            .execute(&db).await.unwrap();
         db
+    }
+    #[tokio::test]
+    async fn supplement_positive_duration_sets_playing_for_every_previous_status() {
+        for previous in ["unplayed", "wishlist", "playing", "completed", "on_hold", "dropped"] {
+            let db = fixture().await;
+            sqlx::query("UPDATE games SET status=?").bind(previous).execute(&db).await.unwrap();
+            save(&db, SessionInput { id: None, game_id: 1, started_at: "2020-01-02T00:00:00Z".into(), duration_seconds: 120 }).await.unwrap();
+            let row: (String, i64) = sqlx::query_as("SELECT status,play_time_seconds FROM games").fetch_one(&db).await.unwrap();
+            assert_eq!(row, ("playing".into(),1120), "previous status: {previous}");
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_duration_and_historical_corrections_preserve_explicit_status() {
+        let db = fixture().await;
+        sqlx::query("UPDATE games SET status='completed'").execute(&db).await.unwrap();
+        let id = save(&db, SessionInput { id: None, game_id: 1, started_at: "2020-01-02T00:00:00Z".into(), duration_seconds: 0 }).await.unwrap();
+        save(&db, SessionInput { id: Some(id), game_id: 1, started_at: "2020-01-02T00:00:00Z".into(), duration_seconds: 120 }).await.unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM games").fetch_one(&db).await.unwrap();
+        assert_eq!(status, "completed");
+    }
+
+    #[tokio::test]
+    async fn failed_status_update_rolls_back_supplement_and_total() {
+        let db = fixture().await;
+        sqlx::raw_sql("CREATE TRIGGER reject_status BEFORE UPDATE OF status ON games BEGIN SELECT RAISE(ABORT, 'test rejected status'); END;").execute(&db).await.unwrap();
+        assert!(save(&db, SessionInput { id: None, game_id: 1, started_at: "2020-01-02T00:00:00Z".into(), duration_seconds: 120 }).await.is_err());
+        let row: (String, i64) = sqlx::query_as("SELECT status,play_time_seconds FROM games").fetch_one(&db).await.unwrap();
+        assert_eq!(row, ("unplayed".into(),1000));
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM play_sessions").fetch_one(&db).await.unwrap();
+        assert_eq!(count, 1);
     }
     #[tokio::test]
     async fn recovery_credits_only_checkpoint_and_is_idempotent() {

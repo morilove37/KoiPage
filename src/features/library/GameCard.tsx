@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
+import type { HTMLAttributes } from 'react';
 
 import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ export interface GameCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
+  dragInteraction?:HTMLAttributes<HTMLElement>;
 }
 
 /** Grid tile: cover, title, status/rating, tag chips, favourite toggle. */
@@ -30,6 +32,7 @@ export function GameCard({
   selectable = false,
   selected = false,
   onToggleSelected,
+  dragInteraction,
 }: GameCardProps) {
   const favorite = isFavorite(game);
   const { archived } = useGameInstallation(game.id);
@@ -46,6 +49,7 @@ export function GameCard({
   return (
     <div
       data-game-entry={game.id}
+      {...dragInteraction}
       className={cn(
         "lift group relative flex flex-col overflow-hidden rounded-lg border bg-card",
         selected

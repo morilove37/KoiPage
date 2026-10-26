@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
+import type { HTMLAttributes } from 'react';
 
 import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ export interface GameRowProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
+  dragInteraction?:HTMLAttributes<HTMLElement>;
 }
 
 /** Formats an ISO8601 timestamp for the "last played" column. */
@@ -40,6 +42,7 @@ export function GameRow({
   selectable = false,
   selected = false,
   onToggleSelected,
+  dragInteraction,
 }: GameRowProps) {
   const favorite = isFavorite(game);
   const { archived } = useGameInstallation(game.id);
@@ -49,6 +52,7 @@ export function GameRow({
   return (
     <div
       data-game-entry={game.id}
+      {...dragInteraction}
       className={cn(
         "flex items-center gap-3 border-b border-border px-3 py-2 text-sm transition-colors last:border-b-0",
         selected ? "bg-primary/10" : "hover:bg-accent/50",
@@ -82,7 +86,7 @@ export function GameRow({
         />
       </div>
 
-      <div className="min-w-0 flex-1">
+      <div className="min-w-[220px] flex-1 overflow-hidden">
         <Link
           to={selectable ? "#" : `/library/${game.id}`}
           onClick={(event) => {
@@ -101,9 +105,9 @@ export function GameRow({
         </Link>
         {archived ? <Badge variant="secondary" className="mt-1">已卸载 / 已归档</Badge> : null}
         {tags.length > 0 ? (
-          <div className="mt-0.5 flex flex-wrap gap-1">
+          <div className="mt-0.5 flex flex-nowrap gap-1 overflow-hidden" title={tags.map(tag => tag.name).join('、')}>
             {tags.slice(0, 4).map((tag) => (
-              <Badge key={tag.id} color={tag.color} variant="outline">
+              <Badge key={tag.id} color={tag.color} variant="outline" className="max-w-36 shrink-0 truncate whitespace-nowrap">
                 {tag.name}
               </Badge>
             ))}
@@ -115,23 +119,23 @@ export function GameRow({
         ) : null}
       </div>
 
-      <span className="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:block">
+      <span className="w-32 shrink-0 truncate text-xs text-muted-foreground" title={game.developer ?? undefined}>
         {game.developer ?? "—"}
       </span>
 
-      <span className="hidden w-24 shrink-0 md:block">
+      <span className="w-24 shrink-0">
         <Badge variant="status">{GAME_STATUS_LABELS[game.status]}</Badge>
       </span>
 
-      <span className="hidden w-14 shrink-0 text-right text-xs md:block">
+      <span className="w-14 shrink-0 text-right text-xs">
         {formatRating(game.rating)}
       </span>
 
-      <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground md:block">
+      <span className="w-24 shrink-0 text-right text-xs text-muted-foreground">
         {formatPlayTime(game.playTimeSeconds)}
       </span>
 
-      <span className="hidden w-28 shrink-0 text-right text-xs text-muted-foreground md:block">
+      <span className="w-28 shrink-0 text-right text-xs text-muted-foreground">
         {formatLastPlayed(game.lastPlayedAt)}
       </span>
 
