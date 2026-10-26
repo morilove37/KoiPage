@@ -1,12 +1,13 @@
 import type { SVGProps } from "react";
 import { cn } from "@/lib/utils";
 
-export type GeometryIconName = "home" | "library" | "tools" | "tags" | "settings" | "clock" | "play" | "check" | "bookmark" | "calendar" | "chart" | "stop" | "history" | "cake";
+export type GeometryIconName = "home" | "library" | "folder" | "tools" | "tags" | "settings" | "clock" | "play" | "check" | "bookmark" | "calendar" | "chart" | "stop" | "history" | "cake";
 
 /** Small geometric glyphs share the text color and a consistent 24px grid. */
 export function GeometryIcon({ name, className, ...props }: SVGProps<SVGSVGElement> & { name: GeometryIconName }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" className={cn("size-[18px] shrink-0", className)} {...props}>
+      {name === "folder" ? <><path d="M3 7V5a2 2 0 0 1 2-2h5l3 4h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M3 7h10" /></> : null}
       {name === "cake" ? <><path d="M4 12h16v9H4ZM3 21h18M8 12V9h8v3M12 9V6" /><path d="M4 15c2 3 4-2 6 0s4-2 6 0 3 1 4 0M12 5c-2-1-1-3 0-4 1 1 2 3 0 4Z" /></> : null}
       {name === "home" ? <><path d="m3.5 10 8.5-7 8.5 7v10h-17Z" /><path d="M9 20v-7h6v7" /><path d="m12 3 8.5 7h-17Z" fill="currentColor" opacity=".14" stroke="none" /></> : null}
       {name === "library" ? <><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="4" height="16" rx="1" /><path d="m16 5 4-1 3 15-4 1Z" /><path d="M4.5 8h2M11 15h2" /><path d="M3 16h5v4H3Z" fill="currentColor" opacity=".14" stroke="none" /></> : null}

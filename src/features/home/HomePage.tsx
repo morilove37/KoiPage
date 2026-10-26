@@ -14,6 +14,7 @@ import { gamesList, gamesTagsGet, tagsList } from "@/lib/db";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
 import { useAppStore } from "@/store/app";
+import { normalizeFilters } from '@/features/library/preferences';
 import { GAME_STATUSES, GAME_STATUS_LABELS, formatPlayTime, isFavorite } from "@/types/game";
 import type { Game, GameStatus, Tag } from "@/types/game";
 import { PlayTimeChart } from "./PlayTimeChart";
@@ -199,7 +200,7 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
         <h2 className="home-game-title line-clamp-2 break-words font-semibold leading-tight tracking-tight" title={game.title}>{game.title}</h2>
         <p className="line-clamp-1 text-xs text-white/65">{game.developer || "未知开发商"}{game.releaseDate ? ` · ${game.releaseDate}` : ""}</p>
         <div className="flex gap-1.5 overflow-hidden whitespace-nowrap text-xs [&>*]:shrink-0">
-          <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1">{GAME_STATUS_LABELS[game.status]}</span>
+          <Link to={`/folders?tab=status&status=${game.status}`} onClick={() => useAppStore.getState().setLibraryFilters(normalizeFilters({}))} className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">{GAME_STATUS_LABELS[game.status]}</Link>
           {game.rating !== null ? <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1">评分 {formatRating(game.rating)}</span> : null}
           {tags.slice(0, 2).map(tag => <span key={tag.id} title={tag.name} className="max-w-24 truncate rounded-full border border-white/15 px-2.5 py-1 text-white/75">{t(tag.name)}</span>)}
         </div>
@@ -383,12 +384,13 @@ export default function HomePage() {
       {games.length > 0 ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="游玩概览">
           {([
-            { icon: "clock", label: "累计游玩", value: formatPlayTime(games.reduce((sum, game) => sum + game.playTimeSeconds, 0)), hint: "所有游戏的累计时长" },
-            { icon: "play", label: "游玩中", value: `${games.filter(game => game.status === "playing").length} 部`, hint: "正在追的故事" },
-            { icon: "check", label: "已通关", value: `${completedCount} 部`, hint: `占游戏库的 ${completionRate}%` },
-            { icon: "bookmark", label: "待开始", value: `${waitingGames.length} 部`, hint: "想玩与尚未游玩的作品" },
+            { icon: "clock", label: "累计游玩", value: formatPlayTime(games.reduce((sum, game) => sum + game.playTimeSeconds, 0)), hint: "所有游戏的累计时长", status:null },
+            { icon: "play", label: "游玩中", value: `${games.filter(game => game.status === "playing").length} 部`, hint: "正在追的故事", status:'playing' },
+            { icon: "check", label: "已通关", value: `${completedCount} 部`, hint: `占游戏库的 ${completionRate}%`, status:'completed' },
+            { icon: "bookmark", label: "待开始", value: `${waitingGames.length} 部`, hint: "想玩与尚未游玩的作品", status:'waiting' },
           ] as const).map(stat => (
-            <div key={stat.label} className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 text-card-foreground">
+            <div key={stat.label} className="relative flex min-w-0 items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 text-card-foreground">
+              {stat.status ? <Link to={`/folders?tab=status&status=${stat.status}`} aria-label={`查看${stat.label}游戏`} onClick={() => useAppStore.getState().setLibraryFilters(normalizeFilters({}))} className="absolute inset-0 rounded-lg transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /> : null}
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><GeometryIcon name={stat.icon} className="size-5" /></span>
               <div className="min-w-0">
                 <p className="text-xs text-muted-foreground">{stat.label}</p>
@@ -441,7 +443,8 @@ export default function HomePage() {
               </div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                 {statusCounts.map(item => (
-                  <div key={item.status} className="flex items-center gap-1.5">
+                  <div key={item.status} className="relative flex items-center gap-1.5">
+                    <Link to={`/folders?tab=status&status=${item.status}`} aria-label={`查看${GAME_STATUS_LABELS[item.status]}游戏`} onClick={() => useAppStore.getState().setLibraryFilters(normalizeFilters({}))} className="absolute inset-0 rounded transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                     <span aria-hidden="true" className={`size-1.5 rounded-full ${STATUS_COLORS[item.status]}`} />
                     <dt className="text-muted-foreground">{GAME_STATUS_LABELS[item.status]}</dt>
                     <dd className="ml-auto font-medium tabular-nums">{item.count}</dd>

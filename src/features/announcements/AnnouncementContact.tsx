@@ -23,7 +23,7 @@ export function AnnouncementContact() {
             }}>
             {BRAND.repositoryUrl} <span aria-hidden="true">↗</span>
           </a>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">查看源代码、下载新版本，或在 Issues 中反馈问题与建议。</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">查看源代码、下载新版本，或在 Issues 中反馈问题与建议。反馈时附上版本号、操作步骤和报错截图，会更容易定位；日志可在设置中导出。</p>
         </div>
         <div>
           <p className="font-medium">作者抖音 · {BRAND.douyinName}</p>

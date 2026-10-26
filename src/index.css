@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Native library drag targets keep their normal shape, with a clear drop marker. */
+.folder-drop-target[data-drop-position^="valid"] { outline: 2px solid hsl(var(--primary)); outline-offset: -2px; }
+.folder-drop-target[data-drop-position="valid-before"] { box-shadow: inset 4px 0 hsl(var(--primary)); }
+.folder-drop-target[data-drop-position="valid-after"] { box-shadow: inset -4px 0 hsl(var(--primary)); }
+.folder-drop-target[data-drop-position^="invalid"] { outline: 2px solid hsl(var(--destructive)); outline-offset: -2px; }
+
 /* Accent fills keep the chosen RGB color; accent text/focus use a readable
    shade for the current theme, including very pale custom colors. */
 @layer utilities {

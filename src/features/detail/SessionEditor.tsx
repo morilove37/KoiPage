@@ -35,7 +35,7 @@ export default function SessionEditor({ gameId, session, onClose }: { gameId: nu
   return <>
     {!session && <Button size="sm" variant="outline" onClick={show}>补记游玩</Button>}
     <Dialog open={open} onClose={() => { if (!busy) close(); }} title={session ? '修正游玩记录' : '补记游玩记录'}
-      description="填写实际游玩时长；结束时间按开始时间和时长计算。累计时长将同步调整。"
+      description={session ? '填写实际游玩时长；结束时间按开始时间和时长计算。累计时长将同步调整。' : '填写实际游玩时长；结束时间按开始时间和时长计算。补记大于 0 秒的记录后，游戏将自动设为游玩中。'}
       footer={<><Button variant="ghost" disabled={busy} onClick={close}>取消</Button><Button disabled={busy || !start || !Number.isSafeInteger(Number(seconds)) || Number(seconds) < 0} onClick={() => void act(() => saveSession({ id: session?.id, gameId, startedAt: new Date(start).toISOString(), durationSeconds: Number(seconds) }))}>{busy ? '处理中…' : '保存记录'}</Button></>}>
       <div className="space-y-3">
         <label className="block text-sm">开始时间<input aria-label="开始时间" type="datetime-local" step="1" className="mt-1 w-full rounded-md border bg-background p-2" value={start} onChange={event => setStart(event.target.value)} disabled={busy} /></label>
