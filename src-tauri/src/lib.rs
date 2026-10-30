@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
 pub mod commands;
+mod bangumi_sync;
 pub mod birthdays;
 pub mod instance;
 pub mod extract;
@@ -81,6 +82,8 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        .manage(bangumi_sync::SyncState::default())
+        .manage(commands::metadata_refresh::RefreshJob::default())
         .plugin(commands::backup::restore_plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -155,6 +158,16 @@ pub fn run() {
             commands::settings::settings_set,
             commands::settings::settings_get_all,
             commands::settings::settings_delete,
+            bangumi_sync::bangumi_sync_status,
+            bangumi_sync::bangumi_sync_connect,
+            bangumi_sync::bangumi_sync_disconnect,
+            bangumi_sync::bangumi_sync_configure,
+            bangumi_sync::bangumi_sync_run,
+            bangumi_sync::bangumi_sync_items,
+            bangumi_sync::bangumi_sync_profile_get,
+            bangumi_sync::bangumi_sync_profile_save,
+            bangumi_sync::bangumi_sync_pause,
+            bangumi_sync::bangumi_sync_resolve,
             commands::installation::game_archive_set,
             commands::save_backups::save_backup_settings_get,
             commands::save_backups::save_backup_settings_set,
@@ -184,6 +197,9 @@ pub fn run() {
             commands::covers::game_cover_import,
             commands::covers::covers_migrate,
             commands::metadata::metadata_autofetch,
+            commands::metadata_refresh::metadata_refresh_status,
+            commands::metadata_refresh::metadata_refresh_start,
+            commands::metadata_refresh::metadata_refresh_cancel,
             // cached library character birthdays
             birthdays::birthdays_list,
             birthdays::birthdays_update,
@@ -216,6 +232,7 @@ pub fn run() {
             launcher::import_games,
             launcher::backup_database,
             commands::backup::backup_create,
+            commands::backup::backup_estimate,
             commands::backup::backup_preview,
             commands::backup::backup_restore_prepare,
             commands::backup::backup_restore_notice,

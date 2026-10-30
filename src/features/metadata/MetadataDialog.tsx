@@ -31,6 +31,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   gameUpdate,
+  gameGet,
   metadataApply,
   metadataCoverCache,
   metadataDetail,
@@ -69,6 +70,8 @@ import {
   type MetadataTitlePreference,
 } from "./fields";
 import { ManualEntryForm } from "./ManualEntryForm";
+import { currentMetadataValues, protectExistingFields } from './protection';
+import { defaultDescriptionChoice, descriptionChoices, selectDescription } from './description-choice';
 import { ImportWaitDialog } from "./ImportWaitDialog";
 import { createGameFromMetadata } from "./create-game";
 import { DEFAULT_SOURCE_KEY, ENABLED_SOURCES_KEY, normalizeDefaultSource, normalizeEnabledSources } from "./preferences";
@@ -141,7 +144,10 @@ export default function MetadataDialog({
 
   // --- confirmation step ---------------------------------------------------
   const [checked, setChecked] = useState<Record<MetadataField, boolean> | null>(null);
+  const [descriptionChoice, setDescriptionChoice] = useState<string | null>(null);
   const [coverChecked, setCoverChecked] = useState(false);
+  const [existingValues, setExistingValues] = useState<Record<string, unknown> | null>(null);
+  const [existingCover, setExistingCover] = useState(false);
   const [tagMode, setTagMode] = useState<MetadataTagMode>("merge");
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -201,8 +207,12 @@ export default function MetadataDialog({
     // The query is only a lookup key, regardless of its script. With the default
     // Chinese preference, a known Chinese title also replaces Japanese folders.
     const title = titleFor(detail, titlePreference) || searchName;
-    return { ...detail, title, titleZh: null };
-  }, [detail, searchName, titlePreference]);
+    return { ...selectDescription(detail, descriptionChoice), title, titleZh: null };
+  }, [detail, descriptionChoice, searchName, titlePreference]);
+  const descriptionOptions = useMemo(() => detail ? descriptionChoices(detail) : [], [detail]);
+  const descriptionChoiceValue = descriptionChoice ?? String(Math.max(0, descriptionOptions.findIndex(option =>
+    option.text.trim() === detail?.description?.trim() && option.source === (detail?.descriptionSource ?? detail?.provider ?? null)
+      && option.language === detail?.descriptionLang)));
   const displayDetail = useMemo(() => detailForWrite ? {
     ...detailForWrite, tags: detailForWrite.tags.map(t),
   } : null, [detailForWrite, t]);
@@ -234,6 +244,7 @@ export default function MetadataDialog({
     setSearchError(null);
     setSelected(null);
     setDetail(null);
+    setDescriptionChoice(null);
     setDetailLoading(false);
     setDetailError(null);
     setChecked(null);
@@ -265,6 +276,7 @@ export default function MetadataDialog({
     setResult(null);
     setSelected(null);
     setDetail(null);
+    setDescriptionChoice(null);
     setDetailLoading(false); // This search supersedes any pending detail lookup.
     setDetailError(null);
     setChecked(null);
@@ -316,7 +328,10 @@ export default function MetadataDialog({
     const seq = detailSeq.current + 1;
     detailSeq.current = seq;
     setSelected(candidate);
+    setExistingValues(null);
+    setExistingCover(false);
     setDetail(null);
+    setDescriptionChoice(null);
     setDetailError(null);
     setDetailLoading(true);
     setChecked(null);
@@ -326,19 +341,26 @@ export default function MetadataDialog({
     setOutcome(null);
 
     try {
-      const found = await metadataDetail(candidate.provider, candidate.externalId);
+      const [found, current] = await Promise.all([
+        metadataDetail(candidate.provider, candidate.externalId, true),
+        gameId === undefined ? Promise.resolve(null) : gameGet(gameId),
+      ]);
       if (!aliveRef.current || seq !== detailSeq.current) return;
+      const values = current ? currentMetadataValues(current, current.tags.map(String)) : null;
+      setExistingValues(values);
+      setExistingCover(Boolean(current?.coverPath?.trim()));
       setDetail(found);
-      setChecked(defaultChecked({ ...found, title: searchedTitle, titleZh: null }));
+      setDescriptionChoice(defaultDescriptionChoice(found, defaultSource));
+      setChecked(protectExistingFields(defaultChecked({ ...found, title: searchedTitle, titleZh: null }), values));
       // Only offer the cover when there is something to download.
-      setCoverChecked(found.coverUrl !== null && found.coverUrl.trim() !== "");
+      setCoverChecked(Boolean(found.coverUrl?.trim()) && !current?.coverPath?.trim());
     } catch (cause) {
       if (!aliveRef.current || seq !== detailSeq.current) return;
       setDetailError(errorMessage(cause));
     } finally {
       if (aliveRef.current && seq === detailSeq.current) setDetailLoading(false);
     }
-  }, [searchedTitle]);
+  }, [searchedTitle, gameId, defaultSource]);
 
   const selectedFields = useMemo(() => {
     if (!detailForWrite || !checked) return [] as MetadataField[];
@@ -788,11 +810,12 @@ export default function MetadataDialog({
                     {detail.externalId ? (
                       <span className="text-muted-foreground">{detail.externalId}</span>
                     ) : null}
-                    {detail.descriptionLang ? (
+                    {detailForWrite?.descriptionLang ? (
                       <span className="text-muted-foreground">
-                        简介语言：{detail.descriptionLang}
+                        简介语言：{detailForWrite.descriptionLang}
                       </span>
                     ) : null}
+                    {detailForWrite?.descriptionSource ? <span className="text-muted-foreground">简介来源：{providerLabel(detailForWrite.descriptionSource)}</span> : null}
                   </div>
 
                   <p className="text-sm font-semibold">匹配作品：{titleFor(detail, titlePreference) || "（无标题）"}</p>
@@ -834,12 +857,21 @@ export default function MetadataDialog({
               <p className="rounded-md border border-border px-3 py-1.5 text-[11px] text-muted-foreground">
                 数据来源署名：
                 <span className="font-medium text-foreground">
-                  {detail.attribution ?? providerLabel(detail.provider)}
+                  {detailForWrite?.attribution ?? providerLabel(detail.provider)}
                 </span>
                 （依据数据源条款要求标注）
               </p>
 
               {/* Field selection ----------------------------------------- */}
+              {descriptionOptions.length > 1 ? <section className="space-y-2 rounded-md border border-border bg-muted/30 p-3" aria-label="简介来源选择">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs font-medium">简介来源</span>
+                  <Select value={descriptionChoiceValue} onValueChange={setDescriptionChoice} disabled={applying}
+                    className="min-w-52 max-w-full" size="sm" aria-label="选择简介来源"
+                    options={descriptionOptions.map((option, index) => ({ value: String(index), label: `${providerLabel(option.source)}${option.language ? ` · ${option.language}` : ''}` }))} />
+                </div>
+                <p className="text-xs text-muted-foreground">已取得 {descriptionOptions.length} 份简介，优先选中文；中文版本中优先使用默认源（{providerLabel(defaultSource)}）。没有中文时再使用默认源或其他可用版本。可自由切换，只有勾选「简介」才会写入所选内容。</p>
+              </section> : null}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium">选择要写入的字段</span>
                 <span className="flex items-center gap-2">
@@ -861,6 +893,7 @@ export default function MetadataDialog({
               </div>
 
               <div className="flex flex-col gap-1.5">
+                {existingValues ? <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">默认只补充空字段，保留已有资料和封面。勾选已有值的字段即表示允许覆盖；「全选」也会允许覆盖全部可用字段。</p> : null}
                 {FIELD_ORDER.map((field) => {
                   const data = hasFieldData(detailForWrite ?? detail, field);
                   const isChecked = checked?.[field] ?? false;
@@ -883,8 +916,11 @@ export default function MetadataDialog({
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-1.5">
                           <span className="font-medium">{FIELD_LABELS[field]}</span>
+                          {field === 'description' && data && detailForWrite?.descriptionSource ? <Badge variant="outline">{providerLabel(detailForWrite.descriptionSource)}</Badge> : null}
+                          {existingValues?.[field] !== null && existingValues?.[field] !== undefined && String(existingValues[field]).trim() !== '' ? <Badge variant="outline">{isChecked ? '将覆盖已有值' : '保留已有值'}</Badge> : null}
                           {data ? null : <Badge variant="status">上游无数据</Badge>}
                         </span>
+                        {existingValues?.[field] !== null && existingValues?.[field] !== undefined && String(existingValues[field]).trim() !== '' ? <span className="mt-1 block max-h-16 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">当前：{String(existingValues[field])}</span> : null}
                         <span className="mt-0.5 block max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">
                           {data ? fieldPreview(displayDetail ?? detail, field) : "该数据源没有返回这个字段"}
                         </span>
@@ -915,6 +951,7 @@ export default function MetadataDialog({
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-1.5">
                       <span className="font-medium">封面（保存到管理器）</span>
+                      {existingCover ? <Badge variant="outline">{coverChecked ? '将替换已有封面' : '保留已有封面'}</Badge> : null}
                       {detail.coverUrl ? null : <Badge variant="status">上游无数据</Badge>}
                     </span>
                     <span className="mt-0.5 block break-all text-muted-foreground">

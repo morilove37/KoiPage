@@ -419,6 +419,8 @@ fn detail_from_work(work: Work) -> MetadataDetail {
         cover_url: work.cover.as_ref().and_then(Image::url),
         description,
         description_lang,
+        description_source: Some(Provider::Nextmoe),
+        description_options: vec![],
         tags: super::merge::dedupe_tags(tags),
         vndb_id: None,
         bangumi_id: None,

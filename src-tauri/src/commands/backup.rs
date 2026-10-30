@@ -48,6 +48,8 @@ struct Ready {
     database_sha256: String,
     rollback_sha256: String,
     assets: Vec<(PathBuf, String)>,
+    #[serde(default)]
+    save_assets: Vec<(PathBuf, String)>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -59,10 +61,19 @@ pub struct Manifest {
     pub games: i64,
     pub sessions: i64,
     pub assets: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub includes_save_snapshots: bool,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub save_snapshots: usize,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub save_bytes: u64,
     entries: Vec<Entry>,
     #[serde(default)]
     pub archive_sha256: String,
 }
+fn is_false(value: &bool) -> bool { !value }
+fn is_zero_usize(value: &usize) -> bool { *value == 0 }
+fn is_zero_u64(value: &u64) -> bool { *value == 0 }
 impl Manifest {
     fn empty() -> Self {
         Self {
@@ -73,6 +84,9 @@ impl Manifest {
             games: 0,
             sessions: 0,
             assets: 0,
+            includes_save_snapshots: false,
+            save_snapshots: 0,
+            save_bytes: 0,
             entries: vec![],
             archive_sha256: String::new(),
         }
@@ -97,6 +111,9 @@ fn pack(manifest: &Manifest, payloads: &[Vec<u8>]) -> CmdResult<Vec<u8>> {
             .collect();
     }
     let json = serde_json::to_vec(&manifest).map_err(error)?;
+    if json.len() > 16 * 1024 * 1024 || manifest.entries.len() > 100_000 {
+        return Err(error("备份文件或清单条目过多"));
+    }
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&(json.len() as u64).to_le_bytes());
     out.extend_from_slice(&json);
@@ -118,7 +135,7 @@ fn unpack(bytes: &[u8]) -> CmdResult<(Manifest, Vec<Vec<u8>>)> {
         return Err(error("清单长度无效"));
     }
     let manifest: Manifest = serde_json::from_slice(&bytes[start..start + n]).map_err(error)?;
-    if manifest.format_version != 1
+    if ![1, 2].contains(&manifest.format_version)
         || manifest.schema_version
             > super::migrations()
                 .iter()
@@ -131,7 +148,9 @@ fn unpack(bytes: &[u8]) -> CmdResult<(Manifest, Vec<Vec<u8>>)> {
     if manifest.entries.is_empty()
         || manifest.entries.len() > 100_000
         || manifest.entries[0].path != "database.sqlite"
-        || manifest.assets != manifest.entries.len() - 1
+        || manifest.assets != manifest.entries.iter().skip(1).filter(|e| e.path.starts_with("assets/")).count()
+        || (manifest.format_version == 1 && (manifest.includes_save_snapshots || manifest.save_snapshots != 0 || manifest.save_bytes != 0))
+        || (manifest.includes_save_snapshots && manifest.format_version != 2)
     {
         return Err(error("清单计数无效"));
     }
@@ -140,26 +159,24 @@ fn unpack(bytes: &[u8]) -> CmdResult<(Manifest, Vec<Vec<u8>>)> {
     let mut offset = start + n;
     let mut payloads = vec![];
     for (i, entry) in manifest.entries.iter().enumerate() {
+        let save_entry = entry.path.starts_with("saves/");
         if !safe_entry(&entry.path)
-            || !seen.insert(&entry.path)
-            || (i > 0
-                && (!entry.path.starts_with("assets/")
-                    || entry
-                        .source
-                        .as_ref()
-                        .is_none_or(|s| s.is_empty() || !sources.insert(s))))
-        {
-            return Err(error("清单包含不安全或重复路径"));
-        }
+            || !seen.insert(entry.path.to_lowercase())
+            || (i > 0 && if save_entry {
+                !manifest.includes_save_snapshots || entry.source.is_some() || !super::save_backups::valid_transfer_path(&entry.path)
+            } else {
+                !entry.path.starts_with("assets/") || entry.source.as_ref().is_none_or(|s| s.is_empty() || !sources.insert(s))
+            })
+        { return Err(error("清单包含不安全或重复路径")); }
         let len = usize::try_from(entry.size).map_err(error)?;
-        if len > bytes.len() - offset || (i > 0 && entry.size > MAX_IMAGE) {
+        if len > bytes.len() - offset || (i > 0 && !save_entry && entry.size > MAX_IMAGE) {
             return Err(error("文件长度无效"));
         }
         let payload = &bytes[offset..offset + len];
         if hash(payload) != entry.sha256 {
             return Err(error(format!("校验失败：{}", entry.path)));
         }
-        if i > 0 {
+        if i > 0 && !save_entry {
             validate_image(payload)?;
         }
         payloads.push(payload.to_vec());
@@ -168,6 +185,8 @@ fn unpack(bytes: &[u8]) -> CmdResult<(Manifest, Vec<Vec<u8>>)> {
     if offset != bytes.len() {
         return Err(error("归档包含额外数据"));
     }
+    let save_bytes: u64 = manifest.entries.iter().filter(|e| e.path.starts_with("saves/")).map(|e| e.size).sum();
+    if save_bytes != manifest.save_bytes { return Err(error("存档快照体积与清单不符")); }
     Ok((manifest, payloads))
 }
 fn validate_image(bytes: &[u8]) -> CmdResult<()> {
@@ -286,6 +305,9 @@ async fn references(db: &SqlitePool) -> CmdResult<Vec<String>> {
         .collect())
 }
 async fn create_archive(db: &SqlitePool, dest: &Path, temp_root: &Path) -> CmdResult<Manifest> {
+    create_archive_with_saves(db, dest, temp_root, None).await
+}
+async fn create_archive_with_saves(db: &SqlitePool, dest: &Path, temp_root: &Path, save_root: Option<&Path>) -> CmdResult<Manifest> {
     let tmp = TempDir::new(temp_root)?;
     let snapshot = tmp.0.join("database.sqlite");
     sqlx::query("VACUUM INTO ?")
@@ -334,6 +356,18 @@ async fn create_archive(db: &SqlitePool, dest: &Path, temp_root: &Path) -> CmdRe
             payloads.push(b);
         }
         m.assets = payloads.len() - 1;
+        if let Some(root) = save_root {
+            m.format_version = 2;
+            m.includes_save_snapshots = true;
+            let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM games").fetch_all(&snap).await?;
+            let (count, files) = super::save_backups::transfer_files(root, &ids, MAX_ARCHIVE.saturating_sub(total))?;
+            m.save_snapshots = count;
+            for (path, bytes) in files {
+                m.save_bytes += bytes.len() as u64;
+                m.entries.push(Entry { path, source: None, size: bytes.len() as u64, sha256: hash(&bytes) });
+                payloads.push(bytes);
+            }
+        }
         let bytes = pack(&m, &payloads)?;
         let output = tmp.0.join("archive.partial");
         write_sync(&output, &bytes)?;
@@ -445,8 +479,35 @@ async fn inspect(path: &Path, temp_root: &Path) -> CmdResult<(Manifest, Vec<Vec<
     let db = tmp.0.join("check.sqlite");
     write_sync(&db, &p[0])?;
     validate_database(&db, &m).await?;
+    validate_saves(&m, &p, &tmp.0, &db).await?;
     Ok((m, p))
 }
+/// Validate binary snapshot manifests, ownership and exact file counts before publication.
+async fn validate_saves(m: &Manifest, payloads: &[Vec<u8>], temp: &Path, database: &Path) -> CmdResult<()> {
+    if !m.includes_save_snapshots { return Ok(()); }
+    let root = temp.join("validate-saves");
+    fs::create_dir_all(&root).map_err(error)?;
+    let db = open_db(database).await?;
+    let ids = sqlx::query_scalar::<_, i64>("SELECT id FROM games").fetch_all(&db).await;
+    db.close().await;
+    let ids: HashSet<_> = ids?.into_iter().map(|id| id.to_string()).collect();
+    let mut groups = std::collections::HashMap::<PathBuf, usize>::new();
+    for (i, entry) in m.entries.iter().enumerate().filter(|(_,e)| e.path.starts_with("saves/")) {
+        let parts: Vec<_> = entry.path.split('/').collect();
+        if !super::save_backups::valid_transfer_path(&entry.path) || !ids.contains(parts[1]) { return Err(error("存档快照不属于备份中的游戏")); }
+        let dir = root.join(parts[1]).join(parts[2]);
+        *groups.entry(dir).or_default() += 1;
+        let dest = root.join(entry.path.strip_prefix("saves/").ok_or_else(|| error("存档路径无效"))?);
+        fs::create_dir_all(dest.parent().ok_or_else(|| error("存档路径无效"))?).map_err(error)?;
+        write_sync(&dest, &payloads[i])?;
+    }
+    if groups.len() != m.save_snapshots { return Err(error("存档快照数量与清单不符")); }
+    for (dir, count) in groups {
+        if super::save_backups::validate_snapshot(&dir)? != count { return Err(error("存档快照含有多余文件")); }
+    }
+    Ok(())
+}
+
 fn ensure_idle(app: &AppHandle) -> CmdResult<()> {
     if !app
         .state::<crate::launcher::RunningGames>()
@@ -460,14 +521,16 @@ fn ensure_idle(app: &AppHandle) -> CmdResult<()> {
     Ok(())
 }
 #[tauri::command]
-pub async fn backup_create(app: AppHandle, path: String) -> CmdResult<Manifest> {
+pub async fn backup_create(app: AppHandle, path: String, include_save_snapshots: Option<bool>) -> CmdResult<Manifest> {
     let running = app.state::<crate::launcher::RunningGames>();
     let _guard = running.1.lock().await;
     ensure_idle(&app)?;
-    create_archive(
+    let root = if include_save_snapshots.unwrap_or(false) { Some(super::save_backups::storage_root(&app).await?) } else { None };
+    create_archive_with_saves(
         &pool(&app).await?,
         Path::new(&path),
         &app.path().app_config_dir()?,
+        root.as_deref(),
     )
     .await
 }
@@ -476,6 +539,44 @@ pub async fn backup_preview(app: AppHandle, path: String) -> CmdResult<Manifest>
     Ok(inspect(Path::new(&path), &app.path().app_config_dir()?)
         .await?
         .0)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupEstimate {
+    games: i64,
+    sessions: i64,
+    assets: usize,
+    save_snapshots: usize,
+    save_bytes: u64,
+    estimated_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn backup_estimate(app: AppHandle, include_save_snapshots: bool) -> CmdResult<BackupEstimate> {
+    let running = app.state::<crate::launcher::RunningGames>();
+    let _guard = running.1.lock().await;
+    ensure_idle(&app)?;
+    let db = pool(&app).await?;
+    let paths = references(&db).await?;
+    let mut asset_bytes = 0u64;
+    for path in &paths {
+        if path.starts_with("http:") || path.starts_with("https:") { return Err(error("存在尚未保存在本地的图片，请先重新匹配封面")); }
+        let bytes = read_limited(Path::new(path), MAX_IMAGE)?;
+        validate_image(&bytes)?;
+        asset_bytes += bytes.len() as u64;
+        if asset_bytes > MAX_ARCHIVE { return Err(error("图片总量超过 1 GB 限制")); }
+    }
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM games").fetch_all(&db).await?;
+    let (save_snapshots, files) = if include_save_snapshots {
+        super::save_backups::transfer_files(&super::save_backups::storage_root(&app).await?, &ids, MAX_ARCHIVE.saturating_sub(asset_bytes))?
+    } else { (0, vec![]) };
+    let save_bytes: u64 = files.iter().map(|(_,b)| b.len() as u64).sum();
+    let pages: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(&db).await?;
+    let size: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(&db).await?;
+    let estimated_bytes = (pages * size) as u64 + asset_bytes + save_bytes + 4096 + (files.len() + paths.len()) as u64 * 512;
+    if estimated_bytes > MAX_ARCHIVE { return Err(error("预计迁移包超过 1 GB 限制，请减少存档快照后重试")); }
+    Ok(BackupEstimate { games: ids.len() as i64, sessions: sqlx::query_scalar("SELECT COUNT(*) FROM play_sessions").fetch_one(&db).await?, assets: paths.len(), save_snapshots, save_bytes, estimated_bytes })
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -510,6 +611,7 @@ pub async fn backup_restore_prepare(
     let check = validation.0.join("check.sqlite");
     write_sync(&check, &p[0])?;
     validate_database(&check, &m).await?;
+    validate_saves(&m, &p, &validation.0, &check).await?;
     let safety = config.join(format!(
         "before-restore-{}.koibak",
         time::OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -552,9 +654,40 @@ async fn stage_restore(
     fs::create_dir_all(&asset_root).map_err(error)?;
     let db = open_db(&next).await?;
     let mut staged_assets = vec![];
+    let mut staged_saves = vec![];
     let result = async {
         let mut tx = db.begin().await?;
+        // A restored database must never silently resume remote account writes.
+        let sync_config: Option<String> = sqlx::query_scalar::<_,Option<String>>("SELECT value FROM settings WHERE key='bangumi_sync_config'")
+            .fetch_optional(&mut *tx).await?.flatten();
+        if let Some(config) = sync_config.and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()).filter(|v|v.is_object()) {
+            let mut config=config;config["enabled"]=serde_json::Value::Bool(false);
+            config["lastError"]=serde_json::Value::String("备份已恢复，请确认账号和收藏后重新开启 Bangumi 自动同步".into());
+            sqlx::query("UPDATE settings SET value=? WHERE key='bangumi_sync_config'").bind(config.to_string()).execute(&mut *tx).await?;
+        }
+        // v1 contains no snapshots. Retain only an existing root owned by this
+        // installation, so ordinary/safety restores after a migration keep access.
+        let previous: Option<String> = sqlx::query_scalar::<_, Option<String>>("SELECT value FROM settings WHERE key='save_backup_storage_root'")
+            .fetch_optional(&mut *tx).await?.flatten();
+        let local_previous = previous.as_ref().is_some_and(|root|
+            super::save_backups::verified_storage_root(Path::new(root), asset_base).is_ok());
+        if m.includes_save_snapshots || !local_previous {
+            sqlx::query("DELETE FROM settings WHERE key='save_backup_storage_root'").execute(&mut *tx).await?;
+        }
+        if m.includes_save_snapshots {
+            let saves = asset_root.join("saves");
+            fs::create_dir_all(&saves).map_err(error)?;
+            sqlx::query("INSERT INTO settings(key,value) VALUES('save_backup_storage_root',?)")
+                .bind(saves.to_string_lossy().as_ref()).execute(&mut *tx).await?;
+        }
         for (i, entry) in m.entries.iter().enumerate().skip(1) {
+            if entry.path.starts_with("saves/") {
+                let dest = asset_root.join(&entry.path);
+                fs::create_dir_all(dest.parent().ok_or_else(|| error("存档路径无效"))?).map_err(error)?;
+                write_sync(&dest, &p[i])?;
+                staged_saves.push((dest, entry.sha256.clone()));
+                continue;
+            }
             let dest = asset_root.join(
                 Path::new(&entry.path)
                     .file_name()
@@ -649,6 +782,7 @@ async fn stage_restore(
         database_sha256: hash(&read_limited(&next, MAX_ARCHIVE)?),
         rollback_sha256: hash(rollback),
         assets: staged_assets,
+        save_assets: staged_saves,
     };
     write_sync(
         &tmp.0.join("ready"),
@@ -722,6 +856,9 @@ pub fn apply_pending(config: &Path) -> CmdResult<()> {
                 return Err(error("待恢复图片校验失败"));
             }
             validate_image(&bytes)?;
+        }
+        for (path, sha) in &ready.save_assets {
+            if hash(&read_limited(path, MAX_ARCHIVE)?) != *sha { return Err(error("待恢复存档快照校验失败")); }
         }
         if next.exists() && hash(&read_limited(&next, MAX_ARCHIVE)?) != ready.database_sha256 {
             return Err(error("待恢复数据库校验失败，原数据库未改变"));
@@ -859,6 +996,118 @@ pub fn backup_restore_notice(app: AppHandle) -> CmdResult<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn restored_backup_never_resumes_bangumi_account_writes() {
+        let tmp=TempDir::new(&test_root()).unwrap();let db=fixture(&tmp.0).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('bangumi_sync_config',?)")
+            .bind(r#"{"enabled":true,"account":{"id":42,"username":"tester","nickname":"Test"},"privateNew":true}"#).execute(&db).await.unwrap();
+        let archive=tmp.0.join("sync-enabled.koibak");create_archive(&db,&archive,&tmp.0).await.unwrap();
+        let (m,p)=inspect(&archive,&tmp.0).await.unwrap();
+        stage_restore(&tmp.0,&tmp.0.join("assets"),&m,&p,&p[0]).await.unwrap();db.close().await;apply_pending(&tmp.0).unwrap();
+        let db=open_db(&tmp.0.join("galgame.db")).await.unwrap();
+        let text:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='bangumi_sync_config'").fetch_one(&db).await.unwrap();
+        let value:serde_json::Value=serde_json::from_str(&text).unwrap();assert_eq!(value["enabled"],false);assert_eq!(value["account"]["id"],42);
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn migration_roundtrips_binary_snapshots_and_remaps_storage() {
+        let tmp = TempDir::new(&test_root()).unwrap();
+        let db = fixture(&tmp.0).await;
+        let saves = tmp.0.join("source-snapshots");
+        let source = tmp.0.join("actual-save");
+        fs::create_dir_all(source.join("empty")).unwrap();
+        fs::write(source.join("save.dat"), [0, 255, 7, 1]).unwrap();
+        let snapshot = super::super::save_backups::create_snapshot(&source, &saves.join("7"), super::super::save_backups::BackupReason::Manual).unwrap();
+        let archive = tmp.0.join("migration.koibak");
+        let m = create_archive_with_saves(&db, &archive, &tmp.0, Some(&saves)).await.unwrap();
+        assert_eq!(m.format_version, 2);
+        assert_eq!(m.save_snapshots, 1);
+        let (m, p) = inspect(&archive, &tmp.0).await.unwrap();
+        stage_restore(&tmp.0, &tmp.0.join("restored-assets"), &m, &p, &p[0]).await.unwrap();
+        db.close().await;
+        apply_pending(&tmp.0).unwrap();
+        let restored = open_db(&tmp.0.join("galgame.db")).await.unwrap();
+        let root: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='save_backup_storage_root'").fetch_one(&restored).await.unwrap();
+        let path = Path::new(&root).join("7").join(&snapshot.id);
+        assert_eq!(fs::read(path.join("files/0")).unwrap(), [0,255,7,1]);
+        super::super::save_backups::validate_snapshot(&path).unwrap();
+        let target = tmp.0.join("restored-save");
+        super::super::save_backups::restore_snapshot(&target, &Path::new(&root).join("7"), &snapshot.id).unwrap();
+        assert_eq!(fs::read(target.join("save.dat")).unwrap(), [0,255,7,1]);
+        assert!(target.join("empty").is_dir());
+        // An ordinary/safety backup on this same installation must retain access
+        // to migrated snapshots, even when it does not embed their payloads.
+        let ordinary = tmp.0.join("ordinary-after-migration.koibak");
+        create_archive(&restored, &ordinary, &tmp.0).await.unwrap();
+        let (old, payloads) = inspect(&ordinary, &tmp.0).await.unwrap();
+        assert_eq!(old.format_version, 1);
+        stage_restore(&tmp.0, &tmp.0.join("restored-assets"), &old, &payloads, &payloads[0]).await.unwrap();
+        restored.close().await;
+        apply_pending(&tmp.0).unwrap();
+        let restored = open_db(&tmp.0.join("galgame.db")).await.unwrap();
+        let preserved: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key='save_backup_storage_root'").fetch_optional(&restored).await.unwrap();
+        assert_eq!(preserved.as_deref(), Some(root.as_str()));
+        restored.close().await;
+        let mut corrupt = fs::read(&archive).unwrap();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(unpack(&corrupt).is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_rejects_unknown_game_extra_files_and_tampered_manifest() {
+        let tmp = TempDir::new(&test_root()).unwrap();
+        let db = fixture(&tmp.0).await;
+        let source = tmp.0.join("save.dat");
+        fs::write(&source, b"save").unwrap();
+        let saves = tmp.0.join("snapshots");
+        super::super::save_backups::create_snapshot(&source, &saves.join("7"), super::super::save_backups::BackupReason::Manual).unwrap();
+        let archive = tmp.0.join("good.koibak");
+        create_archive_with_saves(&db, &archive, &tmp.0, Some(&saves)).await.unwrap();
+        let (m, payloads) = inspect(&archive, &tmp.0).await.unwrap();
+        let mut foreign = m.clone();
+        for entry in &mut foreign.entries { entry.path = entry.path.replace("saves/7/", "saves/999/"); }
+        let bad = tmp.0.join("foreign.koibak");
+        fs::write(&bad, pack(&foreign, &payloads).unwrap()).unwrap();
+        assert!(inspect(&bad, &tmp.0).await.is_err());
+
+        let mut extra = m.clone();
+        let mut p = payloads.clone();
+        let mut entry = extra.entries.last().unwrap().clone();
+        entry.path = entry.path.strip_suffix('0').unwrap().to_string() + "99";
+        extra.save_bytes += entry.size;
+        extra.entries.push(entry);
+        p.push(p.last().unwrap().clone());
+        let bad = tmp.0.join("extra.koibak");
+        fs::write(&bad, pack(&extra, &p).unwrap()).unwrap();
+        assert!(inspect(&bad, &tmp.0).await.is_err());
+
+        let mut broken = m.clone();
+        let mut p = payloads;
+        let index = broken.entries.iter().position(|e| e.path.ends_with("manifest.json")).unwrap();
+        broken.save_bytes -= broken.entries[index].size;
+        p[index] = b"{}".to_vec();
+        broken.entries[index].size = 2;
+        broken.entries[index].sha256 = hash(&p[index]);
+        broken.save_bytes += 2;
+        let bad = tmp.0.join("manifest.koibak");
+        fs::write(&bad, pack(&broken, &p).unwrap()).unwrap();
+        assert!(inspect(&bad, &tmp.0).await.is_err());
+        db.close().await;
+    }
+
+    #[test]
+    fn ordinary_archives_keep_the_legacy_manifest_shape_and_save_paths_are_strict() {
+        let value = serde_json::to_value(Manifest::empty()).unwrap();
+        for name in ["includesSaveSnapshots", "saveSnapshots", "saveBytes"] { assert!(value.get(name).is_none()); }
+        for path in ["saves/7/save-123/manifest.json", "saves/7/save-123/files/0"] {
+            assert!(super::super::save_backups::valid_transfer_path(path));
+        }
+        for path in ["saves/0/save-123/files/0", "saves/07/save-123/files/0", "saves/7/../manifest.json", "saves/7/save-123/files/01", "saves/7/save-123/files/0.", "saves/7/save-123/unknown"] {
+            assert!(!super::super::save_backups::valid_transfer_path(path));
+        }
+    }
     fn test_root() -> PathBuf {
         std::env::var_os("KOIPAGE_TEST_ENCRYPTED_ROOT")
             .map(PathBuf::from)

@@ -40,6 +40,7 @@ import type { GameStatus } from "@/types/game";
 
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
+import { libraryRenderCount, LIBRARY_RENDER_BATCH } from './render-window';
 import { FolderPanel } from "./FolderPanel";
 import { FolderTile } from './FolderTile';
 import { FolderGamePicker } from './FolderGamePicker';
@@ -56,6 +57,7 @@ import MetadataDialog from "@/features/metadata/MetadataDialog";
 
 let libraryScrollTop = 0;
 let folderScrollTop = 0;
+const rememberedRenderCounts = new Map<string, number>();
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "title", label: "标题" },
@@ -428,6 +430,17 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     sortKey,
     sortDirection,
   ]);
+
+  const renderScope = JSON.stringify([folderPage, folderParams.toString(), search, status, favoriteOnly, developer, activeTagIds, installation, sortKey, sortDirection]);
+  const [renderState, setRenderState] = useState(() => ({ scope: renderScope, count: rememberedRenderCounts.get(renderScope) ?? LIBRARY_RENDER_BATCH }));
+  const renderCount = libraryRenderCount(visibleGames.length, renderState.scope === renderScope ? renderState.count : rememberedRenderCounts.get(renderScope));
+  const renderedGames = visibleGames.slice(0, renderCount);
+  const revealMore = () => {
+    const count = libraryRenderCount(visibleGames.length, renderCount + LIBRARY_RENDER_BATCH);
+    rememberedRenderCounts.set(renderScope, count);
+    if (rememberedRenderCounts.size > 30) rememberedRenderCounts.delete(rememberedRenderCounts.keys().next().value!);
+    setRenderState({ scope: renderScope, count });
+  };
 
   // ---------------------------------------------------------------------
   // Multi-select
@@ -854,7 +867,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
         />
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-          {visibleGames.map((game) => (
+          {renderedGames.map((game) => (
             <GameCard
               key={game.id}
               game={game}
@@ -884,7 +897,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
             {!selectMode ? <span className="w-20 shrink-0 text-center">封面</span> : null}
             <span className="w-8 shrink-0" />
           </div>
-          {visibleGames.map((game) => (
+          {renderedGames.map((game) => (
             <GameRow
               key={game.id}
               game={game}
@@ -901,6 +914,11 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           </div>
         </div>
       )}
+
+      {!loading && renderCount < visibleGames.length && !folderOverview ? <div className="flex flex-col items-center gap-2 py-4">
+        <Button variant="outline" onClick={revealMore}>加载更多（已显示 {renderCount} / {visibleGames.length}）</Button>
+        <p className="text-xs text-muted-foreground">搜索、筛选和全选仍覆盖全部 {visibleGames.length} 部匹配游戏。</p>
+      </div> : null}
 
       <ScanDialog
         open={scanOpen}

@@ -313,7 +313,7 @@ fn remove_owned(path: &Path) -> CmdResult<()> {
     }
 }
 
-fn create_snapshot(source: &Path, root: &Path, reason: BackupReason) -> CmdResult<Snapshot> {
+pub(crate) fn create_snapshot(source: &Path, root: &Path, reason: BackupReason) -> CmdResult<Snapshot> {
     let source = checked_path(source, false)?;
     // Validate an absent backup root before creating any directory in it.
     let future_root = future_path(root)?;
@@ -504,7 +504,7 @@ fn trim_automatic(root: &Path, keep: u32) -> CmdResult<()> {
     }
     Ok(())
 }
-fn restore_snapshot(source: &Path, root: &Path, id: &str) -> CmdResult<RestoreResult> {
+pub(crate) fn restore_snapshot(source: &Path, root: &Path, id: &str) -> CmdResult<RestoreResult> {
     if !valid_id(id) {
         return Err(error("备份标识无效"));
     }
@@ -610,6 +610,76 @@ fn restore_snapshot(source: &Path, root: &Path, id: &str) -> CmdResult<RestoreRe
     Ok(RestoreResult { safety_backup_id })
 }
 
+/// Restored snapshots live in a unique local directory, separate from previous data.
+pub(crate) async fn storage_root(app: &AppHandle) -> CmdResult<PathBuf> {
+    let db = pool(app).await?;
+    let stored = super::settings::settings_get_impl(&db, "save_backup_storage_root").await?;
+    if let Some(stored) = stored {
+        let root = PathBuf::from(stored);
+        let allowed = app.path().app_data_dir()?.join("restored-assets");
+        return verified_storage_root(&root, &allowed);
+    }
+    Ok(app.path().app_local_data_dir()?.join("save-backups"))
+}
+
+pub(crate) fn verified_storage_root(root: &Path, allowed: &Path) -> CmdResult<PathBuf> {
+    if !root.starts_with(allowed) || root.file_name().and_then(|s| s.to_str()) != Some("saves") {
+        return Err(error("迁移存档目录无效，请重新导入迁移备份"));
+    }
+    let root = checked_path(root, false)?;
+    if !root.is_dir() { return Err(error("迁移存档目录不可用")); }
+    Ok(root)
+}
+
+pub(crate) fn validate_snapshot(dir: &Path) -> CmdResult<usize> {
+    read_manifest(dir).map(|m| m.entries.len() + 1)
+}
+
+pub(crate) fn valid_transfer_path(path: &str) -> bool {
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() < 4 || parts[0] != "saves" || !valid_id(parts[2]) { return false; }
+    let number = |s: &str| s.parse::<u64>().is_ok_and(|n| n.to_string() == s);
+    if !number(parts[1]) || parts[1] == "0" { return false; }
+    (parts.len() == 4 && parts[3] == "manifest.json") ||
+        (parts.len() == 5 && parts[3] == "files" && number(parts[4]))
+}
+
+/// Export committed manifests and their numbered binary payloads only.
+pub(crate) fn transfer_files(root: &Path, game_ids: &[i64], limit: u64) -> CmdResult<(usize, Vec<(String, Vec<u8>)>)> {
+    if !root.exists() { return Ok((0, vec![])); }
+    checked_path(root, false)?;
+    let mut files = vec![];
+    let mut total = 0u64;
+    let mut count = 0;
+    for id in game_ids {
+        let game_root = root.join(id.to_string());
+        if !game_root.exists() { continue; }
+        checked_path(&game_root, false)?;
+        for entry in fs::read_dir(&game_root).map_err(error)? {
+            let dir = entry.map_err(error)?.path();
+            if !dir.join("manifest.json").exists() { continue; }
+            let manifest = read_manifest(&dir)?;
+            let prefix = format!("saves/{id}/{}", manifest.snapshot.id);
+            let json = serde_json::to_vec(&manifest).map_err(error)?;
+            total = total.checked_add(json.len() as u64 + manifest.snapshot.bytes).ok_or_else(|| error("迁移体积溢出"))?;
+            if total > limit { return Err(error("包含存档快照后备份超过 1 GB 限制")); }
+            files.push((format!("{prefix}/manifest.json"), json));
+            for (index, e) in manifest.entries.iter().enumerate() {
+                let path = dir.join("files").join(index.to_string());
+                checked_path(&path, false)?;
+                let mut bytes = vec![];
+                fs::File::open(&path).map_err(error)?.take(e.size + 1).read_to_end(&mut bytes).map_err(error)?;
+                if bytes.len() as u64 != e.size || format!("{:x}", Sha256::digest(&bytes)) != e.sha256 {
+                    return Err(error("存档快照在导出过程中发生变化，请重试"));
+                }
+                files.push((format!("{prefix}/files/{index}"), bytes));
+            }
+            count += 1;
+        }
+    }
+    Ok((count, files))
+}
+
 async fn game_paths(app: &AppHandle, game_id: i64, missing: bool) -> CmdResult<(PathBuf, PathBuf)> {
     let db = pool(app).await?;
     let row: Option<(Option<String>, Option<String>)> =
@@ -658,11 +728,7 @@ async fn game_paths(app: &AppHandle, game_id: i64, missing: bool) -> CmdResult<(
             }
         }
     }
-    let root = app
-        .path()
-        .app_local_data_dir()?
-        .join("save-backups")
-        .join(game_id.to_string());
+    let root = storage_root(app).await?.join(game_id.to_string());
     Ok((source, root))
 }
 fn deny_running(state: &RunningGames) -> CmdResult<()> {
@@ -726,11 +792,7 @@ pub async fn save_backup_create(app: AppHandle, game_id: i64) -> CmdResult<Snaps
 pub async fn save_backup_list(app: AppHandle, game_id: i64) -> CmdResult<Vec<Snapshot>> {
     let state = app.state::<RunningGames>();
     let _guard = state.1.lock().await;
-    let root = app
-        .path()
-        .app_local_data_dir()?
-        .join("save-backups")
-        .join(game_id.to_string());
+    let root = storage_root(&app).await?.join(game_id.to_string());
     list_snapshots(&root)
 }
 #[tauri::command]
@@ -756,21 +818,13 @@ pub async fn save_backup_delete(
     if !valid_id(&snapshot_id) {
         return Err(error("备份标识无效"));
     }
-    let root = app
-        .path()
-        .app_local_data_dir()?
-        .join("save-backups")
-        .join(game_id.to_string());
+    let root = storage_root(&app).await?.join(game_id.to_string());
     let target = root.join(snapshot_id);
     remove_owned(&target)
 }
 #[tauri::command]
 pub async fn save_backup_directory(app: AppHandle, game_id: i64) -> CmdResult<String> {
-    let root = app
-        .path()
-        .app_local_data_dir()?
-        .join("save-backups")
-        .join(game_id.to_string());
+    let root = storage_root(&app).await?.join(game_id.to_string());
     ensure_root(&root)?;
     Ok(root.to_string_lossy().into_owned())
 }

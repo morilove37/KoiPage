@@ -20,7 +20,10 @@ pub async fn games_batch_update(
     ids: Vec<i64>,
     patch: LibraryBatchPatch,
 ) -> CmdResult<usize> {
-    apply_batch(&super::games::pool(&app).await?, ids, patch).await
+    let affects_sync=patch.status.is_some();
+    let result=apply_batch(&super::games::pool(&app).await?, ids, patch).await?;
+    if affects_sync {crate::bangumi_sync::mark_dirty(&app);}
+    Ok(result)
 }
 
 fn validated_ids(ids: Vec<i64>) -> CmdResult<std::collections::BTreeSet<i64>> {

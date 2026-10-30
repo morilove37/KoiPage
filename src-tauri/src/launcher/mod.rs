@@ -414,6 +414,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
             return Err(error);
         }
     };
+    crate::bangumi_sync::mark_dirty(&app);
 
     {
         let running = app.state::<RunningGames>();

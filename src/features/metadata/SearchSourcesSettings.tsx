@@ -43,6 +43,7 @@ export function SearchSourcesSettings({ onChange }: { onChange?: (sources: Metad
       </label>)}
     </div>
     <p className="text-xs leading-relaxed text-muted-foreground">只向勾选的数据源发送搜索和资料请求，适用于手动搜索、自动补全和批量导入。至少保留一个，更改后即时保存。</p>
+    <p className="text-xs leading-relaxed text-muted-foreground">使用 VNDB 时，会优先补充其他已启用来源中确认属于同一作品的中文简介，并在确认页标注简介来源。</p>
     {loaded && !enabled.length && <p role="alert" className="text-xs text-destructive">数据源设置无效，请勾选至少一个数据源以恢复搜索。</p>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
   </fieldset>;

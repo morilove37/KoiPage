@@ -1,6 +1,6 @@
 [package]
 name = "galgame-manager"
-version = "0.6.5"
+version = "0.6.6"
 license = "GPL-3.0-only"
 description = "KoiPage - a Galgame and visual novel library manager"
 authors = ["morilove37"]
@@ -67,6 +67,7 @@ tauri-plugin-updater = "2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_JobObjects",

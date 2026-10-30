@@ -22,15 +22,15 @@ use super::settings::settings_get_impl;
 use super::util::{now_iso8601, required_string};
 
 /// Settings key holding the optional NextMoe API key.
-const NEXTMOE_KEY: &str = "nextmoe_api_key";
+pub(crate) const NEXTMOE_KEY: &str = "nextmoe_api_key";
 
 /// Current title-language preference from the `settings` table.
-async fn title_preference(pool: &sqlx::Pool<sqlx::Sqlite>) -> TitlePreference {
+pub(crate) async fn title_preference(pool: &sqlx::Pool<sqlx::Sqlite>) -> TitlePreference {
     let stored = settings_get_impl(pool, TITLE_LANGUAGE_KEY).await.ok().flatten();
     TitlePreference::parse(stored.as_deref())
 }
 
-async fn source_preference(pool: &sqlx::SqlitePool) -> CmdResult<Provider> {
+pub(crate) async fn source_preference(pool: &sqlx::SqlitePool) -> CmdResult<Provider> {
     let value = settings_get_impl(pool, metadata::DEFAULT_SOURCE_KEY).await?;
     let preferred = metadata::default_source(value.as_deref());
     let enabled = enabled_sources(pool).await?;
@@ -41,7 +41,7 @@ async fn source_preference(pool: &sqlx::SqlitePool) -> CmdResult<Provider> {
 const ENABLED_SOURCES_KEY: &str = "metadata_enabled_sources";
 const ALL_SOURCES: [Sources; 4] = [Sources::Nextmoe, Sources::Vndb, Sources::Bangumi, Sources::TwoDfan];
 
-async fn enabled_sources(pool: &sqlx::SqlitePool) -> CmdResult<Vec<Sources>> {
+pub(crate) async fn enabled_sources(pool: &sqlx::SqlitePool) -> CmdResult<Vec<Sources>> {
     let Some(stored) = settings_get_impl(pool, ENABLED_SOURCES_KEY).await? else {
         return Ok(ALL_SOURCES.to_vec());
     };
@@ -86,7 +86,7 @@ pub enum Sources {
 }
 
 impl Sources {
-    fn provider(self) -> Provider {
+    pub(crate) fn provider(self) -> Provider {
         match self {
             Self::Nextmoe => Provider::Nextmoe,
             Self::Vndb => Provider::Vndb,
@@ -219,6 +219,7 @@ pub async fn metadata_detail(
     app: AppHandle,
     provider: String,
     external_id: String,
+    include_description_choices: Option<bool>,
 ) -> CmdResult<MetadataDetail> {
     let provider = Sources::parse(&provider)
         .ok_or_else(|| CmdError(format!("未知的数据源：{provider}")))?;
@@ -229,7 +230,7 @@ pub async fn metadata_detail(
         return Err(CmdError("该数据源已停用，请在设置中启用后重试。".into()));
     }
     let key = nextmoe_key(&app).await;
-    resolve_detail(provider, &external_id, key.as_deref(), &enabled).await
+    resolve_detail_with_choices(provider, &external_id, key.as_deref(), &enabled, include_description_choices.unwrap_or(false)).await
 }
 
 /// Resolve one provider id into merged metadata, enriching from NextMoe.
@@ -242,6 +243,12 @@ async fn resolve_detail(
     nextmoe_key: Option<&str>,
     enabled: &[Sources],
 ) -> CmdResult<MetadataDetail> {
+    resolve_detail_with_choices(provider, external_id, nextmoe_key, enabled, false).await
+}
+
+pub(crate) async fn resolve_detail_with_choices(
+    provider: Sources, external_id: &str, nextmoe_key: Option<&str>, enabled: &[Sources], collect_choices: bool,
+) -> CmdResult<MetadataDetail> {
     let primary = match provider {
         Sources::Nextmoe => nextmoe::detail(external_id, nextmoe_key).await?,
         Sources::Vndb => vndb::detail(external_id).await?,
@@ -252,7 +259,9 @@ async fn resolve_detail(
     // Failure is expected (NextMoe may not know the work) and must not break
     // the lookup.
     let mut detail = primary;
-    if enabled.contains(&Sources::Nextmoe) && matches!(provider, Sources::Vndb | Sources::Bangumi) {
+    merge::remember_description(&mut detail);
+    let nextmoe_ref_attempted = enabled.contains(&Sources::Nextmoe) && matches!(provider, Sources::Vndb | Sources::Bangumi);
+    if nextmoe_ref_attempted {
         let source_name = match provider {
             Sources::Vndb => "vndb",
             Sources::Bangumi => "bangumi",
@@ -264,7 +273,50 @@ async fn resolve_detail(
             merge::merge_into(&mut detail, extra);
         }
     }
+    if collect_choices {
+        let (nextmoe, vndb, bangumi, twodfan) = tokio::join!(
+            supplementary_description(&detail, Sources::Nextmoe, enabled, nextmoe_key, nextmoe_ref_attempted),
+            supplementary_description(&detail, Sources::Vndb, enabled, nextmoe_key, false),
+            supplementary_description(&detail, Sources::Bangumi, enabled, nextmoe_key, false),
+            supplementary_description(&detail, Sources::TwoDfan, enabled, nextmoe_key, false),
+        );
+        for extra in [nextmoe, vndb, bangumi, twodfan].into_iter().flatten() {
+            metadata::description::merge_verified_supplement(&mut detail, &extra);
+        }
+    } else {
+        for source in [Sources::Bangumi, Sources::TwoDfan] {
+            if !needs_supplement(&detail, provider, source, enabled) { continue; }
+            // Supplementary providers must not make a successful VNDB lookup
+            // wait indefinitely. Each gets at most six seconds including search.
+            let result = tokio::time::timeout(std::time::Duration::from_secs(6),
+                metadata::description::fetch_description(&detail, source.provider(), nextmoe_key)).await;
+            match result {
+                Ok(Ok(Some(extra))) => { metadata::description::merge_verified_supplement(&mut detail, &extra); }
+                Ok(Err(error)) => crate::app_warn!("[metadata] {} 简介补充失败：{}", source.provider().as_str(), error.0),
+                Err(_) => crate::app_warn!("[metadata] {} 简介补充超时，保留已有资料", source.provider().as_str()),
+                Ok(Ok(None)) => {}
+            }
+        }
+    }
     Ok(detail)
+}
+
+fn needs_supplement(detail: &MetadataDetail, primary: Sources, source: Sources, enabled: &[Sources]) -> bool {
+    let needs_intro = primary == Sources::Vndb && !merge::has_chinese_description(detail);
+    let needs_binding = source == Sources::Bangumi && detail.bangumi_id.as_deref().is_none_or(|id| id.trim().is_empty());
+    enabled.contains(&source) && source != primary && (needs_intro || needs_binding)
+}
+
+async fn supplementary_description(
+    detail: &MetadataDetail, source: Sources, enabled: &[Sources], nextmoe_key: Option<&str>, already_requested: bool,
+) -> Option<MetadataDetail> {
+    if already_requested || !enabled.contains(&source) || detail.provider == Some(source.provider()) { return None; }
+    match tokio::time::timeout(std::time::Duration::from_secs(6),
+        metadata::description::fetch_description(detail, source.provider(), nextmoe_key)).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(error)) => { crate::app_warn!("[metadata] {} 简介选项读取失败：{}", source.provider().as_str(), error.0); None }
+        Err(_) => { crate::app_warn!("[metadata] {} 简介选项读取超时", source.provider().as_str()); None }
+    }
 }
 
 /// `metadata_apply` — copy selected metadata onto an existing game.
@@ -282,7 +334,7 @@ async fn resolve_detail(
 /// is what the first version of this command did.
 ///
 /// Extracted from the command so the rule is testable without a database.
-fn text_columns(
+pub(crate) fn text_columns(
     detail: &MetadataDetail,
     fields: &[String],
     preference: TitlePreference,
@@ -363,6 +415,13 @@ pub(crate) async fn apply_detail(
     tag_mode: Option<&str>,
     preference: TitlePreference,
 ) -> CmdResult<AppliedMetadata> {
+    apply_detail_policy(pool, game_id, detail, fields, tag_mode, preference, false).await
+}
+
+async fn apply_detail_policy(
+    pool: &sqlx::SqlitePool, game_id: i64, detail: &MetadataDetail,
+    fields: &[String], tag_mode: Option<&str>, preference: TitlePreference, only_missing: bool,
+) -> CmdResult<AppliedMetadata> {
     let wants = |name: &str| fields.iter().any(|f| f == name);
     let now = now_iso8601();
 
@@ -382,7 +441,9 @@ pub(crate) async fn apply_detail(
     let mut bindings: Vec<Binding> = Vec::new();
 
     for (column, value) in columns {
-        sets.push(format!("{column} = ?"));
+        sets.push(if only_missing {
+            format!("{column} = CASE WHEN {column} IS NULL OR TRIM({column}) = '' THEN ? ELSE {column} END")
+        } else { format!("{column} = ?") });
         bindings.push(Binding::Text(value));
     }
 
@@ -390,7 +451,7 @@ pub(crate) async fn apply_detail(
         // `rating` is guarded separately: it is numeric, and an upstream with
         // no score must not overwrite a rating the user set.
         if let Some(rating) = super::util::validate_rating(detail.rating)? {
-            sets.push("rating = ?".to_string());
+            sets.push(if only_missing { "rating = COALESCE(rating, ?)" } else { "rating = ?" }.to_string());
             bindings.push(Binding::Real(rating));
         }
     }
@@ -466,6 +527,28 @@ pub(crate) async fn apply_detail(
     })
 }
 
+/// Automatic refresh fills blanks; manual confirmation may explicitly overwrite.
+async fn apply_missing_detail(
+    pool: &sqlx::SqlitePool, game_id: i64, detail: &MetadataDetail,
+    fields: &[String], preference: TitlePreference,
+) -> CmdResult<AppliedMetadata> {
+    use sqlx::Row;
+    let row = sqlx::query("SELECT title,original_title,developer,release_date,CAST(rating AS REAL) AS rating,description,vndb_id,bangumi_id FROM games WHERE id=?")
+        .bind(game_id).fetch_one(pool).await?;
+    let mut missing = Vec::new();
+    for field in fields {
+        if field == "tags" { missing.push(field.clone()); continue; }
+        if !AUTOFETCH_FIELDS.contains(&field.as_str()) { continue; }
+        let empty = if field == "rating" {
+            row.try_get::<Option<f64>, _>(field.as_str())?.is_none()
+        } else {
+            row.try_get::<Option<String>, _>(field.as_str())?.is_none_or(|v| v.trim().is_empty())
+        };
+        if empty { missing.push(field.clone()); }
+    }
+    apply_detail_policy(pool, game_id, detail, &missing, Some("merge"), preference, true).await
+}
+
 #[tauri::command]
 pub async fn metadata_apply(
     app: AppHandle,
@@ -477,7 +560,7 @@ pub async fn metadata_apply(
     let pool = pool(&app).await?;
     // Manual confirmation keeps naming the game after the user's search query;
     // only automatic fetching applies the configured title-language preference.
-    apply_detail(
+    let result = apply_detail(
         &pool,
         game_id,
         &detail,
@@ -485,7 +568,9 @@ pub async fn metadata_apply(
         tag_mode.as_deref(),
         TitlePreference::Source,
     )
-    .await
+    .await?;
+    if fields.iter().any(|f| f == "bangumi_id") { crate::bangumi_sync::mark_dirty(&app); }
+    Ok(result)
 }
 
 /// Download to managed app storage, independent of the game's install folder.
@@ -772,7 +857,7 @@ pub async fn metadata_autofetch(
                             outcome.message = Some(error.0);
                         }
                         Ok(detail) => {
-                            match apply_detail(&pool, *game_id, &detail, &fields, None, preference).await {
+                            match apply_missing_detail(&pool, *game_id, &detail, &fields, preference).await {
                                 Err(error) => {
                                     outcome.status = AutofetchStatus::Failed;
                                     outcome.message = Some(error.0);
@@ -781,11 +866,14 @@ pub async fn metadata_autofetch(
                                     outcome.status = AutofetchStatus::Applied;
                                     outcome.fields_applied = applied.fields_applied;
                                     outcome.tags_added = applied.tags_added;
+                                    if detail.bangumi_id.is_some() { crate::bangumi_sync::mark_dirty(&app); }
                                 }
                             }
                             // Cover is best-effort: a missing image must not
                             // downgrade a successful metadata write.
-                            if let Some(url) = detail.cover_url.as_deref() {
+                            let has_cover: bool = sqlx::query_scalar("SELECT cover_path IS NOT NULL AND TRIM(cover_path) <> '' FROM games WHERE id=?")
+                                .bind(game_id).fetch_one(&pool).await?;
+                            if let Some(url) = detail.cover_url.as_deref().filter(|_| !has_cover) {
                                 let cached = match super::covers::directory(&app) {
                                     Ok(directory) => cache_cover(url, &directory).await,
                                     Err(error) => Err(error),
@@ -793,7 +881,7 @@ pub async fn metadata_autofetch(
                                 match cached {
                                     Ok(path) => {
                                         if let Err(error) = sqlx::query(
-                                            "UPDATE games SET cover_path = ? WHERE id = ?",
+                                            "UPDATE games SET cover_path = ? WHERE id = ? AND (cover_path IS NULL OR TRIM(cover_path) = '')",
                                         )
                                         .bind(&path)
                                         .bind(game_id)
@@ -878,6 +966,62 @@ async fn cache_cover(url: &str, directory: &std::path::Path) -> CmdResult<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bangumi_binding_lookup_does_not_depend_on_primary_or_intro_language() {
+        let mut detail = MetadataDetail { description: Some("已有中文简介".into()), description_lang: Some("zh-Hans".into()), ..Default::default() };
+        for primary in [Sources::Vndb, Sources::Nextmoe, Sources::TwoDfan] {
+            assert!(needs_supplement(&detail, primary, Sources::Bangumi, &[primary, Sources::Bangumi]));
+            assert!(!needs_supplement(&detail, primary, Sources::Bangumi, &[primary]));
+        }
+        detail.bangumi_id = Some("12".into());
+        assert!(!needs_supplement(&detail, Sources::Vndb, Sources::Bangumi, &[Sources::Vndb, Sources::Bangumi]));
+        detail.bangumi_id = Some("  ".into());
+        assert!(needs_supplement(&detail, Sources::Nextmoe, Sources::Bangumi, &[Sources::Nextmoe, Sources::Bangumi]));
+    }
+
+    #[tokio::test]
+    async fn description_choices_skip_disabled_and_primary_sources_without_requests() {
+        let detail = MetadataDetail { provider: Some(Provider::Vndb), title: "No network should occur".into(), ..Default::default() };
+        assert!(supplementary_description(&detail, Sources::Bangumi, &[Sources::Vndb], None, false).await.is_none());
+        assert!(supplementary_description(&detail, Sources::Vndb, &[Sources::Vndb], None, false).await.is_none());
+        assert!(supplementary_description(&detail, Sources::Nextmoe, &[Sources::Vndb, Sources::Nextmoe], None, true).await.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "read-only VNDB and Bangumi description choice lookup; run explicitly"]
+    async fn manual_confirmation_keeps_vndb_and_bangumi_description_choices() {
+        let detail = resolve_detail_with_choices(Sources::Vndb, "v4", None, &[Sources::Vndb, Sources::Bangumi], true).await.unwrap();
+        assert_eq!(detail.provider, Some(Provider::Vndb));
+        assert_eq!(detail.description_source, Some(Provider::Bangumi));
+        assert!(detail.description_options.iter().any(|option| option.source == Some(Provider::Vndb) && option.language.as_deref() == Some("en") && !option.text.is_empty()));
+        assert!(detail.description_options.iter().any(|option| option.source == Some(Provider::Bangumi) && option.language.as_deref() == Some("zh-Hans") && !option.text.is_empty()));
+        println!("Manual VNDB v4 description choices: {:?}", detail.description_options.iter().map(|o| (&o.source, &o.language)).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    #[ignore = "read-only VNDB and Bangumi network lookup; run explicitly"]
+    async fn vndb_import_borrows_bangumi_intro_without_nextmoe() {
+        let detail = resolve_detail(Sources::Vndb, "v4", None, &[Sources::Vndb, Sources::Bangumi]).await.unwrap();
+        assert_eq!(detail.provider, Some(Provider::Vndb));
+        assert_eq!(detail.vndb_id.as_deref(), Some("v4"));
+        assert!(detail.bangumi_id.as_deref().is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())));
+        assert!(merge::has_chinese_description(&detail));
+        assert_eq!(detail.description_source, Some(Provider::Bangumi));
+        assert!(detail.attribution.as_deref().unwrap_or_default().contains("Bangumi"));
+        println!("VNDB v4: description source={:?}, language={:?}, characters={}", detail.description_source, detail.description_lang, detail.description.unwrap_or_default().chars().count());
+    }
+
+    #[tokio::test]
+    async fn autofetch_preserves_curated_fields_and_zero_rating() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/0001_init.sql")).execute(&db).await.unwrap();
+        sqlx::query("INSERT INTO games(id,title,install_path,created_at,updated_at,rating,developer) VALUES(1,'手动标题','test','now','now',0,' ')").execute(&db).await.unwrap();
+        let detail = MetadataDetail { title: "上游标题".into(), developer: Some("社团".into()), rating: Some(9.0), ..Default::default() };
+        apply_missing_detail(&db, 1, &detail, &fields(&["title", "developer", "rating"]), TitlePreference::Source).await.unwrap();
+        let row: (String, String, f64) = sqlx::query_as("SELECT title,developer,CAST(rating AS REAL) FROM games WHERE id=1").fetch_one(&db).await.unwrap();
+        assert_eq!(row, ("手动标题".into(), "社团".into(), 0.0));
+    }
 
     #[tokio::test]
     async fn enabled_sources_filter_all_entry_points_and_disabled_default() {

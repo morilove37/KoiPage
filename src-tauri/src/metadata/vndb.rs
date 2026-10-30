@@ -345,6 +345,8 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         cover_url: vn.image.as_ref().and_then(|i| i.url.clone()),
         description,
         description_lang: Some("en".to_string()),
+        description_source: Some(Provider::Vndb),
+        description_options: vec![],
         tags: super::merge::dedupe_tags(tags),
         vndb_id: Some(vn.id.clone()),
         bangumi_id: None,

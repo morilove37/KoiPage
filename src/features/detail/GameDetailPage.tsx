@@ -1,3 +1,5 @@
+import { BangumiSyncProfilePanel } from "@/features/bangumi-sync/BangumiSyncProfilePanel";
+import type { SyncReport } from "@/features/bangumi-sync/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -69,7 +71,6 @@ interface FormState {
   savePath: string;
   notes: string;
   vndbId: string;
-  bangumiId: string;
 }
 
 function toForm(game: GameDetail): FormState {
@@ -88,7 +89,6 @@ function toForm(game: GameDetail): FormState {
     savePath: game.savePath ?? "",
     notes: game.notes ?? "",
     vndbId: game.vndbId ?? "",
-    bangumiId: game.bangumiId ?? "",
   };
 }
 
@@ -315,6 +315,23 @@ export default function GameDetailPage() {
 
   const launcher = useGameLauncher(() => void refreshQuietly());
 
+  useEffect(() => {
+    let alive = true;
+    let request = 0;
+    let unlisten: UnlistenFn | undefined;
+    void listen<SyncReport>('bangumi-sync-updated', ({ payload }) => {
+      if (!alive || (payload.downloaded <= 0 && payload.errors <= 0)) return;
+      const currentRequest = ++request;
+      // Refresh saved state only; personal sync must never reset the draft.
+      void gameGet(gameId).then(detail => {
+        if (alive && currentRequest === request) setGame(detail);
+      }).catch(() => {});
+    }).then(cleanup => {
+      if (alive) unlisten = cleanup; else cleanup();
+    }).catch(() => {});
+    return () => { alive = false; request++; unlisten?.(); };
+  }, [gameId]);
+
   /**
    * Play time is accumulated by the Rust side when the launched process exits,
    * which then emits `game-exited`. Nothing was listening, so the displayed
@@ -404,8 +421,6 @@ export default function GameDetailPage() {
       patch.notes = orNull(form.notes);
     if (form.vndbId.trim() !== (game.vndbId ?? ""))
       patch.vndbId = orNull(form.vndbId);
-    if (form.bangumiId.trim() !== (game.bangumiId ?? ""))
-      patch.bangumiId = orNull(form.bangumiId);
 
     const ratingRaw = form.rating.trim();
     const rating = ratingRaw === "" ? null : roundRating(Number(ratingRaw));
@@ -829,14 +844,6 @@ export default function GameDetailPage() {
                   }
                 />
               </Field>
-              <Field label="Bangumi ID">
-                <Input
-                  value={form.bangumiId}
-                  onChange={(event) =>
-                    setForm({ ...form, bangumiId: event.target.value })
-                  }
-                />
-              </Field>
               <Field label="备注" className="sm:col-span-2">
                 <Textarea
                   value={form.notes}
@@ -848,6 +855,8 @@ export default function GameDetailPage() {
             </CardContent>
           </Card>
         ) : null}
+
+        {tab === "info" ? <BangumiSyncProfilePanel key={game.id} gameId={game.id} /> : null}
 
         {tab === "files" ? (
           <><ArchivePanel key={game.id} gameId={game.id} />
