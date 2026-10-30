@@ -491,6 +491,13 @@ export interface SourceRating {
 }
 
 /** Fully resolved metadata for one work, merged across providers. */
+export interface MetadataDescriptionOption {
+  source: MetadataProvider | null;
+  language: string | null;
+  text: string;
+  attribution?: string | null;
+}
+
 export interface MetadataDetail {
   /** Which provider this detail primarily came from. */
   provider: MetadataProvider | null;
@@ -510,6 +517,9 @@ export interface MetadataDetail {
   coverUrl: string | null;
   description: string | null;
   descriptionLang: string | null;
+  /** Introduction provider, which may differ from the selected primary source. */
+  descriptionSource?: MetadataProvider | null;
+  descriptionOptions?: MetadataDescriptionOption[];
   tags: string[];
   vndbId: string | null;
   bangumiId: string | null;
@@ -602,8 +612,9 @@ export function metadataSearch(
 export function metadataDetail(
   provider: MetadataProvider,
   externalId: string,
+  includeDescriptionChoices = false,
 ): Promise<MetadataDetail> {
-  return ready.then(() => invoke<MetadataDetail>('metadata_detail', { provider, externalId }));
+  return ready.then(() => invoke<MetadataDetail>('metadata_detail', { provider, externalId, includeDescriptionChoices }));
 }
 
 /**

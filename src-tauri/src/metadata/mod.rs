@@ -20,6 +20,7 @@
 pub mod bangumi;
 pub mod matching;
 pub mod merge;
+pub mod description;
 pub mod nextmoe;
 pub mod vndb;
 pub mod twodfan;
@@ -102,6 +103,15 @@ pub struct SourceRating {
 /// This is what the confirmation dialog renders before the user accepts it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DescriptionOption {
+    pub source: Option<Provider>,
+    pub language: Option<String>,
+    pub text: String,
+    pub attribution: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MetadataDetail {
     /// Which provider this detail primarily came from.
     pub provider: Option<Provider>,
@@ -122,6 +132,11 @@ pub struct MetadataDetail {
     /// Description text, preferring a non-machine-translated Chinese intro.
     pub description: Option<String>,
     pub description_lang: Option<String>,
+    /// Provider that supplied the chosen introduction (may differ from primary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_source: Option<Provider>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub description_options: Vec<DescriptionOption>,
     /// Tag display names, de-duplicated across providers, order preserved.
     pub tags: Vec<String>,
     /// External ids we learned, so they can be stored on the game row.

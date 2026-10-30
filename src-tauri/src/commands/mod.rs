@@ -16,6 +16,7 @@ pub mod library_batch;
 pub mod covers;
 pub mod games;
 pub mod metadata;
+pub mod metadata_refresh;
 pub mod model;
 pub mod play_sessions;
 pub mod scan_roots;
@@ -72,6 +73,11 @@ pub fn migrations() -> Vec<tauri_plugin_sql::Migration> {
         version: 3,
         description: "character birthdays",
         sql: include_str!("../../migrations/0003_birthdays.sql"),
+        kind: MigrationKind::Up,
+    }, tauri_plugin_sql::Migration {
+        version: 4,
+        description: "Bangumi collection sync",
+        sql: include_str!("../../migrations/0004_bangumi_sync.sql"),
         kind: MigrationKind::Up,
     }]
 }

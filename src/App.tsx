@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { GithubProfileLink } from "@/components/ui/github-profile-link";
@@ -13,6 +14,10 @@ import { UpdateDialog } from "@/features/updates/UpdateDialog";
 import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog";
 import { BirthdayCelebrationDialog } from "@/features/birthdays/BirthdayCelebrationDialog";
 import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
+import { BangumiSyncRuntime } from "@/features/bangumi-sync/BangumiSyncRuntime";
+import type { SyncReport } from "@/features/bangumi-sync/api";
+import type { RefreshState } from "@/features/metadata/metadata-refresh-state";
+import { useAppStore } from "@/store/app";
 import { useGameProcessSync } from "@/features/launch/useGameProcess";
 
 /**
@@ -65,9 +70,38 @@ function PageFallback() {
 export default function App() {
   useGameProcessSync();
   const { pathname } = useLocation();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const activeNavIndex = Math.max(0, NAV_ITEMS.findIndex(item =>
     item.prefix ? pathname.startsWith(item.to) : pathname === item.to,
   ));
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void listen<RefreshState>('metadata-refresh-progress', ({ payload }) => {
+      if (alive && payload.updated > 0 && ['completed', 'stopped', 'failed'].includes(payload.phase)
+        && !/^\/library\/[^/]+$/.test(pathnameRef.current)) {
+        useAppStore.getState().bumpPlayTimeRevision();
+      }
+    }).then(cleanup => { if (alive) unlisten = cleanup; else cleanup(); }).catch(() => {});
+    return () => { alive = false; unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void listen<SyncReport>('bangumi-sync-updated', ({ payload }) => {
+      // Detail's revision effect reloads its main form. Its independent sync
+      // panel refreshes itself, so preserve any unsaved edits there.
+      if (alive && (payload.downloaded > 0 || payload.errors > 0) && !/^\/library\/[^/]+$/.test(pathnameRef.current)) {
+        useAppStore.getState().bumpPlayTimeRevision();
+      }
+    }).then(cleanup => {
+      if (alive) unlisten = cleanup; else cleanup();
+    }).catch(() => {});
+    return () => { alive = false; unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     // Capture before React and portal handlers: right-clicking a dialog scrim
@@ -173,6 +207,7 @@ export default function App() {
           </Suspense>
         </ErrorBoundary>
       </main>
+      <BangumiSyncRuntime />
       <UpdateDialog />
       <AnnouncementDialog />
       <BirthdayCelebrationDialog />

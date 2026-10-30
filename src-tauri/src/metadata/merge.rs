@@ -62,7 +62,8 @@ where
 
 /// Merge a secondary provider's detail into a primary one.
 ///
-/// `primary` wins on every field it already has; the secondary only fills gaps.
+/// `primary` wins on fields it already has; a Chinese introduction may replace
+/// a non-Chinese one, while titles and the selected provider remain unchanged.
 /// This is deliberately not a "richest field wins" merge: the primary is the
 /// record the user explicitly picked, so silently overriding its title would be
 /// surprising.
@@ -87,10 +88,7 @@ pub fn merge_into(primary: &mut MetadataDetail, secondary: MetadataDetail) {
     if primary.cover_url.is_none() {
         primary.cover_url = secondary.cover_url.clone();
     }
-    if primary.description.is_none() {
-        primary.description = secondary.description.clone();
-        primary.description_lang = secondary.description_lang.clone();
-    }
+    merge_description(primary, &secondary);
     if primary.vndb_id.is_none() {
         primary.vndb_id = secondary.vndb_id.clone();
     }
@@ -111,20 +109,101 @@ pub fn merge_into(primary: &mut MetadataDetail, secondary: MetadataDetail) {
     primary.attribution = some_attribution(&primary.attribution, &secondary.attribution);
 }
 
+pub fn has_chinese_description(detail: &MetadataDetail) -> bool {
+    detail.description.as_deref().is_some_and(|s| !s.trim().is_empty())
+        && detail.description_lang.as_deref().is_some_and(|lang| {
+            let language = lang.trim().to_ascii_lowercase();
+            language == "zh" || language.starts_with("zh-") || language.starts_with("zh_")
+        })
+}
+
+/// Borrow only text and its attribution; do not change title, score or tags.
+pub fn merge_description(primary: &mut MetadataDetail, secondary: &MetadataDetail) -> bool {
+    remember_description(primary);
+    let mut secondary = secondary.clone();
+    remember_description(&mut secondary);
+    for option in &secondary.description_options { add_description_option(primary, option.clone()); }
+    if secondary.description.as_deref().is_none_or(|s| s.trim().is_empty()) { return false; }
+    let empty = primary.description.as_deref().is_none_or(|s| s.trim().is_empty());
+    if !empty && (has_chinese_description(primary) || !has_chinese_description(&secondary)) { return false; }
+    primary.description = secondary.description.clone();
+    primary.description_lang = secondary.description_lang.clone();
+    primary.description_source = secondary.description_source.or(secondary.provider);
+    primary.attribution = some_attribution(&primary.attribution, &secondary.attribution);
+    true
+}
+
+fn add_description_option(detail: &mut MetadataDetail, option: super::DescriptionOption) {
+    if option.text.trim().is_empty() { return; }
+    if !detail.description_options.iter().any(|existing|
+        existing.source == option.source && existing.language == option.language && existing.text.trim() == option.text.trim()) {
+        detail.description_options.push(option);
+    }
+}
+
+pub fn remember_description(detail: &mut MetadataDetail) {
+    if let Some(text) = detail.description.as_deref().filter(|text| !text.trim().is_empty()) {
+        let option = super::DescriptionOption { source: detail.description_source.or(detail.provider),
+            language: detail.description_lang.clone(), text: text.to_string(), attribution: detail.attribution.clone() };
+        add_description_option(detail, option);
+    }
+}
+
 /// Join two attribution strings without repeating one.
 fn some_attribution(a: &Option<String>, b: &Option<String>) -> Option<String> {
-    match (a, b) {
-        (Some(a), Some(b)) if a == b => Some(a.clone()),
-        (Some(a), Some(b)) => Some(format!("{a}、{b}")),
-        (Some(a), None) => Some(a.clone()),
-        (None, Some(b)) => Some(b.clone()),
-        (None, None) => None,
+    let mut parts = Vec::new();
+    for part in a.iter().chain(b.iter()).flat_map(|s| s.split('、')).map(str::trim).filter(|s| !s.is_empty()) {
+        if !parts.contains(&part) { parts.push(part); }
     }
+    (!parts.is_empty()).then(|| parts.join("、"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_keeps_all_nonempty_intro_choices_even_when_not_selected() {
+        use super::super::Provider;
+        let mut primary = MetadataDetail { provider: Some(Provider::Vndb), description: Some("English".into()), description_lang: Some("en".into()), ..Default::default() };
+        let chinese = MetadataDetail { provider: Some(Provider::Bangumi), description: Some("中文简介".into()), description_lang: Some("zh-Hans".into()), ..Default::default() };
+        merge_description(&mut primary, &chinese);
+        let other = MetadataDetail { provider: Some(Provider::TwoDfan), description: Some("另一个中文简介".into()), description_lang: Some("zh".into()), ..Default::default() };
+        assert!(!merge_description(&mut primary, &other));
+        merge_description(&mut primary, &chinese);
+        assert_eq!(primary.description.as_deref(), Some("中文简介"));
+        assert_eq!(primary.description_options.len(), 3);
+        assert_eq!(primary.description_options[0].source, Some(Provider::Vndb));
+        assert_eq!(primary.description_options[0].text, "English");
+        assert_eq!(primary.description_options[2].source, Some(Provider::TwoDfan));
+    }
+
+    #[test]
+    fn chinese_intro_replaces_english_without_changing_vndb_identity() {
+        let mut primary = MetadataDetail { provider: Some(super::super::Provider::Vndb), external_id: Some("v4".into()),
+            title: "CLANNAD".into(), description: Some("English introduction".into()), description_lang: Some("en".into()), attribution: Some("VNDB".into()), ..Default::default() };
+        let secondary = MetadataDetail { provider: Some(super::super::Provider::Bangumi), title: "中文标题".into(),
+            description: Some("中文游戏简介".into()), description_lang: Some("zh-Hans".into()), attribution: Some("Bangumi".into()), ..Default::default() };
+        merge_into(&mut primary, secondary);
+        assert_eq!(primary.description.as_deref(), Some("中文游戏简介"));
+        assert_eq!(primary.description_lang.as_deref(), Some("zh-Hans"));
+        assert_eq!(primary.description_source, Some(super::super::Provider::Bangumi));
+        assert_eq!(primary.attribution.as_deref(), Some("VNDB、Bangumi"));
+        assert_eq!(primary.title, "CLANNAD");
+        assert_eq!(primary.external_id.as_deref(), Some("v4"));
+    }
+
+    #[test]
+    fn chinese_intro_is_preserved_and_blank_secondary_never_erases_text() {
+        let mut primary = MetadataDetail { description: Some("已有中文简介".into()), description_lang: Some("zh-CN".into()), ..Default::default() };
+        for (text, lang) in [("Other English", "en"), ("其他中文", "zh-Hant"), ("  ", "zh")] {
+            merge_into(&mut primary, MetadataDetail { description: Some(text.into()), description_lang: Some(lang.into()), ..Default::default() });
+            assert_eq!(primary.description.as_deref(), Some("已有中文简介"));
+        }
+        let mut blank = MetadataDetail { description: Some("  ".into()), description_lang: Some("en".into()), ..Default::default() };
+        merge_into(&mut blank, MetadataDetail { description: Some("中文".into()), description_lang: Some("zh".into()), ..Default::default() });
+        assert_eq!(blank.description.as_deref(), Some("中文"));
+    }
 
     fn rating(source: &str, score: f64) -> SourceRating {
         SourceRating {

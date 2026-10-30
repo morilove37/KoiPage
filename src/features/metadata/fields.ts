@@ -93,6 +93,7 @@ export const FIELD_LABELS: Record<MetadataField, string> = {
 export const FIELD_NOTES: Partial<Record<MetadataField, string>> = {
   title: "按设置中的标题语言选择名称，默认优先采用中文名，其次日文原名、数据源标题；搜索名称仅在资料没有标题时使用。",
   rating: "上游评分归一到 0-10，四舍五入到小数点后两位。",
+  description: "优先中文简介，中文版本中优先选择默认数据源；没有中文时再使用默认源或其他可用版本。可在「简介来源」自由切换。",
   tags: "按名称入库，同名标签会复用而不是重建。",
 };
 

@@ -6,8 +6,8 @@
 //!   `{"keyword": "...", "filter": {"type": [4]}}` — `type: 4` selects games.
 //! - `GET  https://api.bgm.tv/v0/subjects/{id}`
 //!
-//! No authentication for public reads. Bangumi expects a descriptive
-//! `User-Agent`; the shared client supplies one.
+//! Public subjects allow anonymous reads; restricted adult subjects need the
+//! saved personal token even when collection synchronization is turned off.
 //!
 //! ## Why this provider matters
 //!
@@ -89,7 +89,14 @@ struct Infobox {
 /// Alternative title entries in the infobox, used to find the Japanese name.
 const ALIAS_KEYS: &[&str] = &["别名", "別名", "alias", "中文名"];
 /// Developer-ish infobox keys, in preference order.
-const DEV_KEYS: &[&str] = &["开发", "遊戲開發", "开发厂商", "遊戲開發商", "开发商", "出版社"];
+const DEV_KEYS: &[&str] = &[
+    "开发",
+    "遊戲開發",
+    "开发厂商",
+    "遊戲開發商",
+    "开发商",
+    "出版社",
+];
 
 #[derive(Debug, Serialize)]
 struct SearchBody<'a> {
@@ -101,6 +108,70 @@ struct SearchBody<'a> {
 struct SearchFilter {
     #[serde(rename = "type")]
     kind: Vec<i64>,
+    // Official v0 schema: null returns all visible subjects; true returns ONLY
+    // adult subjects, excluding the ordinary all-age results.
+    nsfw: Option<bool>,
+}
+
+fn request_with_token(
+    method: reqwest::Method,
+    url: &str,
+    token: Option<&str>,
+) -> super::CmdResult<reqwest::RequestBuilder> {
+    let url =
+        reqwest::Url::parse(url).map_err(|_| super::CmdError("Bangumi 请求地址无效".into()))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("api.bgm.tv")
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(super::CmdError("Bangumi 令牌仅可用于官方 API".into()));
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(super::USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|_| super::CmdError("无法创建 Bangumi 资料连接".into()))?;
+    let mut request = client
+        .request(method, url)
+        .header("Accept", "application/json");
+    if let Some(token) = token {
+        let mut authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| super::CmdError("Bangumi 令牌格式无效，请在设置中重新连接".into()))?;
+        authorization.set_sensitive(true);
+        request = request.header(reqwest::header::AUTHORIZATION, authorization);
+    }
+    Ok(request)
+}
+
+fn request(method: reqwest::Method, url: &str) -> super::CmdResult<reqwest::RequestBuilder> {
+    #[cfg(windows)]
+    let token = crate::bangumi_sync::credentials::load()?;
+    #[cfg(not(windows))]
+    let token: Option<String> = None;
+    request_with_token(method, url, token.as_deref())
+}
+
+fn response_error(status: reqwest::StatusCode) -> super::CmdError {
+    let message = match status.as_u16() {
+        401 => "Bangumi 令牌已失效，请在设置 → Bangumi 同步中重新验证并保存令牌",
+        403 => "Bangumi 拒绝读取资料，请检查账号权限及个人令牌",
+        404 => "Bangumi 条目不存在或当前账号无权读取；部分成人条目需要个人令牌",
+        429 => "Bangumi 请求过于频繁，请稍后重试",
+        _ => "Bangumi 资料请求失败",
+    };
+    super::CmdError(format!("{message}（HTTP {status}）"))
+}
+
+pub(crate) fn missing_binding_hint() -> (bool, String) {
+    match crate::bangumi_sync::credentials::load() {
+        Ok(None) => (true, "尚未保存 Bangumi 个人令牌，匿名查询可能缺少成人条目。请在「设置 → Bangumi 同步」验证并保存令牌后重试，无需开启自动同步".into()),
+        Ok(Some(_)) => (false, "Bangumi ID 未找到唯一可信匹配。请检查令牌有效性、账号访问权限，或在作品详情中手动确认".into()),
+        Err(_) => (true, "无法读取已保存的 Bangumi 令牌，请在「设置 → Bangumi 同步」重新验证并保存后重试".into()),
+    }
 }
 
 /// Flatten an infobox value into plain strings.
@@ -186,32 +257,27 @@ fn best_title(subject: &Subject) -> String {
 /// Search Bangumi for games matching `query`.
 pub async fn search(query: &str, limit: u32) -> super::CmdResult<Vec<MetadataCandidate>> {
     let url = format!("{SEARCH}?limit={}", limit.clamp(1, 25));
-    let response = super::http_client()?
-        .post(&url)
-        .header("Accept", "application/json")
+    let response = request(reqwest::Method::POST, &url)?
         .json(&SearchBody {
             keyword: query,
             filter: SearchFilter {
                 kind: vec![TYPE_GAME],
+                nsfw: None,
             },
         })
         .send()
         .await
-        .map_err(|error| super::CmdError(format!("Bangumi 搜索失败：{error}")))?;
+        .map_err(|_| super::CmdError("Bangumi 搜索失败，请检查网络后重试".into()))?;
 
     let status = response.status();
     if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(super::CmdError(format!(
-            "Bangumi 搜索返回 HTTP {status}：{}",
-            text.chars().take(200).collect::<String>()
-        )));
+        return Err(response_error(status));
     }
 
     let parsed: SearchResponse = response
         .json()
         .await
-        .map_err(|error| super::CmdError(format!("Bangumi 搜索解析失败：{error}")))?;
+        .map_err(|_| super::CmdError("Bangumi 搜索结果格式无法识别".into()))?;
 
     Ok(parsed
         .data
@@ -261,22 +327,20 @@ pub async fn search(query: &str, limit: u32) -> super::CmdResult<Vec<MetadataCan
 /// Fetch one subject by id.
 pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
     let url = format!("{SUBJECT}/{}", id.trim());
-    let response = super::http_client()?
-        .get(&url)
-        .header("Accept", "application/json")
+    let response = request(reqwest::Method::GET, &url)?
         .send()
         .await
-        .map_err(|error| super::CmdError(format!("Bangumi 详情失败：{error}")))?;
+        .map_err(|_| super::CmdError("Bangumi 详情读取失败，请检查网络后重试".into()))?;
 
     let status = response.status();
     if !status.is_success() {
-        return Err(super::CmdError(format!("Bangumi 详情返回 HTTP {status}")));
+        return Err(response_error(status));
     }
 
     let subject: Subject = response
         .json()
         .await
-        .map_err(|error| super::CmdError(format!("Bangumi 详情解析失败：{error}")))?;
+        .map_err(|_| super::CmdError("Bangumi 详情结果格式无法识别".into()))?;
 
     let score = normalise(subject.rating.as_ref().and_then(|r| r.score));
     let ratings = score
@@ -297,10 +361,7 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         .collect();
     tags.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let summary = subject
-        .summary
-        .clone()
-        .filter(|s| !s.trim().is_empty());
+    let summary = subject.summary.clone().filter(|s| !s.trim().is_empty());
 
     Ok(MetadataDetail {
         provider: Some(Provider::Bangumi),
@@ -318,6 +379,8 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         cover_url: subject.images.as_ref().and_then(Images::best),
         description: summary,
         description_lang: Some("zh-Hans".to_string()),
+        description_source: Some(Provider::Bangumi),
+        description_options: vec![],
         tags: super::merge::dedupe_tags(tags.into_iter().map(|(name, _)| name)),
         vndb_id: None,
         bangumi_id: Some(subject.id.to_string()),
@@ -328,6 +391,58 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_requests_use_the_saved_token_without_exposing_it() {
+        let request =
+            request_with_token(reqwest::Method::POST, SEARCH, Some("fake-metadata-token"))
+                .unwrap()
+                .build()
+                .unwrap();
+        let auth = request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .expect("metadata lookup needs authorization too");
+        assert_eq!(auth.to_str().unwrap(), "Bearer fake-metadata-token");
+        assert!(auth.is_sensitive());
+        assert!(!format!("{request:?}").contains("fake-metadata-token"));
+        let anonymous = request_with_token(reqwest::Method::GET, SUBJECT, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(
+            !anonymous
+                .headers()
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+    }
+
+    #[test]
+    fn metadata_credentials_are_restricted_to_the_bangumi_api_origin() {
+        for url in [
+            "http://api.bgm.tv/v0/subjects",
+            "https://example.com/",
+            "https://api.bgm.tv.example.com/",
+        ] {
+            assert!(
+                request_with_token(reqwest::Method::GET, url, Some("fake-metadata-token")).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn search_keeps_all_age_and_authorized_adult_results_together() {
+        let body = serde_json::to_value(SearchBody {
+            keyword: "test",
+            filter: SearchFilter {
+                kind: vec![TYPE_GAME],
+                nsfw: None,
+            },
+        })
+        .unwrap();
+        assert!(body["filter"].as_object().unwrap().contains_key("nsfw"));
+        assert!(body["filter"]["nsfw"].is_null());
+    }
 
     #[test]
     fn infobox_handles_both_string_and_object_values() {

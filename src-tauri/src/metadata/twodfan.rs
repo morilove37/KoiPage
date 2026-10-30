@@ -92,7 +92,7 @@ fn parse_detail(html: &str, id: &str) -> CmdResult<MetadataDetail> {
     Ok(MetadataDetail {
         provider: Some(Provider::TwoDfan), external_id: Some(id.into()), title, title_zh, title_original,
         developer, release_date, cover_url, description,
-        description_lang: Some("zh".into()), tags, rating,
+        description_lang: Some("zh".into()), description_source: Some(Provider::TwoDfan), tags, rating,
         ratings: rating.map(|score| vec![SourceRating { source: "2dfan".into(), score, vote_count }]).unwrap_or_default(),
         attribution: Some("2DFan".into()),
         ..Default::default()

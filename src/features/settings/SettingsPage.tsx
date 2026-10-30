@@ -42,6 +42,7 @@ import {
   normalizeTitlePreference,
   type MetadataTitlePreference,
 } from '@/features/metadata/fields';
+import { MetadataRefreshPanel } from '@/features/metadata/MetadataRefreshPanel';
 import { SearchSourcesSettings } from '@/features/metadata/SearchSourcesSettings';
 import { DEFAULT_SOURCE_KEY, normalizeDefaultSource } from '@/features/metadata/preferences';
 import type { MetadataProvider } from '@/lib/db';
@@ -81,6 +82,7 @@ import { Select } from '@/components/ui/select';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
+import { BangumiSyncSettings } from '@/features/bangumi-sync/BangumiSyncSettings';
 import { BirthdayReminderSettings } from '@/features/birthdays/BirthdayReminderSettings';
 import { useScanFolderTip } from '@/features/scan/ScanFolderTip';
 import { SettingsSectionNav } from './SettingsSectionNav';
@@ -1131,6 +1133,7 @@ function MetadataSection() {
         搜索名称仅用于查找作品，不会盖过资料中的中文标题；已有游戏可重新匹配资料并应用游戏名。
       </p>
       {error ? <Status tone="error">{error}</Status> : null}
+      <MetadataRefreshPanel />
     </Section>
   );
 }
@@ -1162,6 +1165,8 @@ export default function SettingsPage() {
         <WindowSection />
         <LocalizationSection />
         <MetadataSection />
+        <Section id="settings-bangumi-sync" title="Bangumi 双向同步" description="连接个人账号，同步游玩状态与个人记录。"><BangumiSyncSettings /></Section>
+
         <Section id="settings-birthdays" title="角色生日" description="在特别的日子，为喜欢的角色送上祝福。">
           <BirthdayReminderSettings />
         </Section>
