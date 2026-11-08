@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, KeyboardEvent, MouseEvent } from 'react';
 
 import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { formatRating } from "@/lib/rating";
 import { openGameWithTransition } from "@/lib/game-opening";
 import { GAME_STATUS_LABELS, formatPlayTime, isFavorite } from "@/types/game";
 import type { Game, Tag } from "@/types/game";
+import { isContextMenuKey } from './context-menu';
 
 export interface GameRowProps {
   game: Game;
@@ -20,6 +21,7 @@ export interface GameRowProps {
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
   dragInteraction?:HTMLAttributes<HTMLElement>;
+  onOpenContextMenu?: (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void;
 }
 
 /** Formats an ISO8601 timestamp for the "last played" column. */
@@ -43,6 +45,7 @@ export function GameRow({
   selected = false,
   onToggleSelected,
   dragInteraction,
+  onOpenContextMenu,
 }: GameRowProps) {
   const favorite = isFavorite(game);
   const { archived } = useGameInstallation(game.id);
@@ -53,6 +56,10 @@ export function GameRow({
     <div
       data-game-entry={game.id}
       {...dragInteraction}
+      data-game-context-trigger={onOpenContextMenu ? '' : undefined}
+      tabIndex={-1}
+      onContextMenu={event => onOpenContextMenu?.(game, event)}
+      onKeyDown={event => { if (isContextMenuKey(event)) onOpenContextMenu?.(game, event); }}
       className={cn(
         "flex items-center gap-3 border-b border-border px-3 py-2 text-sm transition-colors last:border-b-0",
         selected ? "bg-primary/10" : "hover:bg-accent/50",

@@ -235,7 +235,7 @@ async fn post(body: KanaQuery<'_>) -> super::CmdResult<Vec<Vn>> {
         .json(&body)
         .send()
         .await
-        .map_err(|error| super::CmdError(format!("VNDB 请求失败：{error}")))?;
+        .map_err(|error| super::CmdError(if error.is_timeout() { "VNDB 请求超时，请稍后重试".into() } else { format!("VNDB 请求失败：{error}") }))?;
 
     let status = response.status();
     if !status.is_success() {

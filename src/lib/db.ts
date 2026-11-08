@@ -12,6 +12,7 @@
 
 import { invoke, recordLog } from './logging';
 import Database from '@tauri-apps/plugin-sql';
+import { Channel } from '@tauri-apps/api/core';
 
 import type {
   Game,
@@ -467,7 +468,7 @@ export interface MetadataCandidate {
   /** Best display title the provider offers (Chinese preferred when known). */
   title: string;
   originalTitle: string | null;
-  /** Extra spellings used only by the Rust auto-fetch matcher, never rendered. */
+  /** Verified extra spellings for matching and display in search results. */
   aliases?: string[];
   releaseDate: string | null;
   /** Remote cover URL; cache it with {@link metadataCoverCache}. */
@@ -476,6 +477,14 @@ export interface MetadataCandidate {
   rating: number | null;
   /** Human-readable provider label, e.g. `鲲 Galgame 论坛`. */
   sourceLabel: string;
+}
+
+/** One completed provider, delivered before the aggregate search resolves. */
+export interface MetadataSourceProgress {
+  provider: MetadataProvider;
+  candidates: MetadataCandidate[];
+  error: string | null;
+  elapsedMs: number;
 }
 
 /**
@@ -591,7 +600,14 @@ export function metadataSearch(
   query: string,
   sources: MetadataProvider[],
   limit?: number,
+  onProgress?: (progress: MetadataSourceProgress) => void,
+  contextCandidates?: MetadataCandidate[],
 ): Promise<MetadataSearchResult> {
+  if (onProgress) {
+    const onSource = new Channel<MetadataSourceProgress>(onProgress);
+    return ready.then(() => invoke<MetadataSearchResult>('metadata_search_stream', {query, sources, limit: limit ?? null, onSource, contextCandidates: contextCandidates ?? null}))
+      .finally(() => { onSource.onmessage = () => {}; });
+  }
   return ready.then(() =>
     invoke<MetadataSearchResult>('metadata_search', {
       query,
@@ -599,6 +615,11 @@ export function metadataSearch(
       limit: limit ?? null,
     }),
   );
+}
+
+/** Re-check the current candidate snapshot locally, without querying providers. */
+export function metadataSearchReconcile(query: string, sources: MetadataProvider[], candidates: MetadataCandidate[]): Promise<MetadataSearchResult> {
+  return ready.then(() => invoke<MetadataSearchResult>('metadata_search_reconcile', { query, sources, candidates }));
 }
 
 /**

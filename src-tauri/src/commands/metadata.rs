@@ -10,6 +10,7 @@
 //! be worse than storing nothing.
 
 use tauri::AppHandle;
+use crate::metadata::search_progress::{report, MetadataSourceProgress};
 
 use crate::metadata::{
     self, bangumi, merge, nextmoe, resolve_title, vndb, twodfan, MetadataCandidate, MetadataDetail, Provider,
@@ -131,24 +132,35 @@ pub async fn search_all(
     limit: u32,
     nextmoe_key: Option<&str>,
 ) -> (Vec<MetadataCandidate>, Vec<ProviderError>) {
-    // Each future is independent, so one slow provider cannot delay the others.
+    search_all_with_progress(query, wanted, limit, nextmoe_key, |_| {}).await
+}
+
+async fn search_all_with_progress<F: Fn(MetadataSourceProgress) + Sync>(
+    query: &str,
+    wanted: &[Sources],
+    limit: u32,
+    nextmoe_key: Option<&str>,
+    on_progress: F,
+) -> (Vec<MetadataCandidate>, Vec<ProviderError>) {
+    // Report each completion independently; only the final aggregate waits for all.
+    let timeout = std::time::Duration::from_secs(30);
     let nextmoe_fut = async {
         if wanted.contains(&Sources::Nextmoe) {
-            Some(nextmoe::search(query, limit, nextmoe_key).await)
+            Some(report(Provider::Nextmoe, nextmoe::search(query, limit, nextmoe_key), &on_progress, timeout).await)
         } else {
             None
         }
     };
     let vndb_fut = async {
         if wanted.contains(&Sources::Vndb) {
-            Some(vndb::search(query, limit).await)
+            Some(report(Provider::Vndb, vndb::search(query, limit), &on_progress, timeout).await)
         } else {
             None
         }
     };
     let bangumi_fut = async {
         if wanted.contains(&Sources::Bangumi) {
-            Some(bangumi::search(query, limit).await)
+            Some(report(Provider::Bangumi, bangumi::search(query, limit), &on_progress, timeout).await)
         } else {
             None
         }
@@ -156,7 +168,7 @@ pub async fn search_all(
 
     let twodfan_fut = async {
         if wanted.contains(&Sources::TwoDfan) {
-            Some(twodfan::search(query, limit).await)
+            Some(report(Provider::TwoDfan, twodfan::search(query, limit), &on_progress, timeout).await)
         } else { None }
     };
     let (n, v, b, d) = tokio::join!(nextmoe_fut, vndb_fut, bangumi_fut, twodfan_fut);
@@ -183,6 +195,7 @@ pub async fn search_all(
         }
     }
 
+    metadata::matching::enrich_twodfan_aliases(&mut candidates);
     (candidates, errors)
 }
 
@@ -194,18 +207,77 @@ pub async fn metadata_search(
     sources: Vec<String>,
     limit: Option<u32>,
 ) -> CmdResult<MetadataSearchResult> {
-    let query = required_string(&query, "query")?;
+    metadata_search_impl(&app, &query, &sources, limit, None, None).await
+}
+
+/// Manual searches stream progress without changing existing automated callers.
+#[tauri::command]
+pub async fn metadata_search_stream(
+    app: AppHandle,
+    query: String,
+    sources: Vec<String>,
+    limit: Option<u32>,
+    on_source: tauri::ipc::Channel<MetadataSourceProgress>,
+    context_candidates: Option<Vec<MetadataCandidate>>,
+) -> CmdResult<MetadataSearchResult> {
+    metadata_search_impl(&app, &query, &sources, limit, Some(&on_source), context_candidates).await
+}
+
+async fn metadata_search_impl(
+    app: &AppHandle,
+    query: &str,
+    sources: &[String],
+    limit: Option<u32>,
+    on_source: Option<&tauri::ipc::Channel<MetadataSourceProgress>>,
+    context_candidates: Option<Vec<MetadataCandidate>>,
+) -> CmdResult<MetadataSearchResult> {
+    let query = required_string(query, "query")?;
     let limit = limit.unwrap_or(10).clamp(1, 30);
 
-    let pool = pool(&app).await?;
+    let pool = pool(app).await?;
     let enabled = enabled_sources(&pool).await?;
-    let wanted = requested_sources(&sources, &enabled)?;
+    let wanted = requested_sources(sources, &enabled)?;
 
-    let key = nextmoe_key(&app).await;
+    let key = nextmoe_key(app).await;
     let preferred = source_preference(&pool).await?;
-    let (candidates, errors) = search_all(&query, &wanted, limit, key.as_deref()).await;
+    let (mut candidates, errors) = search_all_with_progress(&query, &wanted, limit, key.as_deref(), |progress| {
+        // A dismissed dialog no longer needs events; its read-only lookup may finish.
+        if let Some(channel) = &on_source { let _ = channel.send(progress); }
+    }).await;
+
+    append_search_context(&mut candidates, context_candidates.unwrap_or_default(), &enabled, &wanted);
 
     Ok(search_result(&query, candidates, errors, preferred))
+}
+
+fn append_search_context(candidates: &mut Vec<MetadataCandidate>, context: Vec<MetadataCandidate>, enabled: &[Sources], wanted: &[Sources]) {
+    for candidate in context.into_iter().take(120) {
+        if enabled.iter().any(|source| source.provider() == candidate.provider)
+            && !wanted.iter().any(|source| source.provider() == candidate.provider)
+            && !candidates.iter().any(|existing| existing.provider == candidate.provider && existing.external_id == candidate.external_id) {
+            candidates.push(candidate);
+        }
+    }
+    metadata::matching::enrich_twodfan_aliases(candidates);
+}
+
+/// Reconcile a settled manual-search snapshot. No provider requests occur here.
+#[tauri::command]
+pub async fn metadata_search_reconcile(
+    app: AppHandle,
+    query: String,
+    sources: Vec<String>,
+    candidates: Vec<MetadataCandidate>,
+) -> CmdResult<MetadataSearchResult> {
+    let query = required_string(&query, "query")?;
+    let db = pool(&app).await?;
+    let enabled = enabled_sources(&db).await?;
+    let wanted = requested_sources(&sources, &enabled)?;
+    let preferred = source_preference(&db).await?;
+    let mut candidates: Vec<_> = candidates.into_iter().filter(|candidate|
+        wanted.iter().any(|source| source.provider() == candidate.provider)).take(120).collect();
+    metadata::matching::enrich_twodfan_aliases(&mut candidates);
+    Ok(search_result(&query, candidates, vec![], preferred))
 }
 
 /// `metadata_detail` — resolve one provider record into merged metadata.
@@ -1045,6 +1117,28 @@ mod tests {
     fn source_candidate(provider: Provider, title: &str) -> MetadataCandidate {
         MetadataCandidate { provider, external_id: provider.as_str().into(), title: title.into(), original_title: None,
             aliases: vec![], release_date: None, cover_url: None, rating: None, source_label: provider.as_str().into() }
+    }
+
+    #[test]
+    fn retry_context_rechecks_aliases_but_excludes_disabled_and_requeried_sources() {
+        let mut web = source_candidate(Provider::TwoDfan, "サノバウィッチ");
+        web.release_date = Some("2015-02-27".into());
+        let mut api = source_candidate(Provider::Vndb, "魔女的夜宴");
+        api.original_title = Some("サノバウィッチ".into());
+        api.release_date = web.release_date.clone();
+        let enabled = [Sources::Vndb, Sources::TwoDfan];
+        for (fresh, cached, wanted) in [(api.clone(), web.clone(), Sources::Vndb), (web.clone(), api.clone(), Sources::TwoDfan)] {
+            let mut candidates = vec![fresh];
+            append_search_context(&mut candidates, vec![cached], &enabled, &[wanted]);
+            let result = candidates.iter().find(|c| c.provider == Provider::TwoDfan).unwrap();
+            assert!(result.aliases.contains(&"魔女的夜宴".to_string()));
+        }
+        let mut candidates = vec![api.clone()];
+        append_search_context(&mut candidates, vec![web], &[Sources::Vndb], &[Sources::Vndb]);
+        assert_eq!(candidates.len(), 1, "disabled providers cannot enter retry context");
+        let mut stale = api.clone(); stale.external_id = "stale".into();
+        append_search_context(&mut candidates, vec![stale], &enabled, &[Sources::Vndb]);
+        assert_eq!(candidates.len(), 1, "cached data cannot replace a provider being retried");
     }
 
     #[tokio::test]

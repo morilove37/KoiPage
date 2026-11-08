@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, KeyboardEvent, MouseEvent } from 'react';
 
 import { useGameInstallation } from "@/features/installation/store";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,17 @@ import { cn } from "@/lib/utils";
 import { formatRating } from "@/lib/rating";
 import { openGameWithTransition } from "@/lib/game-opening";
 import { GAME_STATUS_LABELS, isFavorite } from "@/types/game";
-import type { Game, Tag } from "@/types/game";
+import type { Game, GameStatus, Tag } from "@/types/game";
+import { isContextMenuKey } from './context-menu';
+
+const STATUS_DOTS: Record<GameStatus, string> = {
+  unplayed: "bg-slate-200",
+  wishlist: "bg-pink-300",
+  playing: "bg-sky-300",
+  completed: "bg-emerald-300",
+  on_hold: "bg-amber-300",
+  dropped: "bg-rose-300",
+};
 
 export interface GameCardProps {
   game: Game;
@@ -22,6 +32,7 @@ export interface GameCardProps {
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
   dragInteraction?:HTMLAttributes<HTMLElement>;
+  onOpenContextMenu?: (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void;
 }
 
 /** Grid tile: cover, title, status/rating, tag chips, favourite toggle. */
@@ -33,6 +44,7 @@ export function GameCard({
   selected = false,
   onToggleSelected,
   dragInteraction,
+  onOpenContextMenu,
 }: GameCardProps) {
   const favorite = isFavorite(game);
   const { archived } = useGameInstallation(game.id);
@@ -50,6 +62,10 @@ export function GameCard({
     <div
       data-game-entry={game.id}
       {...dragInteraction}
+      data-game-context-trigger={onOpenContextMenu ? '' : undefined}
+      tabIndex={-1}
+      onContextMenu={event => onOpenContextMenu?.(game, event)}
+      onKeyDown={event => { if (isContextMenuKey(event)) onOpenContextMenu?.(game, event); }}
       className={cn(
         "lift group relative flex flex-col overflow-hidden rounded-lg border bg-card",
         selected
@@ -94,17 +110,18 @@ export function GameCard({
           />
           </div>
 
-          <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
-            {archived ? <Badge variant="secondary">已卸载 / 已归档</Badge> : null}
-            <Badge variant="status" className="backdrop-blur">
+          <div className={cn("pointer-events-none absolute top-1.5 flex max-w-[calc(100%-4rem)] flex-col items-start gap-1", selectable ? "left-8" : "left-1.5")}>
+            <Badge variant="cover" className="gap-1.5 px-2 py-1 leading-none">
+              <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOTS[game.status])} />
               {GAME_STATUS_LABELS[game.status]}
             </Badge>
+            {archived ? <Badge variant="cover" className="max-w-full px-2 py-1 leading-none"><span className="truncate">已卸载 / 已归档</span></Badge> : null}
           </div>
 
           {game.rating !== null ? (
-            <div className="absolute right-1.5 top-1.5 rounded-full bg-black/70 px-2 py-0.5 text-xs font-semibold text-white">
+            <Badge variant="cover" className="absolute right-1.5 top-1.5 px-2 py-1 font-semibold tabular-nums leading-none">
               {formatRating(game.rating)}
-            </div>
+            </Badge>
           ) : null}
         </div>
 

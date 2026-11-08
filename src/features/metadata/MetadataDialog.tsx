@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ import {
   metadataCoverCache,
   metadataDetail,
   metadataSearch,
+  metadataSearchReconcile,
   settingsGet,
 } from "@/lib/db";
 import type {
@@ -73,6 +75,9 @@ import { ManualEntryForm } from "./ManualEntryForm";
 import { currentMetadataValues, protectExistingFields } from './protection';
 import { defaultDescriptionChoice, descriptionChoices, selectDescription } from './description-choice';
 import { ImportWaitDialog } from "./ImportWaitDialog";
+import { SourceSearchPanel } from './SourceSearchPanel';
+import { createSourceSearchSession } from './source-search-session';
+import type { SourceSearchSnapshot } from './source-search-session';
 import { createGameFromMetadata } from "./create-game";
 import { DEFAULT_SOURCE_KEY, ENABLED_SOURCES_KEY, normalizeDefaultSource, normalizeEnabledSources } from "./preferences";
 
@@ -135,6 +140,7 @@ export default function MetadataDialog({
   const [searching, setSearching] = useState(false);
   const [result, setResult] = useState<MetadataSearchResult | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [sourceSnapshot, setSourceSnapshot] = useState<SourceSearchSnapshot>({ query: '', sources: [], searching: false, result: null });
 
   // --- detail step ---------------------------------------------------------
   const [selected, setSelected] = useState<MetadataCandidate | null>(null);
@@ -228,12 +234,23 @@ export default function MetadataDialog({
   }, []);
 
   const detailSeq = useRef(0);
-  const searchSeq = useRef(0);
+  const sourceSearch = useMemo(() => createSourceSearchSession(
+    (query, providers, onProgress, contextCandidates) => metadataSearch(query, providers, undefined, onProgress, contextCandidates),
+    snapshot => {
+      if (!aliveRef.current) return;
+      setSourceSnapshot(snapshot);
+      setSearching(snapshot.searching);
+      setResult(snapshot.result);
+    },
+    undefined,
+    metadataSearchReconcile,
+  ), []);
   const autoSearchKeyRef = useRef("");
 
   // Reset on every open so a previous lookup never leaks into the next one.
   useEffect(() => {
     if (!open) return;
+    sourceSearch.cancel();
     detailSeq.current += 1; // invalidate any in-flight detail request
     setMode(initialMode);
     setQuery(initialQuery?.trim() ?? "");
@@ -253,8 +270,8 @@ export default function MetadataDialog({
     setApplying(false);
     setApplyError(null);
     setOutcome(null);
-    return () => { searchSeq.current += 1; detailSeq.current += 1; };
-  }, [open, gameId, initialQuery, autoSearchOnOpen, initialMode, draft?.installPath]);
+    return () => { sourceSearch.cancel(); detailSeq.current += 1; };
+  }, [open, gameId, initialQuery, autoSearchOnOpen, initialMode, draft?.installPath, sourceSearch]);
 
   const performSearch = useCallback(async (
     rawQuery: string,
@@ -285,23 +302,15 @@ export default function MetadataDialog({
     setOutcome(null);
     detailSeq.current += 1;
 
-    const seq = ++searchSeq.current;
     try {
-      const found = await metadataSearch(trimmed, selectedSources);
-      if (!aliveRef.current || seq !== searchSeq.current) return;
-      setResult(found);
-      // Only an actual empty result is "not found". Provider failures stay
-      // visible with retry and manual entry available.
-      if (found.candidates.length === 0 && found.errors.length === 0) {
-        setMode("manual");
-      }
+      // The preferred provider stays first even when another one finishes first.
+      const ordered = [...selectedSources].sort((a,b) => Number(b === defaultSource) - Number(a === defaultSource));
+      await sourceSearch.search(trimmed, ordered);
     } catch (cause) {
-      if (!aliveRef.current || seq !== searchSeq.current) return;
+      if (!aliveRef.current) return;
       setSearchError(errorMessage(cause));
-    } finally {
-      if (aliveRef.current && seq === searchSeq.current) setSearching(false);
     }
-  }, []);
+  }, [sourceSearch, defaultSource]);
 
   const runSearch = useCallback(
     () => preferencesReady ? performSearch(query, sources.filter(provider => enabledSources.includes(provider))) : Promise.resolve(),
@@ -614,6 +623,9 @@ export default function MetadataDialog({
             </div>
           </form>
 
+          <SourceSearchPanel sources={sourceSnapshot.sources} query={sourceSnapshot.query} disabled={applying || manualSaving}
+            onRetry={provider => { if (enabledSources.includes(provider)) void sourceSearch.retry(provider); }} />
+
           {/* Whole-command failure (empty query, bad source list, …) ------- */}
           {searchError ? (
             <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -625,7 +637,7 @@ export default function MetadataDialog({
           {errors.length > 0 ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
               <p className="font-medium">
-                有 {errors.length} 个数据源没有返回结果，候选列表可能不完整：
+                有 {errors.length} 个数据源请求失败，候选列表可能不完整：
               </p>
               <ul className="mt-1 space-y-0.5">
                 {errors.map((item) => (
@@ -636,7 +648,7 @@ export default function MetadataDialog({
                 ))}
               </ul>
               <p className="mt-1 text-muted-foreground">
-                限流（VNDB 为 200 次 / 5 分钟）与临时 5xx 都属于这一类，稍后重试即可。
+                可以继续选择已有候选；遇到限流、访问验证或服务异常时，请使用其他数据源或稍后重试。
               </p>
             </div>
           ) : null}
@@ -682,7 +694,7 @@ export default function MetadataDialog({
           ) : null}
 
           {/* Candidates ---------------------------------------------------- */}
-          {searching ? (
+          {searching && candidates.length === 0 ? (
             <div className="flex flex-col gap-2" aria-busy>
               {[0, 1, 2].map((index) => (
                 <div
@@ -701,7 +713,7 @@ export default function MetadataDialog({
 
           {!searching && searched && candidates.length === 0 && !searchError ? (
             <EmptyState
-              title="没有找到匹配的作品"
+              title={errors.length > 0 ? "暂时未能取得搜索结果" : "没有找到匹配的作品"}
               description={
                 errors.length > 0
                   ? "至少一个数据源查询失败（见上方错误），候选可能因此为空。可以稍后重试，或直接手动填写。"
@@ -715,10 +727,10 @@ export default function MetadataDialog({
             />
           ) : null}
 
-          {!searching && candidates.length > 0 ? (
+          {candidates.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <p className="text-xs text-muted-foreground">
-                共 {candidates.length} 个候选，点击一个查看详情：
+                {searching ? `已找到 ${candidates.length} 个候选，其余数据源仍在搜索，可以先选择：` : `共 ${candidates.length} 个候选，点击一个查看详情：`}
               </p>
               <div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto pr-1">
                 {candidates.map((candidate) => {
@@ -758,6 +770,7 @@ export default function MetadataDialog({
                           ) : null}
                         </div>
                         <p className="mt-1 truncate text-sm font-medium">{candidate.title}</p>
+                        {candidate.aliases && candidate.aliases.length > 0 ? <p className="truncate text-xs text-muted-foreground" title={candidate.aliases.join(' / ')}>别名：{candidate.aliases.join(' / ')}</p> : null}
                         {candidate.originalTitle &&
                         candidate.originalTitle !== candidate.title ? (
                           <p className="truncate text-xs text-muted-foreground">
@@ -789,8 +802,12 @@ export default function MetadataDialog({
           ) : null}
 
           {detailError ? (
-            <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              读取详情失败：{detailError}
+            <div role="alert" className="flex flex-col items-start gap-2 rounded-xl border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <p>读取详情失败：{detailError}</p>
+              {selected?.provider === '2dfan' && /^\d+$/.test(selected.externalId) ? (
+                <Button size="sm" variant="outline" onClick={() => void openUrl(`https://2dfan.com/subjects/${selected.externalId}`)
+                  .catch(cause => setDetailError(`打开浏览器失败：${errorMessage(cause)}`))}>在浏览器查看原条目 ↗</Button>
+              ) : null}
             </div>
           ) : null}
 

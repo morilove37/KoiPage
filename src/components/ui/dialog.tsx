@@ -1,8 +1,11 @@
-import { useEffect } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
+import { Button } from "./button";
+import { GeometryIcon } from "./geometry-icon";
+import { mountDialogFocus } from "./dialog-focus";
 
 export interface DialogProps {
   open: boolean;
@@ -30,14 +33,15 @@ export function Dialog({
   className,
   children,
 }: DialogProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
+  const panel = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  // Snapshot before the commit removes a menu or lets an input autoFocus.
+  const returnFocus = useMemo(() => open ? document.activeElement : null, [open]);
+  useLayoutEffect(() => {
+    if (!open || !panel.current) return;
+    return mountDialogFocus(panel.current, () => close.current(), returnFocus);
+  }, [open, returnFocus]);
 
   if (!open) return null;
 
@@ -58,6 +62,8 @@ export function Dialog({
       )}
     >
       <div
+        ref={panel}
+        tabIndex={-1}
         role="dialog"
         aria-label={typeof title === "string" ? title : undefined}
         aria-modal="true"
@@ -77,11 +83,15 @@ export function Dialog({
         )}
       >
         {title ? (
-          <div className="flex flex-col gap-1 border-b border-border px-4 py-3">
+          <div className="relative flex flex-col gap-1 border-b border-border py-3 pl-4 pr-14">
             <h2 className="text-sm font-semibold">{title}</h2>
             {description ? (
               <div className="text-xs text-muted-foreground">{description}</div>
             ) : null}
+            <Button type="button" variant="ghost" size="icon" onClick={onClose}
+              aria-label="关闭对话框" title="关闭" className="absolute right-3 top-2.5 size-7 rounded-full text-muted-foreground hover:text-foreground">
+              <GeometryIcon name="close" className="size-4" />
+            </Button>
           </div>
         ) : null}
 
@@ -132,26 +142,22 @@ export function ConfirmDialog({
       className="max-w-sm"
       footer={
         <>
-          <button
+          <Button
             type="button"
             onClick={onCancel}
-            className="h-9 rounded-md border border-border px-4 text-sm tap hover:bg-accent hover:text-accent-foreground"
+            variant="outline"
           >
             {cancelText}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             disabled={busy}
             onClick={onConfirm}
-            className={cn(
-              "h-9 rounded-md px-4 text-sm font-medium tap disabled:opacity-50",
-              destructive
-                ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                : "bg-primary text-primary-foreground hover:bg-primary/90",
-            )}
+            variant={destructive ? "destructive" : "default"}
+            loading={busy}
           >
             {confirmText}
-          </button>
+          </Button>
         </>
       }
     />

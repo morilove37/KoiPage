@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Button } from '@/components/ui/button';
+import { BackButton } from '@/components/ui/back-button';
 import { CoverImage } from '@/components/ui/cover-image';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Input } from '@/components/ui/input';
@@ -71,7 +72,7 @@ export function BirthdayDetailDialog({ character, now, onClose, onChanged, onBac
     } catch (e) { setError(errorMessage(e)); }
   }
   return <Dialog open onClose={() => { if (!busy) onClose(); }} title={editing ? '修正角色资料' : character.name} className="birthday-dialog max-w-md"
-    footer={<div className="flex w-full flex-wrap justify-end gap-2">{onBack && !editing ? <Button size="sm" variant="ghost" onClick={onBack}>返回列表</Button> : null}<Button size="sm" variant="outline" disabled={busy} onClick={onClose}>关闭</Button>{editing ? <Button size="sm" loading={busy} onClick={() => void update()}>保存资料</Button> : <Button size="sm" onClick={() => setEditing(true)}>修正资料</Button>}</div>}>
+    footer={<div className="flex w-full flex-wrap justify-end gap-2">{onBack && !editing ? <BackButton onClick={onBack}>返回列表</BackButton> : null}<Button size="sm" variant="outline" disabled={busy} onClick={onClose}>关闭</Button>{editing ? <Button size="sm" loading={busy} onClick={() => void update()}>保存资料</Button> : <Button size="sm" onClick={() => setEditing(true)}>修正资料</Button>}</div>}>
     <div className="flex items-center gap-4">
       <div className="h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-primary/10"><CoverImage path={character.avatarPath} alt={character.name} className="h-full w-full object-cover object-top" fallbackText={character.name.slice(0, 1)} /></div>
       <div className="min-w-0 space-y-2"><p className="break-words text-base font-semibold">{character.name}</p>{character.originalName && character.originalName !== character.name ? <p className="break-words text-xs text-muted-foreground">{character.originalName}</p> : null}<p className="text-sm text-primary">{birthdayDate(character)}{next ? ` · ${birthdayLabel(next)}` : ''}</p>{next?.observed ? <p className="text-xs text-muted-foreground">原生日 2 月 29 日，平年于 3 月 1 日庆祝。</p> : null}<p className="text-[11px] text-muted-foreground">资料来自 {sourceName}{character.customized ? ' · 已手动修正' : ''}{character.hidden ? ' · 已隐藏' : ''}</p></div>

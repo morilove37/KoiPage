@@ -19,6 +19,7 @@ import type { SyncReport } from "@/features/bangumi-sync/api";
 import type { RefreshState } from "@/features/metadata/metadata-refresh-state";
 import { useAppStore } from "@/store/app";
 import { useGameProcessSync } from "@/features/launch/useGameProcess";
+import { allowsGameContextEvent } from '@/features/library/context-menu';
 
 /**
  * Application shell: sidebar navigation + routed page area.
@@ -109,7 +110,9 @@ export default function App() {
     const blockRightClick = (event: MouseEvent) => {
       if (event.type !== "contextmenu" && event.button !== 2) return;
       event.preventDefault();
-      event.stopImmediatePropagation();
+      // Context-menu observers also dismiss an open menu on an outside right-click.
+      // Only game entries and their custom menu receive right-button pointer events.
+      if (!allowsGameContextEvent(event.target instanceof Element ? event.target : null, event.type)) event.stopImmediatePropagation();
     };
     const events = ["contextmenu", "pointerdown", "pointerup", "mousedown", "mouseup", "auxclick"] as const;
     for (const name of events) window.addEventListener(name, blockRightClick, { capture: true, passive: false });

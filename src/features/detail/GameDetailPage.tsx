@@ -8,6 +8,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/ui/back-button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
 import { CoverControls } from "@/features/covers/CoverControls";
@@ -549,10 +550,7 @@ export default function GameDetailPage() {
   if (loading) {
     return (
       <div className="flex flex-col items-start gap-3 p-5" data-detail-state="loading" data-game-id={gameId}>
-        <Button variant="outline" size="sm" onClick={goBack} title="返回上一页">
-          <span aria-hidden>←</span>
-          返回
-        </Button>
+        <BackButton onClick={goBack} title="返回上一页" />
         <div className="text-sm text-muted-foreground">载入中…</div>
       </div>
     );
@@ -561,10 +559,7 @@ export default function GameDetailPage() {
   if (!game || !form) {
     return (
       <div className="flex flex-col items-start gap-3 p-5" data-detail-state="error" data-game-id={gameId}>
-        <Button variant="outline" size="sm" onClick={goBack} title="返回上一页">
-          <span aria-hidden>←</span>
-          返回
-        </Button>
+        <BackButton onClick={goBack} title="返回上一页" />
         <p className="text-sm text-destructive">
           无法载入游戏：{error ?? "未找到记录"}
         </p>
@@ -595,17 +590,11 @@ export default function GameDetailPage() {
       <div className="flex shrink-0 flex-col gap-2" data-detail-header>
         <div className="flex items-center justify-between gap-3" data-detail-toolbar>
           <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9"
+            <BackButton
               onClick={goBack}
               title="返回上一页"
               aria-label="返回"
-            >
-              <span aria-hidden>←</span>
-              返回
-            </Button>
+            />
             <Link
               to="/library"
               className="text-xs text-muted-foreground hover:text-foreground"

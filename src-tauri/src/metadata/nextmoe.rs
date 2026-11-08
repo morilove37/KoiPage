@@ -357,7 +357,7 @@ pub async fn search(query: &str, limit: u32, api_key: Option<&str>) -> super::Cm
     let response = request
         .send()
         .await
-        .map_err(|error| super::CmdError(format!("NextMoe 搜索失败：{error}")))?;
+        .map_err(|error| super::CmdError(if error.is_timeout() { "NextMoe 搜索超时，请稍后重试".into() } else { format!("NextMoe 搜索失败：{error}") }))?;
 
     let status = response.status();
     if !status.is_success() {

@@ -19,5 +19,5 @@ export function logValue(value: unknown): string {
   return text.slice(0, 8192);
 }
 export function trackedCommand(command: string): boolean {
-  return /^(metadata_(search|detail|apply|cover_cache|autofetch)|scan_directory|inspect_exe_file|launch_game|stop_game|import_games|export_games|backup_database|archive_extract|archive_group|birthday.*(sync_start|import|export)|game_cover_import)$/.test(command);
+  return /^(metadata_(search(?:_stream)?|detail|apply|cover_cache|autofetch)|scan_directory|inspect_exe_file|launch_game|stop_game|import_games|export_games|backup_database|archive_extract|archive_group|birthday.*(sync_start|import|export)|game_cover_import)$/.test(command);
 }

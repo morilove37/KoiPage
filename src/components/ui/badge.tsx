@@ -2,7 +2,7 @@ import type { HTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-export type BadgeVariant = "default" | "secondary" | "outline" | "status";
+export type BadgeVariant = "default" | "secondary" | "outline" | "status" | "cover";
 
 // `color` is omitted from the native attributes: here it means "tag colour from
 // SQLite" and must accept `null`, which the DOM's `color?: string` does not.
@@ -18,6 +18,8 @@ const VARIANTS: Record<BadgeVariant, string> = {
   secondary: "border-transparent bg-secondary text-secondary-foreground",
   outline: "border-border bg-transparent text-foreground",
   status: "border-border bg-muted text-muted-foreground",
+  // Cover overlays need their own contrast, independent of theme and artwork.
+  cover: "border-white/30 bg-zinc-950/85 text-white shadow-sm backdrop-blur-md",
 };
 
 /** Small pill. `color` wins over `variant` backgrounds when provided. */

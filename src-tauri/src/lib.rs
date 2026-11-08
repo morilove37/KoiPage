@@ -190,6 +190,8 @@ pub fn run() {
             commands::scan_roots::sync_asset_scope,
             // external metadata (NextMoe / VNDB / Bangumi)
             commands::metadata::metadata_search,
+            commands::metadata::metadata_search_stream,
+            commands::metadata::metadata_search_reconcile,
             commands::metadata::metadata_detail,
             commands::metadata::metadata_apply,
             commands::metadata::metadata_cover_cache,

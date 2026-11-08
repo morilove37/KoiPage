@@ -24,6 +24,7 @@ pub mod description;
 pub mod nextmoe;
 pub mod vndb;
 pub mod twodfan;
+pub mod search_progress;
 
 #[cfg(test)]
 mod live_tests;

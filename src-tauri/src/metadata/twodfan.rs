@@ -24,7 +24,27 @@ fn island(root: ElementRef<'_>, name: &str) -> Option<serde_json::Value> {
     serde_json::from_str(root.select(&selector(&css)).next()?.attr("data-props")?).ok()
 }
 
-fn parse_search(html: &str, limit: usize) -> CmdResult<Vec<MetadataCandidate>> {
+/// Nexus exposes aliases only when an alias matched the search. Never treat
+/// body-text snippets as titles, and preserve words split by <mark> highlights.
+fn search_aliases(card: ElementRef<'_>, query: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    for matched in card.select(&selector(".subject-card-match")) {
+        if first_text(matched, ".subject-card-match-label").as_deref() != Some("别名匹配") { continue; }
+        let Some(snippet) = matched.select(&selector(".subject-card-match-text")).next() else { continue };
+        let raw = snippet.text().collect::<String>();
+        let raw = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        // This is a flat excerpt, not a structured alias list. A space may
+        // separate an edition suffix, so only trust a complete, exact excerpt.
+        if !raw.is_empty() && !raw.contains('…') && !raw.contains("...")
+            && super::matching::normalise(&raw) == super::matching::normalise(query)
+            && !aliases.contains(&raw) {
+            aliases.push(raw);
+        }
+    }
+    aliases
+}
+
+fn parse_search(html: &str, query: &str, limit: usize) -> CmdResult<Vec<MetadataCandidate>> {
     let document = Html::parse_document(html);
     if document.select(&selector("#subject-list")).next().is_none() {
         return Err(CmdError("2DFan 搜索页面无法识别，可能需要登录、遇到访问验证或网站结构已变化".into()));
@@ -38,12 +58,15 @@ fn parse_search(html: &str, limit: usize) -> CmdResult<Vec<MetadataCandidate>> {
         if title.is_empty() { continue; }
         result.push(MetadataCandidate {
             provider: Provider::TwoDfan, external_id: id.into(), title,
-            original_title: None, aliases: vec![],
+            original_title: None, aliases: search_aliases(card, query),
             release_date: card.select(&selector("time[datetime]")).next().and_then(|e| e.attr("datetime")).map(str::to_owned),
             cover_url: card.select(&selector(".subject-card-cover img")).next().and_then(|e| e.attr("src")).and_then(absolute_url),
             rating: first_text(card, ".subject-card-score-value").and_then(|s| s.parse().ok()).and_then(score),
             source_label: "2DFan".into(),
         });
+    }
+    if limit > 0 && result.is_empty() && document.select(&selector("#subject-list .subject-card")).next().is_some() {
+        return Err(CmdError("2DFan 搜索结果结构已变化，未能读取条目；请使用其他数据源或稍后重试".into()));
     }
     Ok(result)
 }
@@ -101,8 +124,11 @@ fn parse_detail(html: &str, id: &str) -> CmdResult<MetadataDetail> {
 
 async fn fetch(url: reqwest::Url) -> CmdResult<String> {
     let mut response = super::http_client()?.get(url).header(reqwest::header::REFERER, BASE).send().await
-        .map_err(|e| CmdError(format!("2DFan 请求失败：{e}")))?;
+        .map_err(|e| CmdError(if e.is_timeout() { "2DFan 请求超时，请稍后重试".into() } else { format!("2DFan 请求失败：{e}") }))?;
     let status = response.status();
+    if response.headers().get("cf-mitigated").is_some_and(|value| value == "challenge") {
+        return Err(CmdError("2DFan 触发了 Cloudflare 访问验证，暂时无法读取资料；请使用其他数据源，或稍后重试。浏览器验证状态不会自动同步到应用。".into()));
+    }
     if !status.is_success() { return Err(CmdError(format!("2DFan 返回 HTTP {status}，请稍后重试或在浏览器检查访问状态"))); }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| CmdError(format!("2DFan 页面读取失败：{e}")))? {
@@ -115,7 +141,7 @@ async fn fetch(url: reqwest::Url) -> CmdResult<String> {
 pub async fn search(query: &str, limit: u32) -> CmdResult<Vec<MetadataCandidate>> {
     let mut url = reqwest::Url::parse(&format!("{BASE}/search")).unwrap();
     url.query_pairs_mut().append_pair("keyword", query);
-    parse_search(&fetch(url).await?, limit as usize)
+    parse_search(&fetch(url).await?, query, limit as usize)
 }
 pub async fn detail(id: &str) -> CmdResult<MetadataDetail> {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) { return Err(CmdError("2DFan 条目 ID 必须为数字".into())); }
@@ -147,14 +173,79 @@ mod tests {
 
     #[test]
     fn search_reads_only_subject_cards_and_normalizes_five_point_score() {
-        let result = parse_search(SEARCH, 1).unwrap();
+        let result = parse_search(SEARCH, "Test & Story", 1).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].external_id, "21");
         assert_eq!(result[0].provider.as_str(), "2dfan");
         assert_eq!(result[0].title, "Test & Story");
         assert_eq!(result[0].rating, Some(9.0));
         assert_eq!(result[0].release_date.as_deref(), Some("2004-04-28"));
-        assert_eq!(parse_search(SEARCH, 10).unwrap()[1].rating, None);
+        assert_eq!(parse_search(SEARCH, "Test & Story", 10).unwrap()[1].rating, None);
+    }
+
+    #[test]
+    fn alias_matches_keep_highlighted_chinese_and_multiword_english_titles() {
+        for (query, snippet) in [("魔女的夜宴", "<mark>魔</mark>女的夜宴"), ("Sanoba Witch", "<mark>Sanoba</mark> Witch")] {
+            let html = SEARCH.replace("Test &amp; Story</a>", "サノバウィッチ</a>")
+                .replace("<span class=\"subject-card-score-value\">", &format!(r#"<p class="subject-card-match"><span class="subject-card-match-label">别名匹配</span><span class="subject-card-match-text">{snippet}</span></p><span class="subject-card-score-value">"#));
+            let result = parse_search(&html, query, 1).unwrap();
+            assert_eq!(result[0].aliases, vec![query.to_string()]);
+            assert_eq!(super::super::matching::score(query, &result[0]), super::super::matching::Match::Exact);
+        }
+    }
+
+    #[test]
+    fn prose_matches_and_truncated_aliases_do_not_become_automatic_matches() {
+        for (label, snippet) in [("正文匹配", "<mark>魔</mark>女的夜宴"), ("别名匹配", "魔女的夜宴…"), ("别名匹配", "CLANNAD Side Stories…")] {
+            let html = SEARCH.replace("Test &amp; Story</a>", "Other title</a>")
+                .replace("<span class=\"subject-card-score-value\">", &format!(r#"<p class="subject-card-match"><span class="subject-card-match-label">{label}</span><span class="subject-card-match-text">{snippet}</span></p><span class="subject-card-score-value">"#));
+            let result = parse_search(&html, "魔女的夜宴", 1).unwrap();
+            assert!(result[0].aliases.is_empty(), "{label}: {snippet}");
+        }
+    }
+
+    #[test]
+    fn mixed_alias_snippets_cannot_turn_a_remake_into_the_original() {
+        for snippet in ["<mark>纯</mark>白交响曲 SANA EDITION Mashir…", "<mark>纯</mark>白交响曲 -Love is pure white…", "纯白交响曲 SANA EDITION", "纯白交响曲 FHD"] {
+            let html = SEARCH.replace("Test &amp; Story</a>", "ましろ色シンフォニー SANA EDITION</a>")
+                .replace("<span class=\"subject-card-score-value\">", &format!(r#"<p class="subject-card-match"><span class="subject-card-match-label">别名匹配</span><span class="subject-card-match-text">{snippet}</span></p><span class="subject-card-score-value">"#));
+            let result = parse_search(&html, "纯白交响曲", 1).unwrap();
+            assert!(!super::super::matching::score("纯白交响曲", &result[0]).is_confident(), "{snippet}");
+        }
+    }
+
+    #[test]
+    fn changed_nonempty_cards_are_an_error_instead_of_a_successful_empty_search() {
+        assert!(parse_search("<div id='subject-list'><div class='subject-card'><h3>Changed markup</h3></div></div>", "test", 10).is_err());
+        assert!(parse_search(SEARCH, "test", 0).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cloudflare_challenge_has_a_specific_actionable_error() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).unwrap();
+            socket.write_all(b"HTTP/1.1 403 Forbidden\r\ncf-mitigated: challenge\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let error = fetch(reqwest::Url::parse(&format!("http://{address}/search")).unwrap()).await.unwrap_err();
+        server.join().unwrap();
+        assert!(error.0.contains("访问验证"), "{}", error.0);
+        assert!(error.0.contains("其他数据源"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requests live 2DFan alias search"]
+    async fn live_search_keeps_alias_candidates() {
+        for (query, id) in [("魔女的夜宴", "2588"), ("Senren Banka", "3100")] {
+            let results = search(query, 5).await.unwrap();
+            let candidate = results.iter().find(|c| c.external_id == id).expect("expected subject");
+            println!("{query}: {} candidates; title={}", results.len(), candidate.title);
+        }
     }
     #[test]
     fn detail_extracts_fields_and_keeps_paragraphs_without_html() {
@@ -171,9 +262,9 @@ mod tests {
     }
     #[test]
     fn challenge_and_changed_markup_report_failure_instead_of_no_matches() {
-        assert!(parse_search("<html>Just a moment...</html>", 10).is_err());
+        assert!(parse_search("<html>Just a moment...</html>", "test", 10).is_err());
         assert!(parse_detail("<h1>登录</h1>", "21").is_err());
-        assert!(parse_search("<div id='subject-list'></div>", 10).unwrap().is_empty());
+        assert!(parse_search("<div id='subject-list'></div>", "test", 10).unwrap().is_empty());
     }
     #[test]
     fn unrated_subject_does_not_gain_a_zero_rating() {

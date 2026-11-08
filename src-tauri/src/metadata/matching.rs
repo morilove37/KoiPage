@@ -196,10 +196,78 @@ pub fn ranked_candidates<'a>(
     ranked.into_iter().map(|(_, candidate, strength)| (candidate, strength)).collect()
 }
 
+/// A 2DFan search may return only the Japanese title for a Chinese query.
+/// Reuse structured titles already returned by enabled APIs, but only after
+/// the original name and a complete release date identify the same edition.
+pub fn enrich_twodfan_aliases(candidates: &mut [MetadataCandidate]) {
+    let donors: Vec<_> = candidates.iter().filter(|c| c.provider != super::Provider::TwoDfan).cloned().collect();
+    let date_format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").expect("static date format");
+    for target in candidates.iter_mut().filter(|c| c.provider == super::Provider::TwoDfan) {
+        let title = normalise(&target.title);
+        if title.is_empty() || !target.release_date.as_deref().is_some_and(|date|
+            date.len() == 10 && time::Date::parse(date, &date_format).is_ok()) { continue; }
+        for donor in &donors {
+            if donor.release_date != target.release_date
+                || ![Some(donor.title.as_str()), donor.original_title.as_deref()].into_iter().flatten()
+                    .any(|name| normalise(name) == title) { continue; }
+            for alias in std::iter::once(donor.title.as_str()).chain(donor.aliases.iter().map(String::as_str)) {
+                let alias = alias.trim();
+                if !alias.is_empty() && normalise(alias) != title && !target.aliases.iter().any(|name| name == alias) {
+                    target.aliases.push(alias.to_owned());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::metadata::Provider;
+
+    #[test]
+    fn twodfan_borrows_titles_only_when_original_title_and_release_date_agree() {
+        let mut web = candidate("サノバウィッチ", None);
+        web.provider = Provider::TwoDfan;
+        web.release_date = Some("2015-02-27".into());
+        let mut api = candidate("魔女的夜宴", Some("サノバウィッチ"));
+        api.release_date = Some("2015-02-27".into());
+        api.aliases = vec!["Sabbat of the Witch".into()];
+        let mut candidates = vec![web, api];
+        enrich_twodfan_aliases(&mut candidates);
+        assert_eq!(score("魔女的夜宴", &candidates[0]), Match::Exact);
+        assert_eq!(score("Sabbat of the Witch", &candidates[0]), Match::Exact);
+        assert!(candidates[1].aliases.iter().all(|s| s != "魔女的夜宴"));
+        enrich_twodfan_aliases(&mut candidates);
+        assert_eq!(candidates[0].aliases.iter().filter(|s| s.as_str() == "魔女的夜宴").count(), 1);
+    }
+
+    #[test]
+    fn twodfan_does_not_borrow_from_another_edition_or_an_unknown_release() {
+        for (title, date) in [("サノバウィッチ EXTRA", Some("2015-02-27")), ("サノバウィッチ", Some("2020-01-01")), ("サノバウィッチ", Some("2015-02")), ("サノバウィッチ", None)] {
+            let mut web = candidate("サノバウィッチ", None);
+            web.provider = Provider::TwoDfan;
+            web.release_date = Some("2015-02-27".into());
+            let mut api = candidate("魔女的夜宴", Some(title));
+            api.release_date = date.map(str::to_owned);
+            let mut candidates = vec![web, api];
+            enrich_twodfan_aliases(&mut candidates);
+            assert!(candidates[0].aliases.is_empty());
+            assert_eq!(score("魔女的夜宴", &candidates[0]), Match::None);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "read-only live multi-source title verification"]
+    async fn live_twodfan_aliases_use_verified_titles() {
+        use crate::commands::metadata::{search_all, Sources};
+        for (query, id) in [("魔女的夜宴", "2588"), ("Senren Banka", "3100"), ("苍之彼方的四重奏", "2449")] {
+            let (candidates, errors) = search_all(query, &[Sources::TwoDfan, Sources::Vndb, Sources::Bangumi], 5, None).await;
+            let web = candidates.iter().find(|c| c.provider == Provider::TwoDfan && c.external_id == id).expect("2DFan subject");
+            assert_eq!(score(query, web), Match::Exact, "{query}: candidates={candidates:?}; errors={errors:?}");
+            println!("{query}: 2DFan {id} recognized using verified aliases");
+        }
+    }
 
     #[test]
     fn preferred_source_wins_for_confident_matches_but_not_weak_ones() {

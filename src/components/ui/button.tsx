@@ -15,10 +15,10 @@ export type ButtonVariant =
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  default: "bg-primary text-primary-foreground hover:bg-primary/90",
+  default: "border border-transparent bg-primary text-primary-foreground hover:bg-primary/90",
   secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
   outline:
-    "border border-border bg-transparent hover:bg-accent hover:text-accent-foreground",
+    "border border-border bg-card/60 text-foreground hover:border-primary/35 hover:bg-accent hover:text-accent-foreground",
   ghost: "bg-transparent hover:bg-accent hover:text-accent-foreground",
   destructive:
     "bg-destructive text-destructive-foreground hover:bg-destructive/90",
@@ -69,7 +69,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || loading}
         className={cn(
-          "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md font-medium",
+          "inline-flex shrink-0 items-center justify-center gap-2 rounded-xl font-medium",
           "whitespace-nowrap outline-none",
           // `tap` (src/index.css) supplies the 120–180 ms colour/shadow
           // transition *and* the `scale(.97)` press feedback, all of which is

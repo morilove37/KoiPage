@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/ui/back-button";
 import { Field, Input, Textarea } from "@/components/ui/input";
 import { gameCreate, gameGet, gameSetTags, gameUpdate, tagCreate, tagsList } from "@/lib/db";
 import type { Game, GameInput, GameDetail, GamePatch, Tag } from "@/lib/db";
@@ -407,9 +408,9 @@ export function ManualEntryForm({ gameId, draft, onCreated, onSavingChange, onSa
 
       <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
         {onBack ? (
-          <Button variant="ghost" onClick={onBack} disabled={saving}>
+          <BackButton onClick={onBack} disabled={saving}>
             返回联网搜索
-          </Button>
+          </BackButton>
         ) : null}
         <Button onClick={() => void save()} loading={saving} disabled={saving}>
           {draft ? "保存并导入" : "保存资料"}

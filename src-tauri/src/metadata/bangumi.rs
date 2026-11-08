@@ -267,7 +267,7 @@ pub async fn search(query: &str, limit: u32) -> super::CmdResult<Vec<MetadataCan
         })
         .send()
         .await
-        .map_err(|_| super::CmdError("Bangumi 搜索失败，请检查网络后重试".into()))?;
+        .map_err(|error| super::CmdError(if error.is_timeout() { "Bangumi 搜索超时，请稍后重试" } else { "Bangumi 搜索失败，请检查网络后重试" }.into()))?;
 
     let status = response.status();
     if !status.is_success() {

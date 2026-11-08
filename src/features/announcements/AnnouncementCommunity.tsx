@@ -24,6 +24,7 @@ export function AnnouncementCommunity() {
       <Button size="sm" variant="outline" onClick={()=>void copy()}>{copied?'已复制':'复制群号'}</Button>
     </div>
     <p className="mt-3 border-t border-primary/15 pt-3 text-xs leading-relaxed"><strong className="font-semibold">入群前请先阅读群介绍，并正确回答群介绍里的问题。</strong></p>
+    <p className="mt-2 rounded-md bg-primary/10 px-3 py-2 text-xs leading-relaxed"><strong className="font-semibold">建议使用手机 QQ 申请加群，</strong>PC 端可能无法显示入群问题。</p>
     <span role="status" className="sr-only">{copied?'群号已复制':null}</span>
     {error?<p role="alert" className="mt-2 text-xs text-destructive">{error}</p>:null}
   </section>;

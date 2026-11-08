@@ -1,10 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from 'react-router-dom';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, MouseEvent } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { openPath } from '@tauri-apps/plugin-opener';
 
 import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
 import { matchesInstallation } from "@/features/installation/model";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/ui/back-button";
 import { EmptyState } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -21,7 +24,11 @@ import {
   gameUpdate,
   settingsGet,
   settingsSet,
+  ready,
 } from "@/lib/db";
+import { invoke } from '@/lib/logging';
+import { useGameLauncher } from '@/features/launch/useGameLauncher';
+import LaunchDialog from '@/features/launch/LaunchDialog';
 import { useAppStore } from "@/store/app";
 import type { SortDirection, SortKey } from "@/store/app";
 import {
@@ -40,6 +47,11 @@ import type { GameStatus } from "@/types/game";
 
 import { GameCard } from "./GameCard";
 import { GameRow } from "./GameRow";
+import { GameContextMenu } from './GameContextMenu';
+import { contextMenuTargets, gameContextActions, isContextMenuCurrent } from './context-menu';
+import type { GameContextActionId } from './context-menu';
+import { canOpenLibraryContextMenu, focusLibraryModal, LIBRARY_MODAL_SELECTOR } from './modal-boundary';
+import type { LibraryModalState } from './modal-boundary';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH } from './render-window';
 import { FolderPanel } from "./FolderPanel";
 import { FolderTile } from './FolderTile';
@@ -100,6 +112,7 @@ function compareNullable<T>(
 }
 
 export default function LibraryPage({ folderPage = false }: { folderPage?: boolean }) {
+  const navigate = useNavigate();
   const [folderParams, setFolderParams] = useSearchParams();
   const folderTab = folderParams.get('tab') === 'custom' ? 'custom' : folderParams.get('tab') === 'status' ? 'status' : 'society';
   const activeFolder = folderTab === 'custom' ? folderParams.get('folder') ?? '' : '';
@@ -138,6 +151,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const deleteLibraryPreset = useAppStore(s => s.deleteLibraryPreset);
   const { search, status, favoriteOnly, activeTagIds, developer, installation } = filters;
   const archived = useInstallationStore(state => state.archived);
+  const installationLoaded = useInstallationStore(state => state.loaded);
+  const processes = useAppStore(state => state.gameProcesses);
+  const launchingGames = useAppStore(state => state.launching);
   const setFilter = <K extends keyof LibraryFilters>(key: K, value: LibraryFilters[K] | ((current: LibraryFilters[K]) => LibraryFilters[K])) => {
     const current = useAppStore.getState().library.filters;
     setLibraryFilters({ ...current, [key]: typeof value === "function" ? value(current[key]) : value });
@@ -154,6 +170,15 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
   const [batchTag, setBatchTag] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    key: number; gameIds: number[]; point: { x: number; y: number }; scope: string;
+  } | null>(null);
+  const contextSequence = useRef(0);
+  const contextTrigger = useRef<HTMLElement | null>(null);
+  const [contextBusy, setContextBusy] = useState(false);
+  const contextPending = useRef(false);
+  const batchPending = useRef(false);
+  const [metadataEditGame, setMetadataEditGame] = useState<Game | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   useEffect(() => {
@@ -241,6 +266,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
       setLoading(false);
     }
   }, [folderPage]);
+  const launcher = useGameLauncher(() => { void reload(); });
 
   const saveFolders = async (next: LibraryFolder[]): Promise<boolean> => {
     if (folderSaving.current || !foldersLoaded) return false;
@@ -522,9 +548,10 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     }
   }, [selectedIds, visibleGames, reload]);
 
-  const applyBatch = async (patch: LibraryBatchPatch) => {
-    const ids = visibleSelection(selectedIds, visibleGames);
-    if (!ids.length || batchBusy) return;
+  const applyBatch = async (patch: LibraryBatchPatch, requestedIds?: readonly number[]) => {
+    const ids = visibleSelection(requestedIds ? new Set(requestedIds) : selectedIds, visibleGames);
+    if (!ids.length || batchBusy || batchPending.current) return;
+    batchPending.current = true;
     setBatchBusy(true);
     setError(null);
     try {
@@ -533,7 +560,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
       await reload();
       setImportNotice(`已更新 ${count} 部游戏。`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setBatchBusy(false); }
+    finally { batchPending.current = false; setBatchBusy(false); }
   };
 
 
@@ -563,6 +590,109 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
       );
       setError(cause instanceof Error ? cause.message : String(cause));
     }
+  };
+
+  const libraryModals: LibraryModalState = {
+    launch: Boolean(launcher.dialogGame), metadata: Boolean(metadataEditGame), scan: scanOpen, share: shareOpen,
+    folderPicker: Boolean(pickerFolderId), folderMove: Boolean(movingFolderId), metadataImport: Boolean(metadataGame),
+    batchImport: Boolean(batchDrafts), deleteConfirmation: confirmBulkDelete,
+  };
+  const pendingLibraryModal = Object.values(libraryModals).some(Boolean);
+  const contextScope = JSON.stringify([renderScope, viewMode, selectMode, [...selectedIds]]);
+  const contextMenuCurrent = contextMenu && !pendingLibraryModal && isContextMenuCurrent(contextMenu, contextScope, visibleGames);
+  const closeContextMenu = useCallback((restoreFocus = true) => {
+    const trigger = contextTrigger.current;
+    if (restoreFocus && trigger?.isConnected && !document.querySelector(LIBRARY_MODAL_SELECTOR)) {
+      trigger.focus({ preventScroll: true });
+      // A blank outside click can blur it again during the browser's default
+      // pointer handling. Restore afterward only if no new control took focus.
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body && trigger.isConnected && !document.querySelector(LIBRARY_MODAL_SELECTOR)) trigger.focus({ preventScroll: true });
+      });
+    }
+    setContextMenu(null);
+  }, []);
+  useEffect(() => {
+    if (contextMenu && (!contextMenuCurrent || loading || folderOverview)) closeContextMenu(!pendingLibraryModal);
+  }, [contextMenu, contextMenuCurrent, loading, folderOverview, pendingLibraryModal, closeContextMenu]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    // App-wide dialogs may open independently of this page. Retire an existing
+    // menu as soon as their portals mount, before it can sit above a modal.
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(LIBRARY_MODAL_SELECTOR)) closeContextMenu(false);
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['role', 'aria-modal'] });
+    return () => observer.disconnect();
+  }, [contextMenu, closeContextMenu]);
+  useLayoutEffect(() => {
+    if (launcher.dialogGame || metadataEditGame) focusLibraryModal(document);
+  }, [launcher.dialogGame?.id, metadataEditGame?.id]);
+  const openContextMenu = (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    event.preventDefault(); event.stopPropagation();
+    if (loading || folderOverview || !canOpenLibraryContextMenu(libraryModals, document)) return;
+    const targets = contextMenuTargets(game.id, selectMode ? selectedIds : new Set<number>(), visibleGames);
+    if (!targets.length) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointer = 'clientX' in event && (event.clientX !== 0 || event.clientY !== 0);
+    const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('a,button,[tabindex]') : null;
+    contextTrigger.current = focused ?? event.currentTarget;
+    setContextMenu({
+      key: ++contextSequence.current,
+      gameIds: targets.map(target => target.id), scope: contextScope,
+      point: pointer ? { x: event.clientX, y: event.clientY } : { x: rect.left + 16, y: rect.top + Math.min(32, rect.height) },
+    });
+  };
+  const contextIds = useMemo(() => new Set(contextMenu?.gameIds), [contextMenu]);
+  const contextGames = contextMenu ? visibleGames.filter(game => contextIds.has(game.id)) : [];
+  const contextGame = contextGames[0];
+  const contextState = {
+    loaded: installationLoaded, archived: Boolean(contextGame && archived[contextGame.id]),
+    process: contextGame ? processes[contextGame.id]?.status ?? (launchingGames[contextGame.id] ? 'starting' : 'idle') : 'idle',
+    backupBlocked: Object.values(processes).some(process => process.status !== 'idle') || Object.values(launchingGames).some(Boolean),
+    busy: contextBusy || batchBusy || deleting || loading,
+  };
+  const contextActions = gameContextActions(contextGames, contextState);
+  const runContextAction = async (id: GameContextActionId) => {
+    if (contextPending.current || !contextGame || !contextMenuCurrent || !canOpenLibraryContextMenu(libraryModals, document)) return;
+    // Re-read shared stores at activation so a process started from another entry
+    // cannot be launched again or backed up through an already open menu.
+    const latestProcess = useAppStore.getState().gameProcesses[contextGame.id]?.status;
+    const latestState = { ...contextState, loaded: useInstallationStore.getState().loaded,
+      archived: Boolean(useInstallationStore.getState().archived[contextGame.id]),
+      backupBlocked: Object.values(useAppStore.getState().gameProcesses).some(process => process.status !== 'idle') || Object.values(useAppStore.getState().launching).some(Boolean),
+      process: latestProcess ?? (useAppStore.getState().launching[contextGame.id] ? 'starting' : 'idle') };
+    const action = gameContextActions(contextGames, latestState).find(action => action.id === id);
+    if (!action || action.disabled) return;
+    contextPending.current = true; setContextBusy(true); setError(null);
+    try {
+      if (id.startsWith('favorite:')) {
+        if (contextGames.length === 1) await toggleFavorite(contextGame);
+        else await applyBatch({ favorite: id === 'favorite:on' }, contextGames.map(game => game.id));
+      } else if (id.startsWith('status:')) {
+        const status = id.slice(7) as GameStatus;
+        if (contextGames.length > 1) await applyBatch({ status }, contextGames.map(game => game.id));
+        else if (contextGame.status !== status) {
+          const updated = await gameUpdate(contextGame.id, { status });
+          setGames(current => current.map(game => game.id === updated.id ? updated : game));
+          setStats(await gamesStats());
+          setImportNotice(`状态已更新为「${GAME_STATUS_LABELS[status]}」。`);
+        }
+      } else if (id === 'launch') await launcher.launch(contextGame);
+      else if (id === 'directory') await openPath(contextGame.installPath);
+      else if (id === 'detail') navigate(`/library/${contextGame.id}`);
+      else if (id === 'files') navigate(`/library/${contextGame.id}?tab=files`);
+      else if (id === 'metadata') setMetadataEditGame(contextGame);
+      else if (id === 'backup') {
+        if (action.destination === 'saves') navigate(`/library/${contextGame.id}?tab=saves`);
+        else {
+          await ready;
+          await invoke('save_backup_create', { gameId: contextGame.id });
+          setImportNotice(`已创建「${contextGame.title}」的存档备份。`);
+        }
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { contextPending.current = false; setContextBusy(false); }
   };
 
   const hasFilters =
@@ -665,9 +795,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
             {societyFolders.map(folder => <FolderTile key={folder.value} name={folder.name} count={folder.gameIds.length} onClick={() => setFolderParams({society:folder.value})} />)}
             {!loading && games.length === 0 ? <p className="text-sm text-muted-foreground">添加游戏后，会自动按社团分类。</p> : null}
           </div> : folderTab === 'society' ? <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={() => { exitSelectMode(); setFolderParams({}); }}>← 返回社团</Button>
+            <BackButton onClick={() => { exitSelectMode(); setFolderParams({}); }}>返回社团</BackButton>
           </div> : folderTab === 'status' ? <div className="flex items-center gap-3">
-            <Button variant="outline" onClick={() => { exitSelectMode(); setFolderParams({tab:'status'}); }}>← 返回游玩状态</Button>
+            <BackButton onClick={() => { exitSelectMode(); setFolderParams({tab:'status'}); }}>返回游玩状态</BackButton>
           </div> : null}
       </> : null}
       {folderDrag.hint ? <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">{folderDrag.hint}</p> : null}
@@ -845,6 +975,8 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           {importNotice}
         </div>
       ) : null}
+      {launcher.error ? <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{launcher.error}</p> : null}
+      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
 
       {/* Results --------------------------------------------------------- */}
       {folderOverview ? null : !loading && games.length === 0 ? (
@@ -878,6 +1010,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              onOpenContextMenu={openContextMenu}
               dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
           ))}
@@ -908,6 +1041,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              onOpenContextMenu={openContextMenu}
               dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
           ))}
@@ -919,6 +1053,20 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
         <Button variant="outline" onClick={revealMore}>加载更多（已显示 {renderCount} / {visibleGames.length}）</Button>
         <p className="text-xs text-muted-foreground">搜索、筛选和全选仍覆盖全部 {visibleGames.length} 部匹配游戏。</p>
       </div> : null}
+
+      {contextMenu && contextMenuCurrent && contextGames.length > 0 ? <GameContextMenu
+        key={contextMenu.key}
+        title={contextGames.length > 1 ? `已选 ${contextGames.length} 部游戏` : contextGame.title}
+        point={contextMenu.point}
+        actions={contextActions}
+        onClose={closeContextMenu}
+        onAction={id => { void runContextAction(id); }}
+      /> : null}
+      {launcher.dialogGame ? <LaunchDialog open game={launcher.dialogGame} onClose={launcher.closeDialog}
+        onLaunched={() => { void reload(); }} /> : null}
+      {metadataEditGame ? <MetadataDialog open gameId={metadataEditGame.id}
+        installPath={metadataEditGame.installPath} initialQuery={metadataEditGame.title}
+        onClose={() => setMetadataEditGame(null)} onApplied={() => { void reload(); }} /> : null}
 
       <ScanDialog
         open={scanOpen}

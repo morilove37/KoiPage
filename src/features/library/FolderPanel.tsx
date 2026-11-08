@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { BackButton } from '@/components/ui/back-button';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog';
 import { createFolder, folderPath, getFolderMode, removeFolderTree, renameFolder } from './folders';
@@ -57,7 +58,7 @@ export function FolderPanel({ folders, active, busy, society, statusMode, onSele
   };
   return <div className="flex flex-col gap-3" aria-label="文件夹导航">
     <div ref={folderRow} className="flex items-center gap-2 overflow-x-auto border-b border-border pb-3" aria-label="当前层级文件夹">
-      {current?.parentId ? <Button variant="outline" onClick={() => onSelect(current.parentId!)}>← 返回上级</Button> : null}
+      {current?.parentId ? <BackButton onClick={() => onSelect(current.parentId!)}>返回上级</BackButton> : null}
       <Button variant={society ? 'default' : 'outline'} aria-pressed={society} onClick={onSociety}>按社团分类</Button>
       <Button variant={statusMode ? 'default' : 'outline'} aria-pressed={statusMode} onClick={onStatus}>游玩状态</Button>
       {roots.map(folder => <Button {...dropProps(folder.id)} key={folder.id} variant={path[0]?.id === folder.id ? 'default' : 'outline'} aria-pressed={path[0]?.id === folder.id} className="folder-drop-target max-w-48" title={folder.name} onClick={() => onSelect(folder.id)}>
