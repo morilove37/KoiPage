@@ -2,6 +2,7 @@
 
 pub mod commands;
 mod bangumi_sync;
+mod friends;
 pub mod birthdays;
 pub mod instance;
 pub mod extract;
@@ -82,6 +83,7 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        .manage(friends::FriendsState::default())
         .manage(bangumi_sync::SyncState::default())
         .manage(commands::metadata_refresh::RefreshJob::default())
         .plugin(commands::backup::restore_plugin())
@@ -124,6 +126,14 @@ pub fn run() {
         // at runtime if the state was never managed.
         .manage(launcher::RunningGames::default())
         .invoke_handler(tauri::generate_handler![
+            friends::friends_status,
+            friends::friends_configure,
+            friends::friends_authenticate,
+            friends::friends_logout,
+            friends::friends_snapshot,
+            friends::friends_action,
+            friends::friends_preferences,
+            friends::friends_change_password,
             logging::logs_info,
             logging::logs_write,
             logging::logs_export,

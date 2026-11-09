@@ -69,6 +69,11 @@ enum ProcessState {
 }
 
 impl RunningGames {
+    /// Public social data is selected later; clone only runtime identifiers under this lock.
+    pub fn presence_snapshot(&self) -> CmdResult<Vec<(i64,i64,String,i64)>> {
+        Ok(self.0.lock().map_err(|_|CmdError("进程表已损坏".into()))?.iter()
+            .map(|(id,g)|(*id,g.session_id,g.started_at.clone(),g.clock.elapsed().as_secs() as i64)).collect())
+    }
     fn poll_exit(&self, game_id: i64, session_id: i64) -> CmdResult<ProcessState> {
         let mut map = self.0.lock().map_err(|_| CmdError("进程表已损坏".to_string()))?;
         let Some(entry) = map.get_mut(&game_id) else { return Ok(ProcessState::Gone) };

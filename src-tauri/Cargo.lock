@@ -1454,6 +1454,7 @@ dependencies = [
 name = "galgame-manager"
 version = "0.6.7"
 dependencies = [
+ "base64 0.22.1",
  "image",
  "regex",
  "reqwest 0.12.28",

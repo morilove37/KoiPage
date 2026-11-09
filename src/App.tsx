@@ -15,6 +15,7 @@ import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog"
 import { BirthdayCelebrationDialog } from "@/features/birthdays/BirthdayCelebrationDialog";
 import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
 import { BangumiSyncRuntime } from "@/features/bangumi-sync/BangumiSyncRuntime";
+import { FriendsRuntime } from "@/features/friends/FriendsRuntime";
 import type { SyncReport } from "@/features/bangumi-sync/api";
 import type { RefreshState } from "@/features/metadata/metadata-refresh-state";
 import { useAppStore } from "@/store/app";
@@ -42,6 +43,7 @@ const GameDetailPage = lazy(() => import("@/features/detail/GameDetailPage"));
 const ToolsPage = lazy(() => import("@/features/tools/ToolsPage"));
 const TagsPage = lazy(() => import("@/features/tags/TagsPage"));
 const SettingsPage = lazy(() => import("@/features/settings/SettingsPage"));
+const FriendsPage = lazy(() => import("@/features/friends/FriendsPage"));
 
 interface NavItem {
   to: string;
@@ -57,6 +59,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/folders", label: "游戏文件夹", icon: "folder" },
   { to: "/tools", label: "实用工具", icon: "tools" },
   { to: "/tags", label: "标签管理", icon: "tags" },
+  { to: "/friends", label: "好友", icon: "friends" },
   { to: "/settings", label: "设置", icon: "settings" },
 ];
 
@@ -204,6 +207,7 @@ export default function App() {
               <Route path="/library/:id" element={<GameDetailPage />} />
               <Route path="/tools" element={<ToolsPage />} />
               <Route path="/tags" element={<TagsPage />} />
+              <Route path="/friends" element={<FriendsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
             </Routes>
@@ -211,6 +215,7 @@ export default function App() {
         </ErrorBoundary>
       </main>
       <BangumiSyncRuntime />
+      <FriendsRuntime />
       <UpdateDialog />
       <AnnouncementDialog />
       <BirthdayCelebrationDialog />

@@ -44,6 +44,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+base64 = "0.22"
 regex = "1"
 scraper = { version = "0.24", default-features = false }
 # Decode avatar contents before accepting personal or imported image data.

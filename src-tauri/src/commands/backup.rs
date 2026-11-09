@@ -626,6 +626,7 @@ pub async fn backup_restore_prepare(
         &current[0],
     )
     .await?;
+    crate::friends::stop(&app,true).await;
     Ok(RestorePrepared {
         safety_backup: safety.to_string_lossy().into(),
         restart_required: true,
@@ -658,6 +659,8 @@ async fn stage_restore(
     let result = async {
         let mut tx = db.begin().await?;
         // A restored database must never silently resume remote account writes.
+        sqlx::query("UPDATE settings SET value=json_set(value,'$.enabled',json('false'),'$.shareGame',json('false')) WHERE key='friends_config' AND json_valid(value)")
+            .execute(&mut *tx).await?;
         let sync_config: Option<String> = sqlx::query_scalar::<_,Option<String>>("SELECT value FROM settings WHERE key='bangumi_sync_config'")
             .fetch_optional(&mut *tx).await?.flatten();
         if let Some(config) = sync_config.and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()).filter(|v|v.is_object()) {
