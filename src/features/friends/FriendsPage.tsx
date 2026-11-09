@@ -7,6 +7,7 @@ import {ConfirmDialog} from '@/components/ui/dialog';
 import {formatPlayTime} from '@/types/game';
 import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {errorMessage} from '@/features/io/io';
+import {BRAND} from '@/lib/brand';
 import * as api from './api';
 import {createSnapshotController,elapsedSeconds,normalizePrivacy,sortFriends} from './model';
 import {useFriendsStore} from './store';
@@ -58,6 +59,11 @@ export default function FriendsPage(){
   return <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">邀请内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">看看朋友正在推哪部作品。</p></div>
       <div className="flex items-center gap-2"><Button size="sm" variant="ghost" aria-expanded={connectionOpen} aria-controls="friends-service-connection" onClick={()=>setConnectionOpen(open=>!open)}>连接设置</Button>{account?<Button variant="outline" disabled={busy} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
+    <section aria-label="好友内测说明" className="rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm">
+      <p className="font-medium">进群可参与好友内测邀请码抽取。</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">好友功能仅供测试使用，后续版本可能移除。</p>
+      <div className="mt-3 flex flex-wrap items-center gap-3"><p className="text-xs">QQ 交流群：<span className="select-all font-semibold tabular-nums text-primary">{BRAND.communityGroup}</span></p><Button size="sm" variant="outline" onClick={()=>void perform(()=>writeText(BRAND.communityGroup),'群号已复制。')}>复制群号</Button></div>
+    </section>
     {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>:null}
     {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
     {connectionOpen?<section id="friends-service-connection" className="rounded-lg border border-border bg-card p-4"><h2 className="text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</h2>
@@ -68,6 +74,7 @@ export default function FriendsPage(){
       </form></section>:null}
     {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取内测配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友内测</CardTitle></CardHeader><CardContent>
       <div className="mb-5 flex gap-2">{(['login','register','reset'] as const).map(item=><Button key={item} size="sm" variant={mode===item?'default':'outline'} disabled={busy} onClick={()=>{setMode(item);setPassword('');setError('');}}>{item==='login'?'登录':item==='register'?'邀请码注册':'重置密码'}</Button>)}</div>
+      {mode==='register'?<p className="mb-4 max-w-lg text-xs leading-relaxed text-muted-foreground">每个公网 IP 仅可注册一个账号，同一网络下的设备可能共用名额。只有账号创建成功才占用名额；提交后若连接中断，可先用原用户名和密码尝试登录。</p>:null}
       <form className="grid max-w-lg gap-4" onSubmit={e=>{e.preventDefault();const attempt={mode,username,password,nickname,inviteCode,resetCode};setPassword('');setInviteCode('');setResetCode('');void perform(()=>api.authenticateFriends(attempt),mode==='register'?'注册成功，已登录。':'已登录。',true);}}>
         <Field label="用户名" hint="3–32 位字母、数字或下划线。"><Input autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} disabled={busy}/></Field>
         {mode==='register'?<><Field label="昵称"><Input value={nickname} maxLength={32} onChange={e=>setNickname(e.target.value)} disabled={busy}/></Field><Field label="邀请码"><Input required autoComplete="off" value={inviteCode} onChange={e=>setInviteCode(e.target.value)} disabled={busy}/></Field></>:null}

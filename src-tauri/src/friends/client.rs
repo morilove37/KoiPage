@@ -137,6 +137,8 @@ fn response_error(status: u16, value: &Value) -> CmdError {
     );
     let (kind, summary) = if terminal || message.contains("FRIENDS_SESSION") {
         ("SESSION", "登录已失效或账号已在另一端登录，请重新登录")
+    } else if auth_code == "FRIENDS_IP_REGISTERED" {
+        ("IP_REGISTERED", "当前公网 IP 已注册过账号，同一网络可能共用名额，请使用已有账号登录")
     } else if message.contains("FRIENDS_INVITE") {
         ("INVITE", "邀请码无效、已使用或已过期")
     } else if message.contains("FRIENDS_CAPACITY") {
@@ -160,6 +162,13 @@ fn response_error(status: u16, value: &Value) -> CmdError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn registered_ip_is_a_permanent_registration_rule_not_a_temporary_rate_limit() {
+        let error = response_error(429, &json!({"code":"FRIENDS_IP_REGISTERED","message":"untrusted-provider-body"}));
+        assert!(error.0.starts_with("FRIENDS_IP_REGISTERED:"));
+        assert!(error.0.contains("已注册"));
+        assert!(!error.0.contains("untrusted-provider-body"));
+    }
     #[test]
     fn errors_never_echo_passwords_tokens_or_response_bodies() {
         let error = response_error(
