@@ -206,6 +206,9 @@ importers:
         specifier: 5.0.15
         version: 5.0.15(@types/react@18.3.31)(react@18.3.1)
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: 0.5.15
+        version: 0.5.15
       '@tauri-apps/cli':
         specifier: 2.12.2
         version: 2.12.2
@@ -322,6 +325,9 @@ packages:
   '@babel/types@7.29.8':
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
+
+  '@electric-sql/pglite@0.5.15':
+    resolution: {integrity: sha512-ERZWgaRTxueGV4cvL1tfpAOzFCWTXoUtbCBqnf2FhHDVs/so9eAKaanvrwWF9Dntx7BYsmFQujVQ0/B4S8Mmiw==}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -1352,6 +1358,8 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
+
+  '@electric-sql/pglite@0.5.15': {}
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true

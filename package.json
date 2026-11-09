@@ -38,6 +38,7 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
     "@tauri-apps/cli": "2.12.2",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
