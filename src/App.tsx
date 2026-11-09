@@ -176,6 +176,7 @@ export default function App() {
             >
               <GeometryIcon name={item.icon} />
               <span>{item.label}</span>
+              {item.to === "/friends" ? <span className="ml-auto rounded border border-current px-1.5 py-0.5 text-[9px] font-semibold leading-none opacity-75">Beta</span> : null}
             </NavLink>
           ))}
         </nav>

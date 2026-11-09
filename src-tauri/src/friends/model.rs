@@ -3,7 +3,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub server_url: String,
@@ -29,7 +29,7 @@ impl Default for Config {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: String,
@@ -37,6 +37,14 @@ pub struct Account {
     pub nickname: String,
     pub avatar: u8,
     pub friend_code: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct HideableGame {
+    pub id: i64,
+    pub title: String,
+    pub original_title: Option<String>,
 }
 
 // Tokens deliberately have no Debug implementation and never appear in status DTOs.
@@ -47,13 +55,14 @@ pub struct Tokens {
     pub expires_at: i64,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub config: Config,
     pub account: Option<Account>,
     pub connected: bool,
     pub last_error: Option<String>,
+    pub generation: u64,
 }
 
 #[derive(Clone)]
@@ -174,9 +183,10 @@ pub fn validate_login(username: &str, password: &str) -> CmdResult<String> {
             "FRIENDS_INPUT: 用户名需为 3–32 位字母、数字或下划线".into(),
         ));
     }
-    if password.chars().count() < 12 || password.len() > 72 {
+    if password.len() < 12 || password.len() > 72 || !password.bytes().all(|b| b.is_ascii_graphic())
+    {
         return Err(CmdError(
-            "FRIENDS_INPUT: 密码至少 12 个字符，UTF-8 长度不超过 72 字节".into(),
+            "FRIENDS_INPUT: 密码需为 12–72 位英文字母、数字或符号，不支持中文和空格".into(),
         ));
     }
     Ok(username)
@@ -261,6 +271,26 @@ mod tests {
         assert!(validate_login("bad name", "twelve-chars!x").is_err());
         assert!(validate_login("alice", "short").is_err());
         assert!(validate_login("alice", &"密".repeat(25)).is_err());
+        assert!(validate_login("alice", &"密".repeat(12)).is_err());
+        assert!(validate_login("alice", "english password").is_err());
+    }
+
+    #[test]
+    fn hidden_game_picker_serializes_only_id_and_titles() {
+        let value = serde_json::to_value(HideableGame {
+            id: 1,
+            title: "Title".into(),
+            original_title: Some("原名".into()),
+        })
+        .unwrap();
+        let mut fields = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        fields.sort();
+        assert_eq!(fields, vec!["id", "originalTitle", "title"]);
     }
 
     fn candidate(id: i64, session: i64) -> RunningCandidate {

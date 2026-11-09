@@ -4,15 +4,13 @@ import {Card,CardContent,CardHeader,CardTitle} from '@/components/ui/card';
 import {Field,Input} from '@/components/ui/input';
 import {Badge} from '@/components/ui/badge';
 import {ConfirmDialog} from '@/components/ui/dialog';
-import {gamesList} from '@/lib/db';
-import type {Game} from '@/types/game';
 import {formatPlayTime} from '@/types/game';
 import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {errorMessage} from '@/features/io/io';
 import * as api from './api';
 import {createSnapshotController,elapsedSeconds,normalizePrivacy,sortFriends} from './model';
 import {useFriendsStore} from './store';
-import type {Account,FriendsStatus,ViewSnapshot} from './types';
+import type {Account,FriendsStatus,ViewSnapshot,HideableGame} from './types';
 
 const AVATARS=['🌸','🍀','🌙','🦊','🐱','🐧','🎮','📖'];
 function Avatar({user}:{user:Account}){return <span aria-hidden="true" className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-2xl">{AVATARS[user.avatar]??AVATARS[0]}</span>;}
@@ -21,20 +19,22 @@ export default function FriendsPage(){
   const status=useFriendsStore(s=>s.status),account=status?.account;
   const [view,setView]=useState<ViewSnapshot|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
   const [serverUrl,setServerUrl]=useState(''),[publicKey,setPublicKey]=useState('');
+  const [connectionOpen,setConnectionOpen]=useState(false);
   const [mode,setMode]=useState<'login'|'register'|'reset'>('login'),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[inviteCode,setInviteCode]=useState(''),[resetCode,setResetCode]=useState('');
   const [nickname,setNickname]=useState(''),[avatar,setAvatar]=useState(0),[newPassword,setNewPassword]=useState(''),[friendCode,setFriendCode]=useState('');
-  const [games,setGames]=useState<Game[]>([]),[query,setQuery]=useState(''),[clock,setClock]=useState(Date.now());
+  const [games,setGames]=useState<HideableGame[]>([]),[query,setQuery]=useState(''),[clock,setClock]=useState(Date.now());
   const [confirm,setConfirm]=useState<{action:'remove'|'block';user:Account}|null>(null);
   const controller=useRef<ReturnType<typeof createSnapshotController>|null>(null);
   const active=useRef(true);
   const refreshStatus=useCallback(async()=>{const state=useFriendsStore.getState(),epoch=state.epoch;const next=await api.friendsStatus();if(active.current)state.apply(next,epoch);return next;},[]);
-  useEffect(()=>{active.current=true;void refreshStatus().catch(e=>{if(active.current)setError(errorMessage(e));});void gamesList().then(v=>{if(active.current)setGames(v);}).catch(()=>{});return()=>{active.current=false;};},[refreshStatus]);
+  useEffect(()=>{active.current=true;void refreshStatus().catch(e=>{if(active.current)setError(errorMessage(e));});return()=>{active.current=false;};},[refreshStatus]);
+  useEffect(()=>{let alive=true;setGames([]);if(account)void api.friendsLibraryGames().then(value=>{if(alive)setGames(value);}).catch(()=>{});return()=>{alive=false;};},[account?.id]);
   useEffect(()=>{if(status){setServerUrl(status.config.serverUrl);setPublicKey(status.config.publicKey);}},[status?.config.serverUrl,status?.config.publicKey]);
   useEffect(()=>{setNickname(account?.nickname??'');setAvatar(account?.avatar??0);},[account?.id,account?.nickname,account?.avatar]);
   useEffect(()=>{
     if(!account){setView(null);return;}
     let alive=true;
-    const next=createSnapshotController({load:api.friendsSnapshot,onChange:v=>{if(alive)setView(v);},onError:e=>{if(alive){setError(errorMessage(e));void refreshStatus().catch(()=>{});}}});
+    const next=createSnapshotController({load:api.friendsSnapshot,onChange:v=>{if(alive){setView(v);if(v&&!v.stale){setError(current=>current.includes('FRIENDS_NETWORK')?'':current);void refreshStatus().catch(()=>{});}}},onError:e=>{if(alive){setError(errorMessage(e));void refreshStatus().catch(()=>{});}}});
     controller.current=next;void next.refresh();
     const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')void next.refresh();},5000);
     const focus=()=>void next.refresh();window.addEventListener('focus',focus);
@@ -57,22 +57,22 @@ export default function FriendsPage(){
   const friends=sortFriends(view?.friends??[]);
   return <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">邀请内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">看看朋友正在推哪部作品。</p></div>
-      {account?<Button variant="outline" disabled={busy} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div>
+      <div className="flex items-center gap-2"><Button size="sm" variant="ghost" aria-expanded={connectionOpen} aria-controls="friends-service-connection" onClick={()=>setConnectionOpen(open=>!open)}>连接设置</Button>{account?<Button variant="outline" disabled={busy} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
     {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>:null}
     {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
-    <details open={!config?.serverUrl} className="rounded-lg border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</summary>
+    {connectionOpen?<section id="friends-service-connection" className="rounded-lg border border-border bg-card p-4"><h2 className="text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</h2>
       <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();void perform(()=>api.configureFriends(serverUrl,publicKey),'服务地址已保存。',true);}}>
         <Field label="项目地址"><Input value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="管理员提供的 HTTPS 项目地址" disabled={busy}/></Field>
         <Field label="项目公钥" hint="使用管理员提供的 publishable / anon 公钥。"><Input value={publicKey} onChange={e=>setPublicKey(e.target.value)} placeholder="sb_publishable_…" disabled={busy}/></Field>
         <Button type="submit" disabled={busy||!serverUrl||!publicKey} className="sm:col-span-2 sm:justify-self-start">保存连接</Button>
-      </form></details>
+      </form></section>:null}
     {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取内测配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友内测</CardTitle></CardHeader><CardContent>
       <div className="mb-5 flex gap-2">{(['login','register','reset'] as const).map(item=><Button key={item} size="sm" variant={mode===item?'default':'outline'} disabled={busy} onClick={()=>{setMode(item);setPassword('');setError('');}}>{item==='login'?'登录':item==='register'?'邀请码注册':'重置密码'}</Button>)}</div>
       <form className="grid max-w-lg gap-4" onSubmit={e=>{e.preventDefault();const attempt={mode,username,password,nickname,inviteCode,resetCode};setPassword('');setInviteCode('');setResetCode('');void perform(()=>api.authenticateFriends(attempt),mode==='register'?'注册成功，已登录。':'已登录。',true);}}>
         <Field label="用户名" hint="3–32 位字母、数字或下划线。"><Input autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} disabled={busy}/></Field>
         {mode==='register'?<><Field label="昵称"><Input value={nickname} maxLength={32} onChange={e=>setNickname(e.target.value)} disabled={busy}/></Field><Field label="邀请码"><Input required autoComplete="off" value={inviteCode} onChange={e=>setInviteCode(e.target.value)} disabled={busy}/></Field></>:null}
         {mode==='reset'?<Field label="管理员提供的重置码"><Input required autoComplete="off" value={resetCode} onChange={e=>setResetCode(e.target.value)} disabled={busy}/></Field>:null}
-        <Field label={mode==='reset'?'新密码':'密码'} hint="至少 12 个字符；较长中文密码请控制在 72 字节以内。"><Input type="password" required minLength={12} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} disabled={busy}/></Field>
+        <Field label={mode==='reset'?'新密码':'密码'} hint="12–72 位英文字母、数字或符号，不支持中文和空格。"><Input type="password" required minLength={12} maxLength={72} pattern="[!-~]{12,72}" title="请输入 12–72 位英文字母、数字或符号，不支持中文和空格" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} disabled={busy}/></Field>
         <Button type="submit" disabled={busy||!config?.serverUrl}>{busy?'处理中…':mode==='login'?'登录':mode==='register'?'注册并登录':'设置新密码并登录'}</Button>
       </form></CardContent></Card>:<>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
@@ -84,7 +84,7 @@ export default function FriendsPage(){
             <div className="flex flex-wrap gap-2" role="group" aria-label="选择头像">{AVATARS.map((symbol,index)=><button type="button" key={symbol} aria-pressed={avatar===index} aria-label={`头像 ${index+1}`} disabled={busy} className={`size-10 rounded-lg border text-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${avatar===index?'border-primary bg-primary/10':'border-border'}`} onClick={()=>setAvatar(index)}>{symbol}</button>)}</div>
             <Button type="submit" size="sm" disabled={busy}>保存资料</Button>
           </form>
-          <details><summary className="cursor-pointer text-xs text-muted-foreground">修改密码</summary><form className="mt-3 flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();const value=newPassword;setNewPassword('');void perform(()=>api.changeFriendsPassword(value),'密码已更新。');}}><Input type="password" autoComplete="new-password" aria-label="新密码" minLength={12} required value={newPassword} onChange={e=>setNewPassword(e.target.value)} className="min-w-0 flex-1" disabled={busy}/><Button type="submit" size="sm" disabled={busy}>更新密码</Button></form></details>
+          <details><summary className="cursor-pointer text-xs text-muted-foreground">修改密码</summary><form className="mt-3 flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();const value=newPassword;setNewPassword('');void perform(()=>api.changeFriendsPassword(value),'密码已更新。');}}><Input type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} pattern="[!-~]{12,72}" title="请输入 12–72 位英文字母、数字或符号，不支持中文和空格" aria-label="新密码" minLength={12} maxLength={72} required value={newPassword} onChange={e=>setNewPassword(e.target.value)} className="min-w-0 flex-1" disabled={busy}/><Button type="submit" size="sm" disabled={busy}>更新密码</Button></form></details>
         </CardContent></Card>
         <Card><CardHeader><CardTitle>游玩状态与隐私</CardTitle></CardHeader><CardContent className="space-y-4">
           <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 accent-primary" checked={privacy.shareGame} disabled={busy} onChange={e=>togglePrivacy({shareGame:e.target.checked})}/><span>向好友分享正在游玩的游戏<span className="mt-1 block text-xs text-muted-foreground">仅显示恋页启动并跟踪的作品；缩小到托盘后继续更新。</span></span></label>

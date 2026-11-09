@@ -62,13 +62,18 @@ impl Api {
         Ok(value)
     }
     pub async fn rpc(&self, name: &str, token: &str, body: Value) -> CmdResult<Value> {
-        self.request(
-            Method::POST,
-            &format!("/rest/v1/rpc/{name}"),
-            Some(token),
-            body,
-        )
-        .await
+        let value = self
+            .request(
+                Method::POST,
+                &format!("/rest/v1/rpc/{name}"),
+                Some(token),
+                body,
+            )
+            .await?;
+        if let Some(code) = value["error"].as_str() {
+            return Err(response_error(400, &json!({"message":code})));
+        }
+        Ok(value)
     }
     pub async fn password_login(&self, username: &str, password: &str) -> CmdResult<Tokens> {
         let value = self
@@ -117,7 +122,20 @@ pub fn parse_tokens(value: Value) -> CmdResult<Tokens> {
 }
 fn response_error(status: u16, value: &Value) -> CmdError {
     let message = value["message"].as_str().unwrap_or("");
-    let (kind, summary) = if message.contains("FRIENDS_SESSION") {
+    let auth_code = value["error_code"]
+        .as_str()
+        .or_else(|| value["code"].as_str())
+        .unwrap_or("");
+    let terminal = matches!(
+        auth_code,
+        "refresh_token_not_found"
+            | "refresh_token_already_used"
+            | "session_not_found"
+            | "session_expired"
+            | "user_banned"
+            | "bad_jwt"
+    );
+    let (kind, summary) = if terminal || message.contains("FRIENDS_SESSION") {
         ("SESSION", "登录已失效或账号已在另一端登录，请重新登录")
     } else if message.contains("FRIENDS_INVITE") {
         ("INVITE", "邀请码无效、已使用或已过期")
@@ -154,6 +172,23 @@ mod tests {
                 .0
                 .starts_with("FRIENDS_SESSION")
         );
+    }
+    #[test]
+    fn terminal_auth_refresh_errors_require_a_new_login() {
+        for code in [
+            "refresh_token_not_found",
+            "refresh_token_already_used",
+            "session_not_found",
+            "session_expired",
+            "user_banned",
+        ] {
+            assert!(
+                response_error(400, &json!({"error_code":code}))
+                    .0
+                    .starts_with("FRIENDS_SESSION"),
+                "{code}"
+            );
+        }
     }
     #[tokio::test]
     async fn redirect_does_not_forward_bearer_credentials() {

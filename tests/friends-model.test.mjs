@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSnapshotController, mergeSnapshot, elapsedSeconds, normalizePrivacy, sortFriends } from '../src/features/friends/model.ts';
+import {useFriendsStore} from '../src/features/friends/store.ts';
 
 const user={id:'a',username:'alice',nickname:'Alice',avatar:0,friendCode:'ABC'};
 const full={unchanged:false,revision:'r1',serverNow:1000,me:user,friends:[{...user,online:true,game:{title:'测试作品',vndbId:null,bangumiId:null,startedAt:900}}],incoming:[],outgoing:[],blocked:[]};
@@ -36,4 +37,14 @@ test('authentication failures clear cached game data, while network errors mark 
 test('friends currently playing sort before idle online and offline friends',()=>{
   const list=[{...user,id:'offline',online:false,game:null},{...user,id:'idle',online:true,game:null},{...user,id:'playing',online:true,game:{title:'x',startedAt:1}}];
   assert.deepEqual(sortFriends(list).map(v=>v.id),['playing','idle','offline']);assert.equal(list[0].id,'offline');
+});
+
+test('native status events cannot restore identity during logout or regress a newer native generation',()=>{
+  useFriendsStore.setState({status:{account:user,generation:1},epoch:0,identityPending:false});
+  const epoch=useFriendsStore.getState().invalidate();
+  useFriendsStore.getState().apply({account:user,generation:1},epoch,true);
+  assert.equal(useFriendsStore.getState().status.account,null);
+  useFriendsStore.getState().apply({account:null,generation:2},epoch);
+  useFriendsStore.getState().apply({account:user,generation:1},epoch,true);
+  assert.equal(useFriendsStore.getState().status.account,null);
 });

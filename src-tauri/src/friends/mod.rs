@@ -38,6 +38,26 @@ pub struct Preferences {
 }
 
 #[tauri::command]
+pub async fn friends_library_games(app: AppHandle) -> CmdResult<Vec<HideableGame>> {
+    runtime::ensure(&app).await;
+    let state = app.state::<FriendsState>();
+    {
+        let inner = state.inner.lock().await;
+        if inner.account.is_none()
+            || !inner.config.enabled
+            || state.stopping.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(CmdError("FRIENDS_SESSION: 请先登录".into()));
+        }
+    }
+    Ok(sqlx::query_as::<_, HideableGame>(
+        "SELECT id,title,original_title FROM games ORDER BY title,id",
+    )
+    .fetch_all(&crate::commands::games::pool(&app).await?)
+    .await?)
+}
+
+#[tauri::command]
 pub async fn friends_status(app: AppHandle) -> CmdResult<Status> {
     runtime::ensure(&app).await;
     Ok(app.state::<FriendsState>().inner.lock().await.status())

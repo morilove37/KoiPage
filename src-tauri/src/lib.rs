@@ -127,6 +127,7 @@ pub fn run() {
         .manage(launcher::RunningGames::default())
         .invoke_handler(tauri::generate_handler![
             friends::friends_status,
+            friends::friends_library_games,
             friends::friends_configure,
             friends::friends_authenticate,
             friends::friends_logout,

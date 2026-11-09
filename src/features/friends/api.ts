@@ -1,8 +1,9 @@
 import {invoke} from '@/lib/logging';
 import {initDatabase} from '@/lib/db';
-import type {FriendsStatus,Privacy,Snapshot} from './types';
+import type {FriendsStatus,Privacy,Snapshot,HideableGame} from './types';
 async function call<T>(command:string,args?:Record<string,unknown>):Promise<T>{await initDatabase();return invoke<T>(command,args);}
 export const friendsStatus=()=>call<FriendsStatus>('friends_status');
+export const friendsLibraryGames=()=>call<HideableGame[]>('friends_library_games');
 export const configureFriends=(serverUrl:string,publicKey:string)=>call<FriendsStatus>('friends_configure',{input:{serverUrl,publicKey}});
 export const authenticateFriends=(input:{mode:'login'|'register'|'reset';username:string;password:string;nickname?:string;inviteCode?:string;resetCode?:string})=>call<FriendsStatus>('friends_authenticate',{input});
 export const logoutFriends=()=>call<FriendsStatus>('friends_logout');

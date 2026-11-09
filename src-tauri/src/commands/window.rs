@@ -118,11 +118,11 @@ pub fn app_hide_to_tray(app: AppHandle) -> CmdResult<()> {
 /// `app_quit` — actually terminate the application.
 #[tauri::command]
 pub async fn app_quit(app: AppHandle) -> CmdResult<()> {
-    crate::friends::stop(&app,false).await;
     // A full exit credits confirmed play time before dropping the process registry.
     if super::games::pool(&app).await.is_ok() {
         crate::launcher::sessions::prepare_manager_exit(app.clone()).await?;
     }
+    crate::friends::stop(&app,false).await;
     app.exit(0);
     Ok(())
 }

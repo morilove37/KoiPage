@@ -1005,12 +1005,15 @@ mod tests {
         let tmp=TempDir::new(&test_root()).unwrap();let db=fixture(&tmp.0).await;
         sqlx::query("INSERT INTO settings(key,value) VALUES('bangumi_sync_config',?)")
             .bind(r#"{"enabled":true,"account":{"id":42,"username":"tester","nickname":"Test"},"privateNew":true}"#).execute(&db).await.unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('friends_config',?)").bind(r#"{"enabled":true,"shareGame":true,"hiddenGameIds":[1]}"#).execute(&db).await.unwrap();
         let archive=tmp.0.join("sync-enabled.koibak");create_archive(&db,&archive,&tmp.0).await.unwrap();
         let (m,p)=inspect(&archive,&tmp.0).await.unwrap();
         stage_restore(&tmp.0,&tmp.0.join("assets"),&m,&p,&p[0]).await.unwrap();db.close().await;apply_pending(&tmp.0).unwrap();
         let db=open_db(&tmp.0.join("galgame.db")).await.unwrap();
         let text:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='bangumi_sync_config'").fetch_one(&db).await.unwrap();
         let value:serde_json::Value=serde_json::from_str(&text).unwrap();assert_eq!(value["enabled"],false);assert_eq!(value["account"]["id"],42);
+        let social:String=sqlx::query_scalar("SELECT value FROM settings WHERE key='friends_config'").fetch_one(&db).await.unwrap();let social:serde_json::Value=serde_json::from_str(&social).unwrap();
+        assert_eq!(social["enabled"],false);assert_eq!(social["shareGame"],false);assert_eq!(social["hiddenGameIds"],serde_json::json!([1]));
         db.close().await;
     }
 
