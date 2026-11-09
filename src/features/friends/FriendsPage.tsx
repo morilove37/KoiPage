@@ -1,4 +1,5 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
+import {Link} from 'react-router-dom';
 import {Button} from '@/components/ui/button';
 import {Card,CardContent,CardHeader,CardTitle} from '@/components/ui/card';
 import {Field,Input} from '@/components/ui/input';
@@ -11,10 +12,10 @@ import {BRAND} from '@/lib/brand';
 import * as api from './api';
 import {createSnapshotController,elapsedSeconds,normalizePrivacy,sortFriends} from './model';
 import {useFriendsStore} from './store';
+import {FriendAvatar as Avatar} from './FriendAvatar';
+import {AVATAR_CHOICES,avatarPreset} from './avatar-catalog';
+import {FriendsAvatar} from './FriendsAvatar';
 import type {Account,FriendsStatus,ViewSnapshot,HideableGame} from './types';
-
-const AVATARS=['🌸','🍀','🌙','🦊','🐱','🐧','🎮','📖'];
-function Avatar({user}:{user:Account}){return <span aria-hidden="true" className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-2xl">{AVATARS[user.avatar]??AVATARS[0]}</span>;}
 
 export default function FriendsPage(){
   const status=useFriendsStore(s=>s.status),account=status?.account;
@@ -31,7 +32,7 @@ export default function FriendsPage(){
   useEffect(()=>{active.current=true;void refreshStatus().catch(e=>{if(active.current)setError(errorMessage(e));});return()=>{active.current=false;};},[refreshStatus]);
   useEffect(()=>{let alive=true;setGames([]);if(account)void api.friendsLibraryGames().then(value=>{if(alive)setGames(value);}).catch(()=>{});return()=>{alive=false;};},[account?.id]);
   useEffect(()=>{if(status){setServerUrl(status.config.serverUrl);setPublicKey(status.config.publicKey);}},[status?.config.serverUrl,status?.config.publicKey]);
-  useEffect(()=>{setNickname(account?.nickname??'');setAvatar(account?.avatar??0);},[account?.id,account?.nickname,account?.avatar]);
+  useEffect(()=>{setNickname(account?.nickname??'');setAvatar(avatarPreset(account?.avatar??0).id);},[account?.id,account?.nickname,account?.avatar]);
   useEffect(()=>{
     if(!account){setView(null);return;}
     let alive=true;
@@ -65,6 +66,7 @@ export default function FriendsPage(){
       <div className="mt-3 flex flex-wrap items-center gap-3"><p className="text-xs">QQ 交流群：<span className="select-all font-semibold tabular-nums text-primary">{BRAND.communityGroup}</span></p><Button size="sm" variant="outline" onClick={()=>void perform(()=>writeText(BRAND.communityGroup),'群号已复制。')}>复制群号</Button></div>
     </section>
     {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>:null}
+    {status?.libraryError?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-relaxed text-destructive">{account?<>游戏库尚未同步成功。{privacy.shareLibrary?'好友暂时可能看到上次同步的收藏。':'关闭或隐藏操作尚待同步，远端收藏可能仍可见。'}恢复连接后会重试。</>:<>游戏库同步或撤回尚未完成，远端收藏可能仍可见。请恢复网络并重新登录，确认同步结果。</>}</p>:null}
     {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
     {connectionOpen?<section id="friends-service-connection" className="rounded-lg border border-border bg-card p-4"><h2 className="text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</h2>
       <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();void perform(()=>api.configureFriends(serverUrl,publicKey),'服务地址已保存。',true);}}>
@@ -88,16 +90,32 @@ export default function FriendsPage(){
           <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-muted-foreground">好友码</span><code className="select-all rounded bg-muted px-2 py-1 text-sm">{account.friendCode}</code><Button size="sm" variant="ghost" onClick={()=>void perform(async()=>{await writeText(account.friendCode);},'好友码已复制。')}>复制</Button></div>
           <form className="space-y-3" onSubmit={e=>{e.preventDefault();void perform(()=>api.friendsAction('profile',null,{nickname,avatar}),'个人资料已保存。');}}>
             <Field label="昵称"><Input required value={nickname} maxLength={32} onChange={e=>setNickname(e.target.value)} disabled={busy}/></Field>
-            <div className="flex flex-wrap gap-2" role="group" aria-label="选择头像">{AVATARS.map((symbol,index)=><button type="button" key={symbol} aria-pressed={avatar===index} aria-label={`头像 ${index+1}`} disabled={busy} className={`size-10 rounded-lg border text-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${avatar===index?'border-primary bg-primary/10':'border-border'}`} onClick={()=>setAvatar(index)}>{symbol}</button>)}</div>
+            <fieldset disabled={busy}>
+              <legend className="mb-2 text-sm font-medium">选择角色头像 <span className="text-xs font-normal text-muted-foreground">18 款</span></legend>
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">{AVATAR_CHOICES.map(preset=><label key={preset.id} title={`${preset.name} · ${preset.work}`} className={`min-w-0 cursor-pointer ${busy?'cursor-not-allowed opacity-60':''}`}>
+                <input type="radio" name="friends-character-avatar" value={preset.id} checked={avatar===preset.id} onChange={()=>setAvatar(preset.id)} aria-label={`${preset.name} · ${preset.work}`} className="peer sr-only"/>
+                <span className={`relative flex flex-col items-center gap-1.5 rounded-lg border p-1.5 transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring ${avatar===preset.id?'border-primary bg-primary/10':'border-border hover:border-primary/50'}`}>
+                  <FriendsAvatar avatar={preset.id} decorative className="size-12 sm:size-14"/>
+                  <span className="block w-full truncate text-center text-[10px] leading-4">{preset.name}</span>
+                  {avatar===preset.id?<span aria-hidden="true" className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">✓</span>:null}
+                </span>
+              </label>)}</div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">已选择：{avatarPreset(avatar).name} · {avatarPreset(avatar).work}。点击“保存资料”后同步给好友。</p>
+            </fieldset>
             <Button type="submit" size="sm" disabled={busy}>保存资料</Button>
           </form>
           <details><summary className="cursor-pointer text-xs text-muted-foreground">修改密码</summary><form className="mt-3 flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();const value=newPassword;setNewPassword('');void perform(()=>api.changeFriendsPassword(value),'密码已更新。');}}><Input type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} pattern="[!-~]{12,72}" title="请输入 12–72 位英文字母、数字或符号，不支持中文和空格" aria-label="新密码" minLength={12} maxLength={72} required value={newPassword} onChange={e=>setNewPassword(e.target.value)} className="min-w-0 flex-1" disabled={busy}/><Button type="submit" size="sm" disabled={busy}>更新密码</Button></form></details>
         </CardContent></Card>
         <Card><CardHeader><CardTitle>游玩状态与隐私</CardTitle></CardHeader><CardContent className="space-y-4">
           <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 accent-primary" checked={privacy.shareGame} disabled={busy} onChange={e=>togglePrivacy({shareGame:e.target.checked})}/><span>向好友分享正在游玩的游戏<span className="mt-1 block text-xs text-muted-foreground">仅显示恋页启动并跟踪的作品；缩小到托盘后继续更新。</span></span></label>
-          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 accent-primary" checked={privacy.invisible} disabled={busy} onChange={e=>togglePrivacy({invisible:e.target.checked})}/><span>隐身<span className="mt-1 block text-xs text-muted-foreground">好友会看到你离线，同时隐藏正在游玩的作品。</span></span></label>
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 accent-primary" checked={privacy.shareLibrary} disabled={busy} onChange={e=>togglePrivacy({shareLibrary:e.target.checked})}/><span>向好友公开我的游戏库<span className="mt-1 block text-xs leading-relaxed text-muted-foreground">分享作品封面、游玩状态、个人评分与累计时长，离线时好友也能查看最后同步的收藏。</span></span></label>
+          <div className="space-y-2 rounded-md bg-muted/50 p-3">
+            {!status.libraryError?<p className="text-xs leading-relaxed text-muted-foreground">{privacy.shareLibrary?status.librarySyncedAt?`游戏库已同步：${new Date(status.librarySyncedAt*1000).toLocaleString('zh-CN')}`:'游戏库等待首次同步。':'游戏库分享已关闭。'}</p>:null}
+            <Button size="sm" variant="outline" disabled={busy} onClick={()=>void perform(api.friendsSyncLibrary,'游戏库同步请求已处理。')}>立即同步</Button>
+          </div>
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 accent-primary" checked={privacy.invisible} disabled={busy} onChange={e=>togglePrivacy({invisible:e.target.checked})}/><span>隐身<span className="mt-1 block text-xs text-muted-foreground">好友会看到你离线，同时隐藏正在游玩的作品；已公开的游戏库仍可查看。</span></span></label>
           <details><summary className="cursor-pointer text-sm">隐藏指定作品 · 已选 {privacy.hiddenGameIds.length} 部</summary><div className="mt-3 space-y-2"><Input aria-label="搜索要隐藏的作品" placeholder="搜索作品" value={query} onChange={e=>setQuery(e.target.value)}/><div className="max-h-48 space-y-2 overflow-y-auto">{selected.map(game=><label key={game.id} className="flex items-center gap-2 text-xs"><input type="checkbox" className="accent-primary" checked={privacy.hiddenGameIds.includes(game.id)} disabled={busy} onChange={e=>togglePrivacy({hiddenGameIds:e.target.checked?[...privacy.hiddenGameIds,game.id]:privacy.hiddenGameIds.filter(id=>id!==game.id)})}/><span className="truncate">{game.title}</span></label>)}</div>{!games.length?<p className="text-xs text-muted-foreground">游戏库中的作品会显示在这里。</p>:null}</div></details>
-          <p className="text-xs leading-relaxed text-muted-foreground">每次重新登录默认关闭作品分享。网络中断后，好友看到的在线状态会在超时后失效。</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">隐藏的作品同时从正在游玩和公开游戏库排除。每次重新登录默认关闭作品分享。网络中断后，好友看到的在线状态会在超时后失效。</p>
         </CardContent></Card>
       </div>
       <Card><CardHeader><CardTitle>添加好友</CardTitle></CardHeader><CardContent><form className="flex max-w-lg gap-2" onSubmit={e=>{e.preventDefault();const code=friendCode;setFriendCode('');action('request',code);}}><Input aria-label="对方的好友码" placeholder="输入对方的完整好友码" value={friendCode} maxLength={32} onChange={e=>setFriendCode(e.target.value)} disabled={busy}/><Button type="submit" disabled={busy||!friendCode.trim()}>发送申请</Button></form></CardContent></Card>
@@ -107,9 +125,21 @@ export default function FriendsPage(){
       </CardContent></Card>:null}
       <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">好友列表 <span className="text-sm font-normal text-muted-foreground">{friends.length} 人</span></h2><Button size="sm" variant="outline" disabled={busy} onClick={()=>void controller.current?.refresh()}>刷新</Button></div>
       {view?.stale?<p role="status" className="text-sm text-muted-foreground">连接中断，好友状态待更新。</p>:null}
-      {!view?<p role="status" className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{error?'暂时无法获取好友列表，请检查连接后刷新。':'正在获取好友列表…'}</p>:!friends.length?<p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">还没有好友，把你的好友码发给一起推 Galgame 的朋友吧。</p>:<div className="grid gap-3 md:grid-cols-2">{friends.map(friend=><div key={friend.id} className="flex min-w-0 items-start gap-3 rounded-lg border border-border bg-card p-4"><Avatar user={friend}/><div className="min-w-0 flex-1"><p className="truncate font-medium">{friend.nickname}</p><p className="mt-1 text-xs text-muted-foreground">{view.stale?'状态待更新':friend.online?friend.game?'正在游玩':'在线':'离线'}</p>{!view.stale&&friend.online&&friend.game?<><p className="mt-2 break-words text-sm font-medium text-primary">{friend.game.title}</p><p className="mt-1 text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(friend.game,view,clock))}</p></>:null}<div className="mt-3 flex gap-3"><button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'remove',user:friend})}>删除好友</button><button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'block',user:friend})}>屏蔽</button></div></div></div>)}</div>}
+      {!view?<p role="status" className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{error?'暂时无法获取好友列表，请检查连接后刷新。':'正在获取好友列表…'}</p>:!friends.length?<p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">还没有好友，把你的好友码发给一起推 Galgame 的朋友吧。</p>:<div className="grid gap-3 md:grid-cols-2">{friends.map(friend=><div key={friend.id} className="flex min-w-0 items-start gap-3 rounded-lg border border-border bg-card p-4">
+        <Link to={`/friends/${encodeURIComponent(friend.id)}`} aria-label={`查看 ${friend.nickname} 的主页`} className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Avatar user={friend}/></Link>
+        <div className="min-w-0 flex-1">
+          <Link to={`/friends/${encodeURIComponent(friend.id)}`} className="block truncate rounded font-medium hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{friend.nickname}</Link>
+          <p className="mt-1 text-xs text-muted-foreground">{view.stale?'状态待更新':friend.online?friend.game?'正在游玩':'在线':'离线'}</p>
+          {!view.stale&&friend.online&&friend.game?<><p className="mt-2 break-words text-sm font-medium text-primary">{friend.game.title}</p><p className="mt-1 text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(friend.game,view,clock))}</p></>:null}
+          <div className="mt-3 flex flex-wrap gap-3">
+            <Link to={`/friends/${encodeURIComponent(friend.id)}`} className="rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">查看主页</Link>
+            <button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'remove',user:friend})}>删除好友</button>
+            <button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'block',user:friend})}>屏蔽</button>
+          </div>
+        </div>
+      </div>)}</div>}
       {view?.blocked.length?<details className="rounded-lg border border-border bg-card p-4"><summary className="cursor-pointer text-sm">已屏蔽 · {view.blocked.length} 人</summary><div className="mt-3 space-y-2">{view.blocked.map(user=><div key={user.id} className="flex items-center justify-between gap-3 text-sm"><span>{user.nickname}</span><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('unblock',user.id)}>解除屏蔽</Button></div>)}</div></details>:null}
     </>}
-    <ConfirmDialog open={Boolean(confirm)} title={confirm?.action==='block'?'屏蔽此用户？':'删除好友？'} description={confirm?`${confirm.user.nickname} 将无法继续查看你的在线和游玩状态。`:''} confirmText={confirm?.action==='block'?'屏蔽':'删除好友'} destructive onCancel={()=>setConfirm(null)} onConfirm={()=>{if(confirm){action(confirm.action,confirm.user.id);setConfirm(null);}}}/>
+    <ConfirmDialog open={Boolean(confirm)} title={confirm?.action==='block'?'屏蔽此用户？':'删除好友？'} description={confirm?`${confirm.user.nickname} 将无法继续查看你的在线状态、游玩状态和公开游戏库。`:''} confirmText={confirm?.action==='block'?'屏蔽':'删除好友'} destructive onCancel={()=>setConfirm(null)} onConfirm={()=>{if(confirm){action(confirm.action,confirm.user.id);setConfirm(null);}}}/>
   </div>;
 }

@@ -44,6 +44,7 @@ const ToolsPage = lazy(() => import("@/features/tools/ToolsPage"));
 const TagsPage = lazy(() => import("@/features/tags/TagsPage"));
 const SettingsPage = lazy(() => import("@/features/settings/SettingsPage"));
 const FriendsPage = lazy(() => import("@/features/friends/FriendsPage"));
+const FriendProfilePage = lazy(() => import("@/features/friends/FriendProfilePage"));
 
 interface NavItem {
   to: string;
@@ -59,7 +60,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/folders", label: "游戏文件夹", icon: "folder" },
   { to: "/tools", label: "实用工具", icon: "tools" },
   { to: "/tags", label: "标签管理", icon: "tags" },
-  { to: "/friends", label: "好友", icon: "friends" },
+  { to: "/friends", label: "好友", icon: "friends", prefix: true },
   { to: "/settings", label: "设置", icon: "settings" },
 ];
 
@@ -209,6 +210,7 @@ export default function App() {
               <Route path="/tools" element={<ToolsPage />} />
               <Route path="/tags" element={<TagsPage />} />
               <Route path="/friends" element={<FriendsPage />} />
+              <Route path="/friends/:id" element={<FriendProfilePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
             </Routes>

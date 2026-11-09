@@ -1,14 +1,14 @@
-import type {CurrentGame,Friend,Privacy,Snapshot,ViewSnapshot} from './types';
+import type {CurrentGame,Friend,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters} from './types';
 
 export function normalizePrivacy(value:unknown):Privacy{
   const v=value&&typeof value==='object'?value as Record<string,unknown>:{};
-  return{shareGame:v.shareGame===true,invisible:v.invisible===true,hiddenGameIds:Array.isArray(v.hiddenGameIds)?[...new Set(v.hiddenGameIds.filter((n):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>0))]:[]};
+  return{shareGame:v.shareGame===true,shareLibrary:v.shareLibrary===true,invisible:v.invisible===true,hiddenGameIds:Array.isArray(v.hiddenGameIds)?[...new Set(v.hiddenGameIds.filter((n):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>0))]:[]};
 }
 export function mergeSnapshot(current:ViewSnapshot|null,next:Snapshot,receivedAt:number):ViewSnapshot|null{
   if(next.unchanged)return current?{...current,serverNow:next.serverNow,receivedAt,stale:false}:null;
   return{...next,receivedAt,stale:false};
 }
-export function elapsedSeconds(game:CurrentGame,view:ViewSnapshot,at=Date.now()):number{
+export function elapsedSeconds(game:CurrentGame,view:Pick<ViewSnapshot,'serverNow'|'receivedAt'>,at=Date.now()):number{
   const elapsed=view.serverNow-game.startedAt+Math.max(0,at-view.receivedAt)/1000;
   return Number.isFinite(elapsed)?Math.max(0,Math.floor(elapsed)):0;
 }
@@ -30,4 +30,28 @@ export function createSnapshotController(deps:{load:(revision:string|null)=>Prom
     pending=request;return request;
   }
   return{refresh,reset};
+}
+
+/** Each page/filter request owns its result; stale requests cannot restore a revoked library. */
+export function createProfileController(deps:{load:(input:ProfileFilters)=>Promise<FriendProfile>;onChange:(value:FriendProfileView|null)=>void;onError:(error:unknown)=>void;onLoading?:(loading:boolean)=>void;now?:()=>number}){
+  let sequence=0,lastInput='';
+  function reset(){sequence++;lastInput='';deps.onChange(null);deps.onLoading?.(false);}
+  async function refresh(input:ProfileFilters):Promise<void>{
+    const request=++sequence,key=JSON.stringify(input);
+    if(lastInput!==key){lastInput=key;deps.onChange(null);}
+    deps.onLoading?.(true);
+    try{
+      const next=await deps.load(input);if(request!==sequence)return;
+      const publicView=next.libraryShared?next:{...next,games:[],total:0,stats:null,syncedAt:null};
+      deps.onChange({...publicView,receivedAt:deps.now?.()??Date.now()});
+    }catch(error){
+      if(request!==sequence)return;deps.onChange(null);deps.onError(error);
+    }finally{if(request===sequence)deps.onLoading?.(false);}
+  }
+  return{refresh,reset};
+}
+
+/** A friend's cover must not make requests to arbitrary servers or open local paths. */
+export function libraryCoverSource(value:unknown):string|null{
+  return typeof value==='string'&&value.length<=12288&&/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)?value:null;
 }

@@ -10,6 +10,7 @@ pub struct Config {
     pub public_key: String,
     pub enabled: bool,
     pub share_game: bool,
+    pub share_library: bool,
     pub invisible: bool,
     pub hidden_game_ids: Vec<i64>,
 }
@@ -23,6 +24,7 @@ impl Default for Config {
             public_key: project["publicKey"].as_str().unwrap_or_default().into(),
             enabled: false,
             share_game: false,
+            share_library: false,
             invisible: false,
             hidden_game_ids: Vec::new(),
         }
@@ -63,6 +65,8 @@ pub struct Status {
     pub connected: bool,
     pub last_error: Option<String>,
     pub generation: u64,
+    pub library_synced_at: Option<i64>,
+    pub library_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -273,6 +277,13 @@ mod tests {
         assert!(validate_login("alice", &"密".repeat(25)).is_err());
         assert!(validate_login("alice", &"密".repeat(12)).is_err());
         assert!(validate_login("alice", "english password").is_err());
+    }
+
+    #[test]
+    fn shared_library_is_explicitly_opt_in_even_for_old_saved_preferences() {
+        let old: Config = serde_json::from_str(r#"{"enabled":true,"shareGame":true}"#).unwrap();
+        let value = serde_json::to_value(old).unwrap();
+        assert_eq!(value["shareLibrary"], false);
     }
 
     #[test]

@@ -1,17 +1,17 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
-pub mod commands;
 mod bangumi_sync;
-mod friends;
 pub mod birthdays;
-pub mod instance;
+pub mod commands;
 pub mod extract;
-pub mod launcher;
-pub mod metadata;
-pub mod scanner;
-mod rating;
-pub mod logging;
 pub mod file_ops;
+mod friends;
+pub mod instance;
+pub mod launcher;
+pub mod logging;
+pub mod metadata;
+mod rating;
+pub mod scanner;
 
 use commands::DB_URL;
 
@@ -56,7 +56,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 use tauri::Emitter;
                 commands::window::show_main_window(app);
                 let _ = app.emit("quit-requested", ());
-            },
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -94,7 +94,8 @@ pub fn run() {
         .setup(|app| {
             commands::window::remember_app(app.handle().clone());
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             setup_tray(app.handle())?;
             // From now on a re-launch wakes this window instead of opening a
             // second manager.
@@ -128,6 +129,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             friends::friends_status,
             friends::friends_library_games,
+            friends::friends_profile,
+            friends::friends_sync_library,
             friends::friends_configure,
             friends::friends_authenticate,
             friends::friends_logout,

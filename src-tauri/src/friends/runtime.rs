@@ -22,10 +22,13 @@ pub struct Inner {
     pub error: Option<String>,
     pub seq: i64,
     pub generation: u64,
+    pub library_synced_at: Option<i64>,
+    pub library_error: Option<String>,
 }
 #[derive(Default)]
 pub struct FriendsState {
     pub inner: Mutex<Inner>,
+    pub(super) library: Mutex<super::library::Cache>,
     initialized: OnceCell<()>,
     pub stopping: AtomicBool,
 }
@@ -37,6 +40,8 @@ impl Inner {
             connected: self.connected,
             last_error: self.error.clone(),
             generation: self.generation,
+            library_synced_at: self.library_synced_at,
+            library_error: self.library_error.clone(),
         }
     }
     pub fn failed(&mut self, error: &CmdError) {
@@ -128,6 +133,10 @@ pub async fn ensure(app: &AppHandle) {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 publisher(handle).await;
+            });
+            let library_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                super::library::publisher(library_handle).await;
             });
         })
         .await;
@@ -301,6 +310,15 @@ async fn publisher(app: AppHandle) {
 async fn leave_remote(config: Config, tokens: Option<Tokens>) {
     if let Some(tokens) = tokens {
         if let Ok(api) = Api::new(&config) {
+            if !config.share_library {
+                let _ = api
+                    .rpc(
+                        "koipage_library_sync",
+                        &tokens.access_token,
+                        json!({"p_enabled":false,"p_games":[],"p_keys":[]}),
+                    )
+                    .await;
+            }
             let _ = api
                 .rpc("koipage_leave", &tokens.access_token, json!({}))
                 .await;
@@ -321,6 +339,9 @@ where
         let mut inner = inner.lock().await;
         inner.config.enabled = false;
         inner.config.share_game = false;
+        inner.config.share_library = false;
+        inner.library_synced_at = None;
+        inner.library_error = None;
         inner.account = None;
         inner.connected = false;
         inner.generation += 1;
@@ -371,6 +392,62 @@ mod tests {
             refresh_token: "test-only-refresh".into(),
             expires_at: now() + 3600,
         }
+    }
+    #[tokio::test]
+    async fn restrictive_leave_retracts_collection_before_going_offline() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            let mut paths = Vec::new();
+            while Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let mut bytes = [0; 4096];
+                let n = stream.read(&mut bytes).unwrap();
+                let line = String::from_utf8_lossy(&bytes[..n])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let leaving = line.contains("koipage_leave");
+                paths.push(
+                    line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                let body = r#"{"ok":true}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n{body}", body.len()).unwrap();
+                if leaving {
+                    break;
+                }
+            }
+            paths
+        });
+        let config = Config {
+            server_url: format!("http://{address}"),
+            public_key: "sb_publishable_test".into(),
+            ..Config::default()
+        };
+        leave_remote(config, Some(tokens())).await;
+        assert_eq!(
+            worker.join().unwrap(),
+            vec![
+                "/rest/v1/rpc/koipage_library_sync",
+                "/rest/v1/rpc/koipage_leave"
+            ]
+        );
     }
     #[tokio::test]
     async fn native_resume_retries_transient_failure_without_any_frontend_timer() {
@@ -468,6 +545,7 @@ mod tests {
             config: Config {
                 enabled: true,
                 share_game: true,
+                share_library: true,
                 ..Config::default()
             },
             tokens: Some(tokens()),
@@ -489,7 +567,7 @@ mod tests {
         tear_down_for_restore(
             &inner,
             move |config| async move {
-                assert!(!config.enabled && !config.share_game);
+                assert!(!config.enabled && !config.share_game && !config.share_library);
                 s.store(true, Ordering::SeqCst);
                 Ok(())
             },

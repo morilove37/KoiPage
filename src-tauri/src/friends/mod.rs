@@ -1,5 +1,6 @@
 mod client;
 mod credentials;
+mod library;
 pub mod model;
 mod runtime;
 use crate::commands::error::{CmdError, CmdResult};
@@ -33,6 +34,8 @@ pub struct AuthInput {
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
     share_game: bool,
+    #[serde(default)]
+    share_library: bool,
     invisible: bool,
     hidden_game_ids: Vec<i64>,
 }
@@ -70,6 +73,8 @@ pub async fn friends_configure(app: AppHandle, input: ProjectInput) -> CmdResult
     let mut inner = state.inner.lock().await;
     if inner.config.server_url != address || inner.config.public_key != input.public_key.trim() {
         if inner.tokens.is_some() {
+            // Keep the old session/configuration if collection retraction fails.
+            library::retract_before_forgetting(&mut inner).await?;
             let _ = runtime::rpc(&mut inner, "koipage_leave", json!({})).await;
         }
         credentials::delete(&inner.config.server_url)?;
@@ -84,6 +89,8 @@ pub async fn friends_configure(app: AppHandle, input: ProjectInput) -> CmdResult
         inner.account = None;
         inner.connected = false;
         inner.error = None;
+        inner.library_synced_at = None;
+        inner.library_error = None;
         inner.generation += 1;
     }
     Ok(inner.status())
@@ -150,6 +157,7 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
     let mut config = inner.config.clone();
     config.enabled = true;
     config.share_game = false;
+    config.share_library = false;
     config.invisible = false;
     runtime::save(&app, &config).await?;
     inner.config = config;
@@ -159,32 +167,57 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
     inner.generation += 1;
     inner.error = None;
     inner.connected = true;
+    inner.library_synced_at = None;
+    inner.library_error = None;
     state
         .stopping
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    Ok(inner.status())
+    drop(inner);
+    // A fresh login starts private even if this account shared a previous snapshot.
+    let _ = library::sync(&app, true).await;
+    Ok(state.inner.lock().await.status())
 }
 #[tauri::command]
 pub async fn friends_logout(app: AppHandle) -> CmdResult<Status> {
     runtime::ensure(&app).await;
     let state = app.state::<FriendsState>();
-    let (config, tokens, status) = {
+    let (config, tokens, mut status) = {
         let mut inner = state.inner.lock().await;
         let mut next = inner.config.clone();
         next.enabled = false;
         next.share_game = false;
+        next.share_library = false;
         runtime::save(&app, &next).await?;
         let tokens = inner.tokens.take();
         inner.config = next;
         inner.account = None;
         inner.connected = false;
         inner.error = None;
+        inner.library_synced_at = None;
+        inner.library_error = None;
         inner.generation += 1;
         (inner.config.clone(), tokens, inner.status())
     };
     let deletion = credentials::delete(&config.server_url);
     if let Some(tokens) = tokens {
         if let Ok(api) = client::Api::new(&config) {
+            if let Err(error) = api
+                .rpc(
+                    "koipage_library_sync",
+                    &tokens.access_token,
+                    json!({"p_enabled":false,"p_games":[],"p_keys":[]}),
+                )
+                .await
+            {
+                status.library_error = Some(format!(
+                    "已退出登录，但云端游戏库尚未撤回；请恢复连接并重新登录后关闭分享。{}",
+                    error.0
+                ));
+                let mut inner = state.inner.lock().await;
+                if inner.generation == status.generation {
+                    inner.library_error = status.library_error.clone();
+                }
+            }
             let _ = api
                 .rpc("koipage_leave", &tokens.access_token, json!({}))
                 .await;
@@ -211,6 +244,7 @@ pub async fn friends_preferences(app: AppHandle, input: Preferences) -> CmdResul
     let mut inner = state.inner.lock().await;
     let mut next = inner.config.clone();
     next.share_game = input.share_game;
+    next.share_library = input.share_library;
     next.invisible = input.invisible;
     next.hidden_game_ids = input.hidden_game_ids;
     next.hidden_game_ids.sort_unstable();
@@ -218,7 +252,63 @@ pub async fn friends_preferences(app: AppHandle, input: Preferences) -> CmdResul
     runtime::save(&app, &next).await?;
     inner.config = next;
     inner.generation += 1;
-    Ok(inner.status())
+    drop(inner);
+    // Persist restrictive choices first. Failed remote updates stay visible and
+    // the native worker retries even when the friends page is not open.
+    let _ = library::sync(&app, true).await;
+    Ok(state.inner.lock().await.status())
+}
+
+#[tauri::command]
+pub async fn friends_sync_library(app: AppHandle) -> CmdResult<Status> {
+    runtime::ensure(&app).await;
+    let _ = library::sync(&app, true).await;
+    Ok(app.state::<FriendsState>().inner.lock().await.status())
+}
+
+#[tauri::command]
+pub async fn friends_profile(
+    app: AppHandle,
+    target: String,
+    query: Option<String>,
+    status: Option<String>,
+    offset: Option<i32>,
+) -> CmdResult<Value> {
+    let query = query.unwrap_or_default();
+    let offset = offset.unwrap_or(0);
+    if target.len() != 36
+        || !target.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+        || query.chars().count() > 200
+        || !(0..=10000).contains(&offset)
+        || status.as_ref().is_some_and(|value| {
+            ![
+                "unplayed",
+                "wishlist",
+                "playing",
+                "completed",
+                "on_hold",
+                "dropped",
+            ]
+            .contains(&value.as_str())
+        })
+    {
+        return Err(CmdError("FRIENDS_INPUT: 好友或筛选条件无效".into()));
+    }
+    runtime::ensure(&app).await;
+    let state = app.state::<FriendsState>();
+    let mut inner = state.inner.lock().await;
+    runtime::rpc(
+        &mut inner,
+        "koipage_friend_profile",
+        json!({"p_target":target,"p_query":query,"p_status":status,"p_offset":offset}),
+    )
+    .await
 }
 #[tauri::command]
 pub async fn friends_snapshot(app: AppHandle, revision: Option<String>) -> CmdResult<Value> {

@@ -8,7 +8,7 @@ const full={unchanged:false,revision:'r1',serverNow:1000,me:user,friends:[{...us
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 
 test('privacy is opt-in and hidden ids are positive, unique integers',()=>{
-  assert.deepEqual(normalizePrivacy({shareGame:'true',invisible:1,hiddenGameIds:[2,2,-1,3.5,'7']}),{shareGame:false,invisible:false,hiddenGameIds:[2]});
+  assert.deepEqual(normalizePrivacy({shareGame:'true',invisible:1,hiddenGameIds:[2,2,-1,3.5,'7']}),{shareGame:false,shareLibrary:false,invisible:false,hiddenGameIds:[2]});
 });
 test('conditional snapshots keep data only when a full snapshot already exists',()=>{
   const first=mergeSnapshot(null,full,10000);
