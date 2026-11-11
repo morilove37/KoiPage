@@ -9,8 +9,8 @@ import {formatRating} from '@/lib/rating';
 import type {GameStatus} from '@/types/game';
 import {errorMessage} from '@/features/io/io';
 import {FriendAvatar} from './FriendAvatar';
-import {createProfileController,elapsedSeconds,groupHistory,libraryCoverSource} from './model';
-import type {HistoryGroup} from './model';
+import {createProfileController,elapsedSeconds,libraryCoverSource,loadHistoryLibrary} from './model';
+import {ProfilePlayHistory} from './ProfilePlayHistory';
 import {friendsHistory,friendsProfile,friendsReport,friendsStatus} from './api';
 import type {ReportReason} from './api';
 import {ReportDialog} from './ReportDialog';
@@ -20,11 +20,6 @@ import type {FriendHistory,FriendProfileView,SharedLibraryGame} from './types';
 function syncTime(value:number|null){
   if(value===null||!Number.isFinite(value))return '尚未同步';
   return new Date(value*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-}
-
-function historyTime(value:string){
-  const date=new Date(value);
-  return Number.isNaN(date.getTime())?'时间未知':date.toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 }
 
 function profileError(error:unknown){
@@ -74,6 +69,9 @@ export default function FriendProfilePage(){
   const [failure,setFailure]=useState<{key:string;message:string}>({key:'',message:''});
   const [pending,setPending]=useState<{key:string;loading:boolean}>({key:'',loading:false});
   const [history,setHistory]=useState<{key:string;value:FriendHistory|null;error:string}>({key:'',value:null,error:''});
+  const [historyAttempt,setHistoryAttempt]=useState(0);
+  const [historyLibrary,setHistoryLibrary]=useState<{key:string;games:SharedLibraryGame[]}>({key:'',games:[]});
+  const [historyAccess,setHistoryAccess]=useState<{key:string;allowed:boolean;self:boolean}>({key:'',allowed:false,self:false});
   const [reportTarget,setReportTarget]=useState<ReportTarget|null>(null);
   const [reporting,setReporting]=useState(false);
   const [notice,setNotice]=useState(''),[reportError,setReportError]=useState('');
@@ -97,7 +95,13 @@ export default function FriendProfilePage(){
     let alive=true;
     const next=createProfileController({
       load:friendsProfile,
-      onChange:value=>{if(alive){setResult({key:requestKey,value});if(value)setFailure({key:requestKey,message:''});}},
+      onChange:value=>{if(alive){
+        setResult({key:requestKey,value});
+        if(value){
+          setFailure({key:requestKey,message:''});
+          setHistoryAccess({key:identity,allowed:value.libraryShared&&(value.self||value.viewerLibraryShared),self:value.self});
+        }
+      }},
       onLoading:value=>{if(alive)setPending({key:requestKey,loading:value});},
       onError:cause=>{if(alive){setFailure({key:requestKey,message:profileError(cause)});const state=useFriendsStore.getState(),currentEpoch=state.epoch;void friendsStatus().then(value=>{if(alive)state.apply(value,currentEpoch);}).catch(()=>{});}},
     });
@@ -111,23 +115,29 @@ export default function FriendProfilePage(){
 
   useEffect(()=>{
     if(!account||!target)return;
-    let alive=true;
-    const load=()=>{void friendsHistory({target,days:7}).then(value=>{if(alive)setHistory({key:identity,value,error:''});}).catch(cause=>{if(alive)setHistory({key:identity,value:null,error:profileError(cause)});});};
+    let alive=true,pending=false;
+    const load=()=>{
+      if(pending)return;
+      pending=true;
+      const covers=loadHistoryLibrary(target,friendsProfile,()=>alive)
+        .then(games=>{if(alive)setHistoryLibrary({key:identity,games});})
+        .catch(()=>{if(alive)setHistoryLibrary({key:identity,games:[]});});
+      const records=friendsHistory({target,days:7})
+        .then(value=>{if(alive)setHistory({key:identity,value,error:''});})
+        .catch(cause=>{if(alive)setHistory({key:identity,value:null,error:profileError(cause)});});
+      void Promise.all([covers,records]).finally(()=>{pending=false;});
+    };
     load();
     const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')load();},60000);
     return()=>{alive=false;window.clearInterval(timer);};
-  },[identity,account?.id,target]);
+  },[identity,account?.id,target,historyAttempt]);
 
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),1000);return()=>window.clearInterval(timer);},[]);
   useEffect(()=>{if(view&&view.libraryShared&&filter.offset>0&&filter.offset>=view.total)setFilter(current=>({...current,offset:0}));},[view?.total,view?.libraryShared,filter.offset]);
 
-  const refresh=()=>void controller.current?.refresh({target,...filter});
+  const refresh=()=>{void controller.current?.refresh({target,...filter});setHistoryAttempt(value=>value+1);};
   const playing=view?.profile.online?view.profile.game:null;
   const pageSize=view?.pageSize??24;
-  const coverForGroup=(group:HistoryGroup)=>{
-    const match=view?.games.find(game=>(group.vndbId!==null&&game.vndbId===group.vndbId)||(group.bangumiId!==null&&game.bangumiId===group.bangumiId)||game.title===group.title);
-    return libraryCoverSource(match?.coverUrl);
-  };
   const submitReport=(input:{reason:ReportReason;detail:string})=>{
     if(!reportTarget||reporting)return;
     const source=reportTarget;setReporting(true);setReportError('');
@@ -162,41 +172,17 @@ export default function FriendProfilePage(){
         <Card className="p-4"><p className="text-xs text-muted-foreground">已通关</p><p className="mt-2 text-xl font-semibold tabular-nums">{view.stats.completed}<span className="ml-1 text-xs font-normal text-muted-foreground">部</span></p></Card>
         <Card className="p-4"><p className="text-xs text-muted-foreground">累计游玩</p><p className="mt-2 break-words text-sm font-semibold tabular-nums sm:text-lg">{formatPlayTime(view.stats.playTimeSeconds)}</p></Card>
       </div>:null}
-      <section aria-labelledby="friend-history-heading">
-        <h2 id="friend-history-heading" className="sr-only">最近游玩记录</h2>
-        <details open className="rounded-lg border border-border bg-card">
-          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold marker:text-muted-foreground">最近游玩记录 <span className="ml-2 text-xs font-normal text-muted-foreground">最近 7 天 · 点击折叠</span></summary>
-          <div className="space-y-3 px-4 pb-4">
-            {historyError?<p role="status" className="text-sm text-muted-foreground">{historyError}</p>:historyValue===null?<p role="status" className="text-sm text-muted-foreground">正在读取游玩记录…</p>:!historyValue.enabled?<p className="rounded-lg border border-dashed border-border p-6 text-center text-sm leading-relaxed text-muted-foreground">{isSelf?'你尚未开启游玩记录展示。可在好友页的「游玩状态与隐私」中开启「向好友分享最近游玩记录」。':'对方未开启游玩记录展示。'}</p>:!historyValue.sessions.length?<p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">最近 7 天没有游玩记录。</p>:<div className="grid gap-3 md:grid-cols-2">{groupHistory(historyValue.sessions).map(group=>{
-              const cover=coverForGroup(group);
-              return <Card key={group.sessions[0].key} className="flex min-w-0 gap-3 p-4">
-                <div className="relative flex h-24 w-16 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
-                  {cover?<img src={cover} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover"/>:<span aria-hidden="true" className="px-2 text-center text-[10px] leading-relaxed text-muted-foreground">暂无封面</span>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="break-words text-sm font-semibold leading-relaxed">{group.title}</h3>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{group.sessions.length} 次游玩</p>
-                  <ol className="relative mt-2 space-y-2.5 border-l border-border pl-3.5">
-                    {group.sessions.map(session=><li key={session.key} className="relative">
-                      <span aria-hidden="true" className="absolute -left-[19px] top-1.5 size-2 rounded-full bg-primary ring-2 ring-card"/>
-                      <p className="text-xs text-foreground">{historyTime(session.startedAt)} <span className="text-muted-foreground">开始</span></p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">{session.endedAt?`结束 ${historyTime(session.endedAt)}`:'尚未结束'} · 时长 <span className="tabular-nums text-foreground">{formatPlayTime(session.durationSeconds)}</span></p>
-                    </li>)}
-                  </ol>
-                </div>
-              </Card>;
-            })}</div>}
-          </div>
-        </details>
-      </section>
     </>:null}
+    {account&&!error&&historyAccess.key===identity?<ProfilePlayHistory key={identity} history={historyValue} error={historyError} isSelf={mine||historyAccess.self}
+      games={historyLibrary.key===identity&&historyAccess.allowed?historyLibrary.games:[]}
+      onRetry={()=>setHistoryAttempt(value=>value+1)}/>:null}
     {account&&!error?<section key="library" aria-labelledby="friend-library-heading" className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-2"><h2 id="friend-library-heading" className="text-lg font-semibold">公开游戏库</h2>{view&&view.libraryShared&&!gated?<p className="text-xs text-muted-foreground">最后同步：{syncTime(view.syncedAt)}</p>:null}</div>
         <div className={view&&(!view.libraryShared||gated)?'hidden':'space-y-4'}>
           <Input aria-label="搜索好友的游戏库" placeholder="搜索作品名称或原名" maxLength={100} value={search} onChange={event=>setSearch(event.target.value)}/>
           <div className="flex flex-wrap gap-2" role="group" aria-label="按游玩状态筛选">{[null,...GAME_STATUSES].map(item=><Button key={item??'all'} size="sm" variant={filter.status===item?'default':'outline'} aria-pressed={filter.status===item} onClick={()=>setFilter(current=>({...current,status:item,offset:0}))}>{item===null?'全部':GAME_STATUS_LABELS[item]}</Button>)}</div>
         </div>
-        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/settings" className="text-sm text-primary hover:underline">前往设置开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「游玩状态与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
+        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/friends" className="text-sm text-primary hover:underline">前往好友页开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「游玩状态与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
           <p className="text-xs text-muted-foreground" role="status">{filter.query||filter.status?'符合条件的作品':'公开作品'}共 {view.total} 部{loading?' · 正在更新…':''}</p>
           {view.games.length?<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{view.games.map(game=><LibraryCard key={game.key} game={game} onReport={isSelf?undefined:()=>setReportTarget({id:view.profile.id,username:view.profile.username,nickname:view.profile.nickname,gameKey:game.key,defaultReason:'cover'})}/>)}</div>:<EmptyState title={filter.query||filter.status?'没有找到符合条件的作品':'公开游戏库暂时为空'} description={filter.query||filter.status?'试试其他关键词或游玩状态。':'对方同步收藏后，作品会显示在这里。'}/>}
           {view.total>pageSize?<nav aria-label="好友游戏库分页" className="flex flex-wrap items-center justify-center gap-4 pt-2"><Button size="sm" variant="outline" disabled={loading||filter.offset===0} onClick={()=>setFilter(current=>({...current,offset:Math.max(0,current.offset-pageSize)}))}>上一页</Button><span className="text-xs tabular-nums text-muted-foreground">第 {Math.floor(filter.offset/pageSize)+1} / {Math.ceil(view.total/pageSize)} 页</span><Button size="sm" variant="outline" disabled={loading||filter.offset+pageSize>=view.total} onClick={()=>setFilter(current=>({...current,offset:current.offset+pageSize}))}>下一页</Button></nav>:null}

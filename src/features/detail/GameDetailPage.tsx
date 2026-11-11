@@ -773,7 +773,7 @@ export default function GameDetailPage() {
             </div>
             <div className="detail-summary-information min-w-0">
             <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
-            <p data-detail-cover-verification className="mt-2 text-[11px] leading-relaxed text-muted-foreground">开启公开游戏库后，自定义封面会自动提交服务器审核；审核通过前，该作品不会公开。更换封面或裁剪后需重新审核，可在「设置 → 公开游戏库」查看状态。</p>
+            <p data-detail-cover-verification className="mt-2 text-[11px] leading-relaxed text-muted-foreground">当前版本未启用云端封面审核，使用自定义封面的作品暂不展示给好友。恢复来源封面后，可在好友页的「游玩状态与隐私」中管理分享。</p>
             <div data-detail-nsfw className="mt-3 rounded-md border border-border bg-muted/30 px-2 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">

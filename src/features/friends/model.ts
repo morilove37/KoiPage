@@ -1,4 +1,4 @@
-import type {CurrentGame,Friend,HistorySession,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters} from './types';
+import type {CurrentGame,Friend,HistorySession,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters,SharedLibraryGame} from './types';
 
 export function normalizePrivacy(value:unknown):Privacy{
   const v=value&&typeof value==='object'?value as Record<string,unknown>:{};
@@ -66,4 +66,25 @@ export function createProfileController(deps:{load:(input:ProfileFilters)=>Promi
 /** A friend's cover must not make requests to arbitrary servers or open local paths. */
 export function libraryCoverSource(value:unknown):string|null{
   return typeof value==='string'&&value.length<=12288&&/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)?value:null;
+}
+
+/** Independent of the visible library's search, filters and current page. */
+export async function loadHistoryLibrary(target:string,load:(input:ProfileFilters)=>Promise<FriendProfile>,active:()=>boolean=()=>true):Promise<SharedLibraryGame[]>{
+  const games=new Map<string,SharedLibraryGame>();
+  let offset=0;
+  while(active()){
+    const page=await load({target,query:'',status:null,offset});
+    if(!active()||!page.libraryShared||(!page.self&&!page.viewerLibraryShared))return [];
+    for(const game of page.games)games.set(game.key,game);
+    if(!page.games.length||page.pageSize<=0||offset+page.pageSize>=page.total)break;
+    offset+=page.pageSize;
+  }
+  return active()?[...games.values()]:[];
+}
+
+/** Prefer stable provider IDs over titles, which may collide or be renamed. */
+export function historyCoverSource(group:HistoryGroup,games:readonly SharedLibraryGame[]):string|null{
+  const match=games.find(game=>(group.vndbId!==null&&game.vndbId===group.vndbId)||(group.bangumiId!==null&&game.bangumiId===group.bangumiId))
+    ??games.find(game=>game.title===group.title&&!(group.vndbId&&game.vndbId&&group.vndbId!==game.vndbId)&&!(group.bangumiId&&game.bangumiId&&group.bangumiId!==game.bangumiId));
+  return libraryCoverSource(match?.coverUrl);
 }

@@ -10,7 +10,6 @@ const SECTIONS = [
   { id: 'settings-bangumi-sync', label: 'Bangumi 同步' },
   { id: 'settings-birthdays', label: '角色生日' },
   { id: 'settings-data', label: '数据管理' },
-  { id: 'settings-public-library', label: '公开游戏库' },
   { id: 'settings-paths', label: '游戏路径' },
   { id: 'settings-logs', label: '日志' },
   { id: 'settings-announcements', label: '公告' },

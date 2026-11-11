@@ -20,7 +20,6 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
 import {
@@ -29,11 +28,9 @@ import {
   scanRootsList,
   scanRootUpdate,
   settingsGet,
-  settingsGetAll,
   settingsSet,
   syncAssetScope,
 } from '@/lib/db';
-import { COVER_SETTING_PREFIX, parseCoverPreferences } from '@/features/covers/model';
 import type { ScanRoot } from '@/types/game';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
@@ -84,10 +81,9 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select } from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ui/dialog';
-import { CoverImage } from '@/components/ui/cover-image';
-import { friendsCoverStatus, friendsDeleteAccount, friendsResumeDeletion, friendsStatus } from '@/features/friends/api';
+import { friendsDeleteAccount, friendsResumeDeletion, friendsStatus } from '@/features/friends/api';
 import { useFriendsStore } from '@/features/friends/store';
-import type { Account, CoverStatus } from '@/features/friends/types';
+import type { Account } from '@/features/friends/types';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
@@ -1149,66 +1145,6 @@ function MetadataSection() {
 }
 
 // ---------------------------------------------------------------------------
-// 公开游戏库 — custom-cover verification (design item 3)
-// ---------------------------------------------------------------------------
-
-/** Cloud cover review is disabled; custom-cover works remain private. */
-function PublicLibrarySection() {
-  const [covers, setCovers] = useState<CoverStatus[] | null>(null);
-  const [coverPaths, setCoverPaths] = useState<Record<number, string | null>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true); setError(null);
-    void Promise.all([friendsCoverStatus(), settingsGetAll()])
-      .then(([list, settings]) => {
-        if (!alive) return;
-        setCovers(list);
-        const paths: Record<number, string | null> = {};
-        for (const setting of settings) {
-          if (!setting.key.startsWith(COVER_SETTING_PREFIX)) continue;
-          const gameId = Number(setting.key.slice(COVER_SETTING_PREFIX.length));
-          if (Number.isInteger(gameId)) paths[gameId] = parseCoverPreferences(setting.value).customPath;
-        }
-        setCoverPaths(paths);
-      })
-      .catch(cause => { if (alive) setError(errorMessage(cause)); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [attempt]);
-  const custom = (covers ?? []).filter(cover => cover.customCover);
-  const labels: Record<CoverStatus['reviewStatus'], string> = {
-    disabled: '云端封面审核未启用，该作品暂不公开',
-    offline: '暂未取得公开状态，该作品暂不公开',
-    unavailable: '暂时无法读取公开状态，该作品暂不公开',
-    notSubmitted: '未提交封面，该作品暂不公开',
-    pending: '封面待审核，该作品暂不公开',
-    approved: '当前版本未启用云端封面审核，该作品暂不公开',
-    rejected: '封面未通过审核，该作品暂不公开',
-  };
-  return <Section id="settings-public-library" title="公开游戏库" description="当前版本未启用云端封面审核。使用自定义封面的作品暂不展示给好友。">
-    <p className="text-sm leading-relaxed text-muted-foreground">来源封面可随公开游戏库分享；NSFW 或分级未知的来源封面会自动打码。使用自定义封面的作品暂不公开，恢复来源封面后可按分享设置同步。</p>
-    <div className="mt-3"><Button disabled={loading} onClick={() => setAttempt(value => value + 1)}>{loading ? '正在读取封面状态…' : '刷新封面状态'}</Button></div>
-    {error ? <Status tone="error">无法读取封面状态：{error}</Status> : null}
-    {!loading && !error && custom.length === 0 ? <Status tone="info">没有使用自定义封面的作品。</Status> : null}
-    {custom.length > 0 ? <ul className="mt-3 max-h-96 space-y-2 overflow-y-auto">
-      {custom.map(cover => <li key={cover.gameId} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2">
-        <div className="h-16 w-12 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={cover.gameId} path={coverPaths[cover.gameId] ?? null} alt={cover.title} className="h-full w-full object-cover" fallbackText="" /></div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{cover.title}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{labels[cover.reviewStatus]}</p>
-          {cover.nsfw ? <p className="mt-1 text-xs text-muted-foreground">NSFW 或分级未知；恢复来源封面并公开时会自动打码。</p> : null}
-        </div>
-        <Link to={`/library/${cover.gameId}`} className="text-xs text-primary hover:underline">查看作品</Link>
-      </li>)}
-    </ul> : null}
-    <p className="mt-3 text-xs leading-relaxed text-muted-foreground">本机封面偏好无法授予公开权限。私人游戏库仍可正常使用自定义封面、打码和裁剪设置。</p>
-  </Section>;
-}
-
-// ---------------------------------------------------------------------------
 // 账号注销 — irreversible account deletion (design item 15)
 // ---------------------------------------------------------------------------
 
@@ -1365,7 +1301,6 @@ export default function SettingsPage() {
           <BirthdayReminderSettings />
         </Section>
         <DataSection />
-        <PublicLibrarySection />
         <Section id="settings-paths" title="游戏路径" description="检查离线或缺失的游戏，并在搬盘后批量修复路径。">
           <PathRepairPanel />
         </Section>

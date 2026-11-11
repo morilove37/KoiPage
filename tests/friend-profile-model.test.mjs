@@ -7,6 +7,34 @@ const first={profile,serverNow:1000,libraryShared:true,syncedAt:990,total:1,game
 const input={target:'friend-a',query:'',status:null,offset:0};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 
+test('history covers include later library pages without inheriting search or status filters',async()=>{
+  const cover='data:image/jpeg;base64,/9j/2Q==';
+  const calls=[];
+  const games=await model.loadHistoryLibrary('friend-a',async input=>{
+    calls.push(input);
+    return {...first,self:false,viewerLibraryShared:true,total:2,pageSize:1,games:[input.offset===0
+      ?{key:'other',title:'星空',vndbId:'v2',bangumiId:null,coverUrl:null}
+      :{key:'later',title:'已改名',vndbId:'v1',bangumiId:null,coverUrl:cover}]};
+  });
+  assert.deepEqual(calls,[{...input,offset:0},{...input,offset:1}]);
+  assert.equal(model.historyCoverSource({title:'星空',vndbId:'v1',bangumiId:null,sessions:[]},games),cover);
+  assert.equal(model.historyCoverSource({title:'星空',vndbId:'v3',bangumiId:null,sessions:[]},games),null);
+});
+
+test('revoking library access during history cover pagination discards earlier covers',async()=>{
+  const games=await model.loadHistoryLibrary('friend-a',async ({offset})=>({...first,
+    self:false,viewerLibraryShared:offset===0,total:2,pageSize:1,games:[{key:String(offset)}],
+  }));
+  assert.deepEqual(games,[]);
+});
+
+test('leaving a profile while its cover request is pending prevents further pages and stale covers',async()=>{
+  const pending=deferred();let active=true,calls=0;
+  const request=model.loadHistoryLibrary('friend-a',()=>{calls++;return pending.promise;},()=>active);
+  active=false;pending.resolve({...first,self:true,total:100,pageSize:1});
+  assert.deepEqual(await request,[]);assert.equal(calls,1);
+});
+
 test('sharing the library requires a separate explicit boolean opt-in',()=>{
   assert.equal(model.normalizePrivacy({shareGame:true}).shareLibrary,false);
   assert.equal(model.normalizePrivacy({shareLibrary:'true'}).shareLibrary,false);
