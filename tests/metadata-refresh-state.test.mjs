@@ -25,3 +25,26 @@ test('outcome details are not dropped by a stale response', () => {
   const withDetails = { ...state, outcomes: [{ gameId: 1, title: '作品', status: 'needsReview', message: '多个候选' }] };
   assert.equal(acceptRefreshState(withDetails, state), withDetails);
 });
+
+test('manual resolution reduces pending counters and stays resolved after a late pre-resolution snapshot', () => {
+  const pending = { ...state, revision: 7, phase: 'completed', outcomes: [
+    { gameId: 1, title: '作品', status: 'needsReview', message: '需匹配 Bangumi' },
+  ] };
+  const resolved = { ...pending, revision: 8, needsReview: 0, outcomes: [
+    { gameId: 1, title: '作品', status: 'updated', message: '已手动匹配' },
+  ] };
+  assert.equal(acceptRefreshState(pending, resolved), resolved);
+  assert.equal(acceptRefreshState(resolved, pending), resolved);
+  assert.equal(acceptRefreshState(null, resolved), resolved, 'page remount uses backend resolution');
+});
+
+test('a later manual match clears failed items without changing processed progress', () => {
+  const pending = { ...state, revision: 12, failed: 1, outcomes: [
+    { gameId: 2, title: '失败作品', status: 'failed', message: '网络错误' },
+  ] };
+  const resolved = { ...pending, revision: 13, failed: 0, updated: 2, outcomes: [
+    { gameId: 2, title: '失败作品', status: 'updated', message: '已手动匹配' },
+  ] };
+  assert.equal(acceptRefreshState(pending, resolved), resolved);
+  assert.equal(acceptRefreshState(resolved, pending), resolved);
+});

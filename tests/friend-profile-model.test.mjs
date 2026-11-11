@@ -11,6 +11,20 @@ test('sharing the library requires a separate explicit boolean opt-in',()=>{
   assert.equal(model.normalizePrivacy({shareGame:true}).shareLibrary,false);
   assert.equal(model.normalizePrivacy({shareLibrary:'true'}).shareLibrary,false);
   assert.equal(model.normalizePrivacy({shareLibrary:true}).shareLibrary,true);
+  assert.equal(model.normalizePrivacy({shareHistory:'true'}).shareHistory,false);
+  assert.equal(model.normalizePrivacy({shareHistory:true}).shareHistory,true);
+});
+test('consecutive history sessions with the same title collapse into one timeline card',()=>{
+  const sessions=[
+    {key:'a',title:'星空',vndbId:'v1',bangumiId:null,startedAt:'2026-11-01T10:00:00Z',endedAt:'2026-11-01T11:00:00Z',durationSeconds:3600},
+    {key:'b',title:'星空',vndbId:'v1',bangumiId:null,startedAt:'2026-11-02T10:00:00Z',endedAt:null,durationSeconds:600},
+    {key:'c',title:'月光',vndbId:null,bangumiId:'b1',startedAt:'2026-11-03T10:00:00Z',endedAt:'2026-11-03T11:00:00Z',durationSeconds:3600},
+    {key:'d',title:'星空',vndbId:'v1',bangumiId:null,startedAt:'2026-11-04T10:00:00Z',endedAt:'2026-11-04T11:00:00Z',durationSeconds:1800},
+  ];
+  const groups=model.groupHistory(sessions);
+  assert.deepEqual(groups.map(group=>[group.title,group.sessions.length]),[['星空',2],['月光',1],['星空',1]]);
+  assert.equal(groups[0].vndbId,'v1');
+  assert.deepEqual(model.groupHistory([]),[]);
 });
 
 test('profile request completed after account/route reset cannot repopulate private data',async()=>{

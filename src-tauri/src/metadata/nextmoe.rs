@@ -140,6 +140,9 @@ pub struct Work {
     pub latin: Option<String>,
     pub release_date: Option<String>,
     pub cover: Option<Image>,
+    /// Fact rating and display limit are independent axes in the official API.
+    pub content_rating: Option<String>,
+    pub content_limit: Option<String>,
     #[serde(default)]
     pub titles: Vec<Title>,
     #[serde(default)]
@@ -381,6 +384,17 @@ pub async fn search(query: &str, limit: u32, api_key: Option<&str>) -> super::Cm
 /// Shared by the detail endpoint and the `refs=` batch lane so both paths apply
 /// identical title/rating/tag policy.
 fn detail_from_work(work: Work) -> MetadataDetail {
+    // https://developer.nextmoe.dev/docs/concepts#内容分级与-nsfw-闸
+    // Only an explicit safe answer on both axes can relax the public mask.
+    let sexual_tags = work.tags.clone().map(TagsField::into_vec).unwrap_or_default().iter().any(|tag| tag.is_sexual);
+    let nsfw = if sexual_tags || work.content_limit.as_deref() == Some("nsfw")
+        || matches!(work.content_rating.as_deref(), Some("r18" | "sensitive")) {
+        Some(true)
+    } else if work.content_rating.as_deref() == Some("all_ages") && work.content_limit.as_deref() == Some("sfw") {
+        Some(false)
+    } else {
+        None
+    };
     let ratings = work
         .ratings
         .clone()
@@ -424,6 +438,7 @@ fn detail_from_work(work: Work) -> MetadataDetail {
         tags: super::merge::dedupe_tags(tags),
         vndb_id: None,
         bangumi_id: None,
+        nsfw,
         attribution: Some(ATTRIBUTION.to_string()),
     }
 }
@@ -521,3 +536,26 @@ pub async fn detail_by_ref(
 /// User-Agent constant is defined in the parent module; re-exported for docs.
 #[allow(dead_code)]
 pub(crate) const UA: &str = USER_AGENT;
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn nextmoe_classification_uses_rating_and_display_limit_without_assuming_missing_is_safe() {
+        for (fields, expected) in [
+            (serde_json::json!({"content_rating":"r18","content_limit":"sfw"}), Some(true)),
+            (serde_json::json!({"content_rating":"all_ages","content_limit":"nsfw"}), Some(true)),
+            (serde_json::json!({"content_rating":"sensitive","content_limit":"sfw"}), Some(true)),
+            (serde_json::json!({"content_rating":"all_ages","content_limit":"sfw"}), Some(false)),
+            (serde_json::json!({"tags":[{"is_sexual":true}]}), Some(true)),
+            (serde_json::json!({"content_rating":"all_ages"}), None),
+            (serde_json::json!({}), None),
+        ] {
+            let mut raw = fields;
+            raw["id"] = "1".into();
+            let work: Work = serde_json::from_value(raw).unwrap();
+            assert_eq!(detail_from_work(work).nsfw, expected);
+        }
+    }
+}

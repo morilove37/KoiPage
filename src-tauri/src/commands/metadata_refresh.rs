@@ -10,6 +10,7 @@ use super::{
 use crate::metadata::{MetadataDetail, Provider, TitlePreference};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
+use std::collections::HashMap;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -21,6 +22,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct RefreshState {
     phase: Phase,
     run_id: u64,
+    revision: u64,
     total: usize,
     processed: usize,
     updated: usize,
@@ -31,6 +33,8 @@ pub struct RefreshState {
     backup_path: Option<String>,
     error: Option<String>,
     outcomes: Vec<Outcome>,
+    #[serde(skip)]
+    manual_matches: HashMap<i64, bool>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +70,8 @@ struct Outcome {
     message: String,
     #[serde(skip)]
     changed: bool,
+    #[serde(skip)]
+    needs_bangumi: bool,
 }
 
 #[derive(Default)]
@@ -78,6 +84,7 @@ fn publish(app: &AppHandle, change: impl FnOnce(&mut RefreshState)) -> RefreshSt
     let job = app.state::<RefreshJob>();
     let mut state = job.state.lock().unwrap_or_else(|e| e.into_inner());
     change(&mut state);
+    state.revision += 1;
     let copy = state.clone();
     let _ = app.emit("metadata-refresh-progress", &copy);
     copy
@@ -131,6 +138,7 @@ pub async fn metadata_refresh_start(app: AppHandle, confirmed: bool) -> CmdResul
         *state = RefreshState {
             phase: Phase::BackingUp,
             run_id: state.run_id + 1,
+            revision: 1,
             total: ids.len(),
             ..Default::default()
         };
@@ -219,6 +227,7 @@ async fn run(
                     status: ResultKind::Skipped,
                     message: "作品已被删除".into(),
                     changed: false,
+                    needs_bangumi: false,
                 },
             );
             continue;
@@ -231,6 +240,7 @@ async fn run(
                 status: ResultKind::Failed,
                 message: error.0,
                 changed: false,
+                needs_bangumi: false,
             },
             Ok(None) => Outcome {
                 game_id: id,
@@ -238,6 +248,7 @@ async fn run(
                 status: ResultKind::NeedsReview,
                 message: "未找到唯一可信的作品，请在作品详情中手动匹配资料".into(),
                 changed: false,
+                needs_bangumi: enabled.contains(&Sources::Bangumi),
             },
             Ok(Some(mut detail)) => {
                 if cancelled(app) {
@@ -251,6 +262,7 @@ async fn run(
                         status: ResultKind::Failed,
                         message: error.0,
                         changed: false,
+                        needs_bangumi: false,
                     },
                     Ok((status, message)) => {
                         let needs_binding = enabled.contains(&Sources::Bangumi)
@@ -285,6 +297,7 @@ async fn run(
                                 message
                             },
                             changed,
+                            needs_bangumi: needs_binding,
                         }
                     }
                 }
@@ -299,19 +312,119 @@ async fn run(
     Ok(())
 }
 fn record(app: &AppHandle, outcome: Outcome) {
-    publish(app, |s| {
-        s.processed += 1;
-        if outcome.changed {
-            s.updated += 1;
+    publish(app, |s| s.record_outcome(outcome));
+}
+
+impl Outcome {
+    fn resolve(&mut self, has_bangumi: bool) -> bool {
+        if !matches!(
+            self.status,
+            ResultKind::NeedsReview | ResultKind::NeedsAuthorization | ResultKind::Failed
+        ) || (self.needs_bangumi && !has_bangumi)
+        {
+            return false;
         }
+        self.status = ResultKind::Updated;
+        self.message = "已手动匹配并应用资料".into();
+        self.changed = true;
+        true
+    }
+}
+
+impl RefreshState {
+    fn record_outcome(&mut self, mut outcome: Outcome) {
+        if let Some(&has_bangumi) = self.manual_matches.get(&outcome.game_id) {
+            outcome.resolve(has_bangumi);
+        }
+        self.processed += 1;
+        self.updated += usize::from(outcome.changed);
         match outcome.status {
             ResultKind::Updated => {}
-            ResultKind::NeedsReview | ResultKind::NeedsAuthorization => s.needs_review += 1,
-            ResultKind::Failed => s.failed += 1,
-            ResultKind::Skipped => s.skipped += 1,
+            ResultKind::NeedsReview | ResultKind::NeedsAuthorization => self.needs_review += 1,
+            ResultKind::Failed => self.failed += 1,
+            ResultKind::Skipped => self.skipped += 1,
         }
-        s.outcomes.push(outcome);
+        self.outcomes.push(outcome);
+    }
+
+    fn resolve_manual_match(&mut self, game_id: i64, has_bangumi: bool) {
+        // Keep evidence for a request already in flight: its late lookup result
+        // must not recreate an item the user just matched in another view.
+        self.manual_matches.insert(game_id, has_bangumi);
+        for outcome in self.outcomes.iter_mut().filter(|o| o.game_id == game_id) {
+            let old_status = outcome.status;
+            let already_changed = outcome.changed;
+            if outcome.resolve(has_bangumi) {
+                match old_status {
+                    ResultKind::NeedsReview | ResultKind::NeedsAuthorization => {
+                        self.needs_review -= 1
+                    }
+                    ResultKind::Failed => self.failed -= 1,
+                    _ => {}
+                }
+                if !already_changed {
+                    self.updated += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Only accepted external IDs that were actually persisted establish a match.
+/// Title/cover changes and an upstream ID the user did not select are unrelated.
+async fn confirmed_manual_match(
+    db: &SqlitePool,
+    game_id: i64,
+    detail: &MetadataDetail,
+    fields: &[String],
+) -> CmdResult<Option<bool>> {
+    if !fields
+        .iter()
+        .any(|f| matches!(f.as_str(), "vndb_id" | "bangumi_id"))
+    {
+        return Ok(None);
+    }
+    let Some(current) = Snapshot::read(db, game_id).await? else {
+        return Ok(None);
+    };
+    let confirmed = [
+        ("vndb_id", &detail.vndb_id),
+        ("bangumi_id", &detail.bangumi_id),
+    ]
+    .into_iter()
+    .any(|(column, id)| {
+        fields.iter().any(|f| f == column)
+            && id
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .is_some_and(|id| current.get(column) == Some(id))
     });
+    Ok(confirmed.then(|| current.get("bangumi_id").is_some()))
+}
+
+pub(crate) async fn resolve_manual_match(
+    app: &AppHandle,
+    db: &SqlitePool,
+    game_id: i64,
+    detail: &MetadataDetail,
+    fields: &[String],
+) -> CmdResult<()> {
+    // Capture the run before the database read so a new refresh cannot inherit
+    // an older run's manual resolution while the read is in flight.
+    let run_id = app
+        .state::<RefreshJob>()
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .run_id;
+    if let Some(has_bangumi) = confirmed_manual_match(db, game_id, detail, fields).await? {
+        publish(app, |state| {
+            if state.run_id == run_id {
+                state.resolve_manual_match(game_id, has_bangumi);
+            }
+        });
+    }
+    Ok(())
 }
 
 const COLUMNS: [&str; 7] = [
@@ -599,6 +712,16 @@ async fn apply(
             .execute(&mut *tx)
             .await?;
     }
+    // Preserve adult source evidence independently of the manual age flag.
+    if let Some(nsfw) = detail.nsfw {
+        sqlx::query(
+            "INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=CASE WHEN settings.value='1' THEN '1' ELSE excluded.value END",
+        )
+        .bind(format!("game_nsfw_source:{id}"))
+        .bind(if nsfw { "1" } else { "0" })
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(if changed > 0 {
         (ResultKind::Updated, "资料已按当前规则更新".into())
@@ -611,6 +734,199 @@ async fn apply(
 mod tests {
     use super::*;
     use crate::metadata::DescriptionOption;
+
+    fn unresolved(status: ResultKind) -> RefreshState {
+        RefreshState {
+            phase: Phase::Completed,
+            total: 1,
+            processed: 1,
+            needs_review: usize::from(matches!(
+                status,
+                ResultKind::NeedsReview | ResultKind::NeedsAuthorization
+            )),
+            failed: usize::from(status == ResultKind::Failed),
+            outcomes: vec![Outcome {
+                game_id: 1,
+                title: "作品".into(),
+                status,
+                message: "需要匹配".into(),
+                changed: false,
+                needs_bangumi: matches!(
+                    status,
+                    ResultKind::NeedsReview | ResultKind::NeedsAuthorization
+                ),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_identity_match_resolves_job_and_does_not_count_game_twice() {
+        let db = database().await;
+        for status in [
+            ResultKind::NeedsReview,
+            ResultKind::NeedsAuthorization,
+            ResultKind::Failed,
+        ] {
+            let mut state = unresolved(status);
+            let fields = vec!["bangumi_id".to_owned()];
+            metadata::apply_detail(&db, 1, &fresh(), &fields, None, TitlePreference::Source)
+                .await
+                .unwrap();
+            reconcile_manual(&db, &mut state, 1, &fresh(), &fields)
+                .await
+                .unwrap();
+            assert_eq!(state.outcomes[0].status, ResultKind::Updated);
+            assert_eq!(
+                (
+                    state.processed,
+                    state.updated,
+                    state.needs_review,
+                    state.failed
+                ),
+                (1, 1, 0, 0)
+            );
+            reconcile_manual(&db, &mut state, 1, &fresh(), &fields)
+                .await
+                .unwrap();
+            assert_eq!(state.updated, 1, "repeated confirmation must be idempotent");
+            assert_eq!(
+                serde_json::to_value(&state).unwrap()["outcomes"][0]["status"],
+                "updated"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_edits_or_unaccepted_bindings_leave_review_visible() {
+        let db = database().await;
+        for status in [ResultKind::NeedsReview, ResultKind::NeedsAuthorization] {
+            for fields in [
+                vec!["title".to_owned()],
+                vec!["cover".to_owned()],
+                vec!["vndb_id".to_owned()],
+            ] {
+                let mut state = unresolved(status);
+                metadata::apply_detail(&db, 1, &fresh(), &fields, None, TitlePreference::Source)
+                    .await
+                    .unwrap();
+                reconcile_manual(&db, &mut state, 1, &fresh(), &fields)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    state.outcomes[0].status, status,
+                    "missing Bangumi ID remains unresolved"
+                );
+                assert_eq!(state.needs_review, 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn confirming_an_id_without_a_successful_database_write_cannot_resolve() {
+        let db = database().await;
+        let mut state = unresolved(ResultKind::Failed);
+        reconcile_manual(&db, &mut state, 1, &fresh(), &["bangumi_id".into()])
+            .await
+            .unwrap();
+        assert_eq!(state.outcomes[0].status, ResultKind::Failed);
+    }
+
+    #[test]
+    fn resolving_partial_refresh_preserves_updated_count_and_reconciles_inflight_outcome() {
+        let mut state = unresolved(ResultKind::NeedsReview);
+        state.outcomes[0].changed = true;
+        state.updated = 1;
+        state.resolve_manual_match(1, true);
+        assert_eq!((state.updated, state.needs_review), (1, 0));
+
+        let mut running = RefreshState {
+            phase: Phase::Running,
+            ..Default::default()
+        };
+        running.resolve_manual_match(1, true);
+        running.record_outcome(
+            unresolved(ResultKind::NeedsAuthorization)
+                .outcomes
+                .remove(0),
+        );
+        assert_eq!(running.outcomes[0].status, ResultKind::Updated);
+        assert_eq!(
+            (running.processed, running.updated, running.needs_review),
+            (1, 1, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_vndb_match_can_resolve_review_when_bangumi_was_not_required() {
+        let db = database().await;
+        let mut state = unresolved(ResultKind::NeedsReview);
+        state.outcomes[0].needs_bangumi = false;
+        reconcile_manual(&db, &mut state, 1, &fresh(), &["vndb_id".into()])
+            .await
+            .unwrap();
+        assert_eq!(state.outcomes[0].status, ResultKind::Updated);
+        assert_eq!(state.needs_review, 0);
+    }
+
+    #[tokio::test]
+    async fn refresh_classification_is_separate_from_manual_flag_and_preserves_known_adult() {
+        let db = database().await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('game_nsfw:1','0')")
+            .execute(&db)
+            .await
+            .unwrap();
+        for (nsfw, expected) in [(false, "0"), (true, "1"), (false, "1")] {
+            let before = Snapshot::read(&db, 1).await.unwrap().unwrap();
+            let detail = MetadataDetail {
+                nsfw: Some(nsfw),
+                ..fresh()
+            };
+            apply(&db, 1, &before, &detail, TitlePreference::Chinese)
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT value FROM settings WHERE key='game_nsfw:1'"
+                )
+                .fetch_one(&db)
+                .await
+                .unwrap(),
+                "0"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT value FROM settings WHERE key='game_nsfw_source:1'"
+                )
+                .fetch_one(&db)
+                .await
+                .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM settings WHERE key='game_nsfw_source:1'"
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap(),
+            "1"
+        );
+    }
+
+    async fn reconcile_manual(
+        db: &SqlitePool,
+        state: &mut RefreshState,
+        id: i64,
+        detail: &MetadataDetail,
+        fields: &[String],
+    ) -> CmdResult<()> {
+        if let Some(has_bangumi) = confirmed_manual_match(db, id, detail, fields).await? {
+            state.resolve_manual_match(id, has_bangumi);
+        }
+        Ok(())
+    }
 
     async fn database() -> SqlitePool {
         let db = sqlx::sqlite::SqlitePoolOptions::new()

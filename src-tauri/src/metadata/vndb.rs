@@ -24,8 +24,8 @@ const ENDPOINT: &str = "https://api.vndb.org/kana/vn";
 /// Listing `image` without sub-fields is an error on VNDB, so nested selections
 /// are always bracketed.
 const DETAIL_FIELDS: &str = "id,title,alttitle,titles{lang,title,latin,official,main},\
-aliases,olang,released,image.url,image.thumbnail,average,rating,votecount,\
-length_minutes,description,tags{id,name,rating,spoiler},developers{id,name}";
+aliases,olang,released,image.url,image.thumbnail,image.sexual,image.violence,average,rating,votecount,\
+length_minutes,description,tags{id,name,rating,spoiler,category},developers{id,name}";
 
 /// Smaller field set for search results.
 ///
@@ -68,6 +68,8 @@ struct Vn {
 #[derive(Debug, Deserialize)]
 struct VnImage {
     url: Option<String>,
+    sexual: Option<f64>,
+    violence: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +93,7 @@ struct VnTag {
     name: Option<String>,
     /// 0-3 tag weight; used to drop very weak tags.
     rating: Option<f64>,
+    category: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,6 +307,18 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         .next()
         .ok_or_else(|| super::CmdError(format!("VNDB 未找到 {id}")))?;
 
+    Ok(detail_from_vn(vn))
+}
+
+fn detail_from_vn(vn: Vn) -> MetadataDetail {
+    // https://api.vndb.org/kana: image flags are 0..=2 and `ero` tags
+    // describe sexual content. Absence/zero only describes the selected cover,
+    // so it must never certify that the whole game is suitable for all ages.
+    let nsfw = (vn.tags.iter().any(|tag| tag.category.as_deref() == Some("ero"))
+        || vn.image.as_ref().is_some_and(|image| {
+            [image.sexual, image.violence].into_iter().flatten().any(|value| value.is_finite() && value > 0.0)
+        })).then_some(true);
+
     let rating = normalise(vn.rating).or_else(|| normalise(vn.average));
     let ratings = rating
         .map(|score| {
@@ -332,7 +347,7 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         description = None;
     }
 
-    Ok(MetadataDetail {
+    MetadataDetail {
         provider: Some(Provider::Vndb),
         external_id: Some(vn.id.clone()),
         title: vn.title.clone().unwrap_or_else(|| vn.id.clone()),
@@ -350,13 +365,24 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         tags: super::merge::dedupe_tags(tags),
         vndb_id: Some(vn.id.clone()),
         bangumi_id: None,
+        nsfw,
         attribution: Some("VNDB".to_string()),
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adult_source_evidence_survives_vndb_projection_without_guessing_safe_from_a_cover() {
+        let adult: Vn = serde_json::from_value(serde_json::json!({"id":"v1","tags":[{"name":"Sexual Content","category":"ero","rating":2.5}]})).unwrap();
+        assert_eq!(detail_from_vn(adult).nsfw, Some(true));
+        let adult_image: Vn = serde_json::from_value(serde_json::json!({"id":"v2","image":{"url":"https://example.test/a.jpg","sexual":1.2,"violence":0.0}})).unwrap();
+        assert_eq!(detail_from_vn(adult_image).nsfw, Some(true));
+        let safe_cover: Vn = serde_json::from_value(serde_json::json!({"id":"v3","image":{"sexual":0.0,"violence":0.0}})).unwrap();
+        assert_eq!(detail_from_vn(safe_cover).nsfw, None);
+    }
 
     #[test]
     fn normalise_converts_vndb_hundred_scale_to_ten() {

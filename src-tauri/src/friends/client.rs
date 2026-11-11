@@ -97,6 +97,20 @@ impl Api {
             .await?,
         )
     }
+    /// Delete the Auth user through the Edge Function, which holds the service key.
+    pub async fn delete_account(&self, token: &str, receipt: &str) -> CmdResult<Value> {
+        let value = self.request(
+            Method::POST,
+            "/functions/v1/friends-delete-account",
+            Some(token),
+            json!({"receipt":receipt}),
+        )
+        .await?;
+        if value["ok"] != true || value["authDeleted"] != true {
+            return Err(CmdError("FRIENDS_DELETION_PENDING: 注销结果尚未确认，请重试。".into()));
+        }
+        Ok(value)
+    }
 }
 pub fn parse_tokens(value: Value) -> CmdResult<Tokens> {
     let access = value["access_token"]
@@ -137,6 +151,16 @@ fn response_error(status: u16, value: &Value) -> CmdError {
     );
     let (kind, summary) = if terminal || message.contains("FRIENDS_SESSION") {
         ("SESSION", "登录已失效或账号已在另一端登录，请重新登录")
+    } else if auth_code == "FRIENDS_IP_BANNED" || message.contains("FRIENDS_IP_BANNED") {
+        ("IP_BANNED", "当前网络已被禁止注册或使用内测服务，请联系管理员")
+    } else if auth_code == "FRIENDS_LIBRARY_BANNED" || message.contains("FRIENDS_LIBRARY_BANNED") {
+        ("LIBRARY_BANNED", "该账号的游戏库已被管理员关闭或封禁")
+    } else if auth_code == "FRIENDS_LIBRARY_CLOSED" || message.contains("FRIENDS_LIBRARY_CLOSED") {
+        ("LIBRARY_CLOSED", "该账号的公开游戏库已被管理员强制关闭，请联系管理员处理")
+    } else if message.contains("FRIENDS_UPGRADE_REQUIRED") {
+        ("UPGRADE_REQUIRED", "请更新客户端后使用账号注销服务")
+    } else if auth_code == "FRIENDS_CONSENT_REQUIRED" {
+        ("CONSENT_REQUIRED", "请先阅读并同意当前版本的服务协议、隐私政策和出境告知；旧版客户端请更新后注册")
     } else if auth_code == "FRIENDS_IP_REGISTERED" {
         ("IP_REGISTERED", "当前公网 IP 已注册过账号，同一网络可能共用名额，请使用已有账号登录")
     } else if message.contains("FRIENDS_INVITE") {
@@ -162,6 +186,13 @@ fn response_error(status: u16, value: &Value) -> CmdError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn consent_rejection_is_actionable_and_does_not_echo_provider_content() {
+        let error = response_error(400, &json!({"code":"FRIENDS_CONSENT_REQUIRED","message":"untrusted-provider-body"}));
+        assert!(error.0.starts_with("FRIENDS_CONSENT_REQUIRED:"));
+        assert!(error.0.contains("更新"));
+        assert!(!error.0.contains("untrusted-provider-body"));
+    }
     #[test]
     fn registered_ip_is_a_permanent_registration_rule_not_a_temporary_rate_limit() {
         let error = response_error(429, &json!({"code":"FRIENDS_IP_REGISTERED","message":"untrusted-provider-body"}));
@@ -199,6 +230,35 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn banned_network_and_library_are_permanent_rule_errors() {
+        let ip = response_error(400, &json!({"message":"FRIENDS_IP_BANNED"}));
+        assert!(ip.0.starts_with("FRIENDS_IP_BANNED:"));
+        assert!(ip.0.contains("禁止"));
+        let library = response_error(400, &json!({"message":"FRIENDS_LIBRARY_BANNED"}));
+        assert!(library.0.starts_with("FRIENDS_LIBRARY_BANNED:"));
+        assert!(library.0.contains("游戏库"));
+    }
+
+    #[tokio::test]
+    async fn deletion_needs_an_explicit_auth_completion_receipt() {
+        use std::io::{Read, Write};
+        for reply in [json!({"ok":true,"authDeleted":false}),json!({"ok":true}),json!({"ok":false,"authDeleted":true})] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let body = reply.to_string();
+            let worker = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 4096];
+                let _ = stream.read(&mut buffer);
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            });
+            let api = Api::new(&Config {server_url:format!("http://{address}"),public_key:"sb_publishable_test".into(),..Config::default()}).unwrap();
+            assert!(api.delete_account("test-token", &"a".repeat(64)).await.is_err(),"incomplete deletion must keep the login usable");
+            worker.join().unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn redirect_does_not_forward_bearer_credentials() {
         use std::io::{Read, Write};

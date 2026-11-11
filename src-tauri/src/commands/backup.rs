@@ -659,7 +659,11 @@ async fn stage_restore(
     let result = async {
         let mut tx = db.begin().await?;
         // A restored database must never silently resume remote account writes.
-        sqlx::query("UPDATE settings SET value=json_set(value,'$.enabled',json('false'),'$.shareGame',json('false')) WHERE key='friends_config' AND json_valid(value)")
+        sqlx::query("UPDATE settings SET value=json_set(value,'$.enabled',json('false'),'$.shareGame',json('false'),'$.shareLibrary',json('false'),'$.shareHistory',json('false')) WHERE key='friends_config' AND json_valid(value)")
+            .execute(&mut *tx).await?;
+        // The cached account snapshot belongs to the login being replaced; a
+        // restored database must not resurrect it.
+        sqlx::query("DELETE FROM settings WHERE key IN ('friends_account','friends_delete_receipt')")
             .execute(&mut *tx).await?;
         let sync_config: Option<String> = sqlx::query_scalar::<_,Option<String>>("SELECT value FROM settings WHERE key='bangumi_sync_config'")
             .fetch_optional(&mut *tx).await?.flatten();

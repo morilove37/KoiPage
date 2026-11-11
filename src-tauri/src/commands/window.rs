@@ -132,3 +132,35 @@ pub fn manager_running_count(app: AppHandle) -> CmdResult<usize> {
     Ok(app.state::<crate::launcher::RunningGames>().0.lock()
         .map_err(|_| CmdError("进程表不可用".into()))?.len())
 }
+
+/// Fullscreen hides the title bar so the page can fill the screen.
+fn fullscreen_layout(fullscreen: bool) -> (bool, bool) {
+    (!fullscreen, fullscreen)
+}
+
+/// `app_set_fullscreen` — enter or leave borderless fullscreen.
+#[tauri::command]
+pub fn app_set_fullscreen(app: AppHandle, fullscreen: bool) -> CmdResult<bool> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| CmdError("主窗口不存在".into()))?;
+    let (decorations, fullscreen) = fullscreen_layout(fullscreen);
+    window
+        .set_decorations(decorations)
+        .map_err(|error| CmdError(format!("无法切换窗口边框：{error}")))?;
+    window
+        .set_fullscreen(fullscreen)
+        .map_err(|error| CmdError(format!("无法切换全屏：{error}")))?;
+    Ok(window.is_fullscreen().unwrap_or(fullscreen))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fullscreen_layout;
+
+    #[test]
+    fn fullscreen_removes_decorations_and_restores_them_on_exit() {
+        assert_eq!(fullscreen_layout(true), (false, true));
+        assert_eq!(fullscreen_layout(false), (true, false));
+    }
+}

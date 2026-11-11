@@ -586,6 +586,18 @@ async fn apply_detail_policy(
         }
     }
 
+    // Keep provider age evidence separate from the user's manual flag. Once a
+    // provider identifies an adult work, a later provider cannot downgrade it.
+    if let Some(nsfw) = detail.nsfw {
+        sqlx::query(
+            "INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=CASE WHEN settings.value='1' THEN '1' ELSE excluded.value END",
+        )
+        .bind(format!("game_nsfw_source:{game_id}"))
+        .bind(if nsfw { "1" } else { "0" })
+        .execute(pool)
+        .await?;
+    }
+
     Ok(AppliedMetadata {
         game_id,
         // Count the columns actually written, not the fields requested: a
@@ -641,6 +653,7 @@ pub async fn metadata_apply(
         TitlePreference::Source,
     )
     .await?;
+    super::metadata_refresh::resolve_manual_match(&app, &pool, game_id, &detail, &fields).await?;
     if fields.iter().any(|f| f == "bangumi_id") { crate::bangumi_sync::mark_dirty(&app); }
     Ok(result)
 }
@@ -1197,6 +1210,34 @@ mod tests {
         let rating: Option<f64> = sqlx::query_scalar("SELECT rating FROM games WHERE id = 1")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(rating, Some(8.73));
+    }
+
+    #[tokio::test]
+    async fn nsfw_flag_is_saved_to_settings_without_a_schema_change() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/0001_init.sql"))
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO games (id, title, install_path, created_at, updated_at) VALUES (1, 'Test', 'nsfw', 'now', 'now')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('game_nsfw:1','0')")
+            .execute(&pool).await.unwrap();
+        let value = |pool: sqlx::Pool<sqlx::Sqlite>| async move {
+            sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'game_nsfw_source:1'")
+                .fetch_optional(&pool).await.unwrap()
+        };
+        apply_detail(&pool, 1, &MetadataDetail { nsfw: Some(true), ..Default::default() },
+            &fields(&["rating"]), None, TitlePreference::Source).await.unwrap();
+        assert_eq!(value(pool.clone()).await.as_deref(), Some("1"));
+        // A provider that does not know the age flag must not erase a known answer.
+        apply_detail(&pool, 1, &MetadataDetail::default(), &fields(&["rating"]), None,
+            TitlePreference::Source).await.unwrap();
+        assert_eq!(value(pool.clone()).await.as_deref(), Some("1"));
+        apply_detail(&pool, 1, &MetadataDetail { nsfw: Some(false), ..Default::default() },
+            &fields(&["rating"]), None, TitlePreference::Source).await.unwrap();
+        assert_eq!(value(pool.clone()).await.as_deref(), Some("1"), "later providers cannot erase known adult classification");
+        assert_eq!(sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key='game_nsfw:1'")
+            .fetch_one(&pool).await.unwrap(), "0", "provider classification preserves manual flag");
     }
 
     fn fields(names: &[&str]) -> Vec<String> {

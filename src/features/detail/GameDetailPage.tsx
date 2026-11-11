@@ -38,6 +38,8 @@ import {
   gameGet,
   gameUpdate,
   playSessionsList,
+  settingsGet,
+  settingsSet,
   tagsList,
 } from "@/lib/db";
 import { cn } from "@/lib/utils";
@@ -194,6 +196,14 @@ export default function GameDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // NSFW marker is a per-game setting; the public friend library reads it to
+  // force-blur this game's cover there.
+  const [nsfw, setNsfw] = useState(false);
+  const [nsfwLoaded, setNsfwLoaded] = useState(false);
+  const [nsfwSaving, setNsfwSaving] = useState(false);
+  const [nsfwError, setNsfwError] = useState<string | null>(null);
+  const [nsfwNotice, setNsfwNotice] = useState<string | null>(null);
+
   // Header shortcuts write only this game's overrides.
   const [launchProfile, setLaunchProfile] = useState<LaunchProfile>(normalizeLaunchProfile(null));
   const [profileRevision, setProfileRevision] = useState(0);
@@ -278,6 +288,40 @@ export default function GameDetailPage() {
   useEffect(() => {
     void load();
   }, [load, playTimeRevision]);
+
+  useEffect(() => {
+    let alive = true;
+    setNsfwLoaded(false);
+    setNsfwError(null);
+    setNsfwNotice(null);
+    if (!Number.isFinite(gameId)) { setNsfwLoaded(true); return; }
+    void settingsGet(`game_nsfw:${gameId}`).then(value => {
+      if (!alive) return;
+      setNsfw(value === "1");
+      setNsfwLoaded(true);
+    }).catch(cause => {
+      if (!alive) return;
+      setNsfwError(`NSFW 标记读取失败：${errorMessage(cause)}`);
+      setNsfwLoaded(true);
+    });
+    return () => { alive = false; };
+  }, [gameId]);
+
+  async function toggleNsfw(next: boolean) {
+    if (nsfwSaving || !nsfwLoaded) return;
+    setNsfwSaving(true);
+    setNsfwError(null);
+    setNsfwNotice(null);
+    try {
+      await settingsSet(`game_nsfw:${gameId}`, next ? "1" : "0");
+      setNsfw(next);
+      setNsfwNotice(next ? "已手动标记为 NSFW 内容：公开游戏库封面会自动打码。" : "已取消手动标记；来源认定为成人内容或分级未知的作品仍会自动打码。");
+    } catch (cause) {
+      setNsfwError(`NSFW 标记保存失败：${errorMessage(cause)}`);
+    } finally {
+      setNsfwSaving(false);
+    }
+  }
 
   /** Back out of the detail view, preferring the real previous page. */
   const goBack = useCallback(() => {
@@ -729,6 +773,18 @@ export default function GameDetailPage() {
             </div>
             <div className="detail-summary-information min-w-0">
             <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
+            <p data-detail-cover-verification className="mt-2 text-[11px] leading-relaxed text-muted-foreground">开启公开游戏库后，自定义封面会自动提交服务器审核；审核通过前，该作品不会公开。更换封面或裁剪后需重新审核，可在「设置 → 公开游戏库」查看状态。</p>
+            <div data-detail-nsfw className="mt-3 rounded-md border border-border bg-muted/30 px-2 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium">手动标记 NSFW 内容</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">手动标记、来源成人分级或分级未知时，公开封面自动打码。关闭此开关不会清除来源分级；本机显示不受影响。</p>
+                </div>
+                <MiniSwitch checked={nsfw} disabled={!nsfwLoaded || nsfwSaving} label="NSFW 内容" title="公开游戏库封面自动打码" onChange={next => void toggleNsfw(next)} />
+              </div>
+              {nsfwError ? <p role="alert" className="mt-1 break-words text-[11px] leading-relaxed text-destructive">{nsfwError}</p> : null}
+              {nsfwNotice ? <p role="status" className="mt-1 break-words text-[11px] leading-relaxed text-muted-foreground">{nsfwNotice}</p> : null}
+            </div>
             <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
               <dt className="text-muted-foreground">评分</dt>
               <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{form.rating === "" ? "未评分" : formatRating(Number(form.rating))}</dd>

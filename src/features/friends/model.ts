@@ -1,8 +1,20 @@
-import type {CurrentGame,Friend,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters} from './types';
+import type {CurrentGame,Friend,HistorySession,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters} from './types';
 
 export function normalizePrivacy(value:unknown):Privacy{
   const v=value&&typeof value==='object'?value as Record<string,unknown>:{};
-  return{shareGame:v.shareGame===true,shareLibrary:v.shareLibrary===true,invisible:v.invisible===true,hiddenGameIds:Array.isArray(v.hiddenGameIds)?[...new Set(v.hiddenGameIds.filter((n):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>0))]:[]};
+  return{shareGame:v.shareGame===true,shareLibrary:v.shareLibrary===true,shareHistory:v.shareHistory===true,invisible:v.invisible===true,hiddenGameIds:Array.isArray(v.hiddenGameIds)?[...new Set(v.hiddenGameIds.filter((n):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>0))]:[]};
+}
+
+export interface HistoryGroup {title:string;vndbId:string|null;bangumiId:string|null;sessions:HistorySession[]}
+/** Sessions arrive newest-first; consecutive sessions of the same work form one card + timeline. */
+export function groupHistory(sessions:readonly HistorySession[]):HistoryGroup[]{
+  const groups:HistoryGroup[]=[];
+  for(const session of sessions){
+    const previous=groups[groups.length-1];
+    if(previous&&previous.title===session.title&&previous.vndbId===session.vndbId&&previous.bangumiId===session.bangumiId)previous.sessions.push(session);
+    else groups.push({title:session.title,vndbId:session.vndbId,bangumiId:session.bangumiId,sessions:[session]});
+  }
+  return groups;
 }
 export function mergeSnapshot(current:ViewSnapshot|null,next:Snapshot,receivedAt:number):ViewSnapshot|null{
   if(next.unchanged)return current?{...current,serverNow:next.serverNow,receivedAt,stale:false}:null;

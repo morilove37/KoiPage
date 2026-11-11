@@ -12,6 +12,7 @@ import type { ShareDirection, ShareSort } from "./model";
 import { renderShare, replacementCover, ShareCoverCache } from "./render";
 import { copyShareImage, copyShareLinks, saveShare, uploadShareImages } from "./io";
 import { loadCoverPreferences, useCoverStore } from '@/features/covers/store';
+import { LegalDocuments } from '@/features/legal/LegalDocuments';
 
 interface Artifact { key: string; pages: Blob[]; urls: string[]; missing: string[] }
 type Action = "save" | "copy" | "upload" | "links";
@@ -32,6 +33,7 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [links, setLinks] = useState<Array<string | null>>([]);
+  const [publicUploadAccepted, setPublicUploadAccepted] = useState(false);
   const cache = useRef<ShareCoverCache | null>(null);
   // Immediate guard also prevents double clicks before React paints `busy`.
   const actionRunning = useRef(false);
@@ -73,6 +75,7 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
   };
 
   async function act(action: Action) {
+    if (action === 'upload' && !publicUploadAccepted) {setError('请先确认将当前预览的分享图上传至第三方并公开访问。');return;}
     if (!ready || !current || actionRunning.current) return;
     actionRunning.current = true; setBusy(action); setError(null); setMessage(null);
     try {
@@ -100,7 +103,7 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
         <Button variant="ghost" disabled={Boolean(busy)} onClick={onClose}>关闭</Button>
         <Button variant="outline" disabled={!ready} loading={busy === "save"} onClick={() => void act("save")}>{(current?.pages.length ?? 0) > 1 ? "保存全部图片" : "保存图片"}</Button>
         <Button variant="outline" disabled={!ready} loading={busy === "copy"} onClick={() => void act("copy")}>{(current?.pages.length ?? 0) > 1 ? "复制本页图片" : "复制图片"}</Button>
-        <Button disabled={!ready} loading={busy === "upload"} onClick={() => void act(linkCount ? "links" : "upload")}>{linkCount ? "复制分享链接" : "生成24小时链接"}</Button>
+        <Button disabled={!ready || (!linkCount && !publicUploadAccepted)} loading={busy === "upload"} onClick={() => void act(linkCount ? "links" : "upload")}>{linkCount ? "复制分享链接" : "生成24小时链接"}</Button>
       </>}>
       <div className="grid gap-4 md:grid-cols-[minmax(250px,0.85fr)_minmax(0,1.15fr)]" data-share-editor>
         <div className="flex min-w-0 flex-col gap-3">
@@ -141,6 +144,8 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
             </div>
           </fieldset>
           <p className="text-[11px] leading-relaxed text-muted-foreground">链接由 beacon.host 匿名公开托管 24 小时，拿到链接的人可查看全部分享图。仅点击生成链接时上传图片；服务有发布频率限制。</p>
+          <label className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed"><input type="checkbox" checked={publicUploadAccepted} disabled={Boolean(busy)} onChange={event => setPublicUploadAccepted(event.target.checked)} className="mt-0.5 accent-primary"/><span>我确认将当前预览的全部分享图上传至 beacon.host 及其可能位于境外的存储服务，并允许拿到链接的人查看。请勿包含个人隐私或无权公开的内容；链接失效不能追回他人保存的副本。仅保存或复制图片无需勾选。</span></label>
+          <LegalDocuments ids={['privacy', 'thirdParties']}/>
         </div>
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex items-center justify-between gap-2 text-xs">

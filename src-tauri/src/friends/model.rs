@@ -11,6 +11,7 @@ pub struct Config {
     pub enabled: bool,
     pub share_game: bool,
     pub share_library: bool,
+    pub share_history: bool,
     pub invisible: bool,
     pub hidden_game_ids: Vec<i64>,
 }
@@ -25,6 +26,7 @@ impl Default for Config {
             enabled: false,
             share_game: false,
             share_library: false,
+            share_history: false,
             invisible: false,
             hidden_game_ids: Vec::new(),
         }
@@ -57,6 +59,15 @@ pub struct Tokens {
     pub expires_at: i64,
 }
 
+/// An opaque completion lookup; it cannot authenticate or authorize deletion.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionReceipt {
+    pub server_url: String,
+    pub account_id: String,
+    pub receipt: String,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -67,6 +78,10 @@ pub struct Status {
     pub generation: u64,
     pub library_synced_at: Option<i64>,
     pub library_error: Option<String>,
+    pub history_synced_at: Option<String>,
+    pub history_error: Option<String>,
+    #[serde(default)]
+    pub deletion_pending: bool,
 }
 
 #[derive(Clone)]
@@ -200,6 +215,38 @@ pub fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
+/// Friends RPCs identify users by the UUID Auth assigns them.
+pub fn valid_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+/// A friends search box accepts either a 16-digit friend code or a user name.
+///
+/// The exact lengths mirror `koipage_search_users`, so a query that cannot match
+/// is rejected locally instead of costing a round trip.
+pub fn search_query(query: &str) -> CmdResult<String> {
+    let query = query.trim();
+    let friend_code = query.len() == 16 && query.bytes().all(|byte| byte.is_ascii_hexdigit());
+    // User names cannot contain spaces, so reject them locally as well.
+    let name = (3..=32).contains(&query.chars().count())
+        && query
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    if query.is_empty() || (!friend_code && !name) {
+        return Err(CmdError(
+            "FRIENDS_INPUT: 请输入 16 位好友码或 3–32 位用户名".into(),
+        ));
+    }
+    Ok(query.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +349,56 @@ mod tests {
             .collect::<Vec<_>>();
         fields.sort();
         assert_eq!(fields, vec!["id", "originalTitle", "title"]);
+    }
+
+    #[test]
+    fn share_history_is_opt_in_even_for_saved_and_old_configurations() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert!(!config.share_history);
+        let old: Config =
+            serde_json::from_str(r#"{"enabled":true,"shareGame":true,"shareLibrary":true}"#).unwrap();
+        assert!(!old.share_history);
+        let value = serde_json::to_value(Status {
+            config: old,
+            account: None,
+            connected: false,
+            last_error: None,
+            generation: 0,
+            library_synced_at: None,
+            library_error: None,
+            history_synced_at: Some("2026-11-11T00:00:00Z".into()),
+            history_error: None,
+            deletion_pending: false,
+        })
+        .unwrap();
+        assert_eq!(value["historySyncedAt"], "2026-11-11T00:00:00Z");
+        assert!(value.get("historyError").is_some() && value["historyError"].is_null());
+    }
+
+    #[test]
+    fn search_box_only_accepts_friend_codes_or_user_names() {
+        assert!(search_query("  ABCDEF0123456789 ").is_ok());
+        assert!(search_query("ali").is_ok());
+        assert!(search_query("Alice").is_ok());
+        assert!(search_query("ab").is_err());
+        assert!(search_query("a b").is_err());
+        assert!(search_query("").is_err());
+        assert!(search_query(&"名".repeat(33)).is_err());
+        assert_eq!(search_query("  Alice ").unwrap(), "Alice");
+    }
+
+    #[test]
+    fn friend_targets_are_restricted_to_uuid_shaped_values() {
+        assert!(valid_uuid("c0ffee00-0000-4000-8000-000000000000"));
+        for invalid in [
+            "me",
+            "c0ffee00-0000-4000-8000-00000000000",
+            "c0ffee00_0000-4000-8000-000000000000",
+            "zzzzzzzz-0000-4000-8000-000000000000",
+            "",
+        ] {
+            assert!(!valid_uuid(invalid), "{invalid}");
+        }
     }
 
     fn candidate(id: i64, session: i64) -> RunningCandidate {

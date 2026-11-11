@@ -13,6 +13,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, OnceCell};
 
 pub const CONFIG_KEY: &str = "friends_config";
+/// Cached `Account` snapshot so a restart or a network outage keeps the user
+/// visibly logged in without needing a successful claim first.
+pub const ACCOUNT_KEY: &str = "friends_account";
+pub const DELETE_RECEIPT_KEY: &str = "friends_delete_receipt";
 #[derive(Default)]
 pub struct Inner {
     pub config: Config,
@@ -24,15 +28,29 @@ pub struct Inner {
     pub generation: u64,
     pub library_synced_at: Option<i64>,
     pub library_error: Option<String>,
+    pub history_synced_at: Option<String>,
+    pub history_error: Option<String>,
+    /// Set when a claim refresh produced a newer snapshot than the one cached
+    /// in settings. The publisher flushes it and clears the flag.
+    pub account_dirty: bool,
+    pub deletion_pending: bool,
 }
 #[derive(Default)]
 pub struct FriendsState {
     pub inner: Mutex<Inner>,
     pub(super) library: Mutex<super::library::Cache>,
+    pub(super) history: Mutex<super::history::Cache>,
     initialized: OnceCell<()>,
     pub stopping: AtomicBool,
 }
 impl Inner {
+    pub fn allow_account_change(&self) -> CmdResult<()> {
+        if self.deletion_pending {
+            Err(CmdError("FRIENDS_DELETION_PENDING: 请先在设置中确认上次注销结果，再切换账号、服务或分享设置。".into()))
+        } else {
+            Ok(())
+        }
+    }
     pub fn status(&self) -> Status {
         Status {
             config: self.config.clone(),
@@ -42,6 +60,9 @@ impl Inner {
             generation: self.generation,
             library_synced_at: self.library_synced_at,
             library_error: self.library_error.clone(),
+            history_synced_at: self.history_synced_at.clone(),
+            history_error: self.history_error.clone(),
+            deletion_pending: self.deletion_pending,
         }
     }
     pub fn failed(&mut self, error: &CmdError) {
@@ -57,7 +78,7 @@ impl Inner {
             self.connected = false;
         }
         self.error = Some(error.0.clone());
-        if error.0.starts_with("FRIENDS_SESSION") {
+        if error.0.starts_with("FRIENDS_SESSION") && !self.deletion_pending {
             self.tokens = None;
             self.account = None;
             self.config.enabled = false;
@@ -77,7 +98,19 @@ pub async fn save(app: &AppHandle, config: &Config) -> CmdResult<()> {
     )
     .await
 }
+/// Persist the account snapshot used to keep the user logged in while offline.
+pub async fn save_account(app: &AppHandle, account: &Account) {
+    if let Ok(value) = serde_json::to_string(account) {
+        let _ = settings_set(app.clone(), ACCOUNT_KEY.into(), Some(value)).await;
+    }
+}
+pub async fn clear_account(app: &AppHandle) {
+    let _ = settings_set(app.clone(), ACCOUNT_KEY.into(), None).await;
+}
 pub async fn rpc(inner: &mut Inner, name: &str, body: Value) -> CmdResult<Value> {
+    if inner.deletion_pending {
+        return Err(CmdError("FRIENDS_DELETION_PENDING: 账号注销结果待确认，请在设置中重试注销。".into()));
+    }
     let result = async {
         let api = Api::new(&inner.config)?;
         let current = inner
@@ -108,13 +141,20 @@ pub async fn ensure(app: &AppHandle) {
         .initialized
         .get_or_init(|| async {
             let mut inner = state.inner.lock().await;
-            let stored = match pool(app).await {
-                Ok(db) => settings_get_impl(&db, CONFIG_KEY).await.ok().flatten(),
-                Err(_) => None,
+            let (stored, cached_account, deletion) = match pool(app).await {
+                Ok(db) => (
+                    settings_get_impl(&db, CONFIG_KEY).await.ok().flatten(),
+                    settings_get_impl(&db, ACCOUNT_KEY).await.ok().flatten(),
+                    settings_get_impl(&db, DELETE_RECEIPT_KEY).await.ok().flatten(),
+                ),
+                Err(_) => (None, None, None),
             };
             inner.config = stored
                 .and_then(|v| serde_json::from_str(&v).ok())
                 .unwrap_or_default();
+            inner.deletion_pending = deletion
+                .and_then(|value| serde_json::from_str::<DeletionReceipt>(&value).ok())
+                .is_some_and(|value| value.server_url == inner.config.server_url);
             if inner.config.enabled {
                 let resume = async {
                     validate_project(&inner.config.server_url, &inner.config.public_key)?;
@@ -125,9 +165,18 @@ pub async fn ensure(app: &AppHandle) {
                     Ok::<(), CmdError>(())
                 }
                 .await;
+                if inner.tokens.is_some() || inner.deletion_pending {
+                    // The snapshot is presentation state only; the publisher
+                    // re-claims in the background and replaces it when the
+                    // network comes back.
+                    inner.account = cached_account.and_then(|v| serde_json::from_str(&v).ok());
+                }
                 if let Err(error) = resume {
                     inner.failed(&error);
                 }
+            }
+            if inner.deletion_pending {
+                state.stopping.store(true, Ordering::SeqCst);
             }
             drop(inner);
             let handle = app.clone();
@@ -137,6 +186,10 @@ pub async fn ensure(app: &AppHandle) {
             let library_handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 super::library::publisher(library_handle).await;
+            });
+            let history_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                super::history::publisher(history_handle).await;
             });
         })
         .await;
@@ -180,10 +233,10 @@ struct ResumeRetry {
     generation: u64,
 }
 async fn recover_account(inner: &mut Inner, retry: &mut ResumeRetry, at: Instant) -> bool {
-    if !inner.config.enabled || inner.tokens.is_none() {
+    if inner.deletion_pending || !inner.config.enabled || inner.tokens.is_none() {
         return false;
     }
-    if inner.account.is_some() {
+    if inner.account.is_some() && inner.connected {
         return true;
     }
     if retry.generation != inner.generation {
@@ -202,6 +255,7 @@ async fn recover_account(inner: &mut Inner, retry: &mut ResumeRetry, at: Instant
             serde_json::from_value(profile)
                 .map_err(|_| CmdError("FRIENDS_PROTOCOL: 账号资料格式无效".into()))?,
         );
+        inner.account_dirty = true;
         Ok::<(), CmdError>(())
     }
     .await;
@@ -249,6 +303,15 @@ async fn publisher(app: AppHandle) {
             let mut inner = state.inner.lock().await;
             let before = inner.status();
             let ready = recover_account(&mut inner, &mut resume_retry, Instant::now()).await;
+            if inner.account_dirty {
+                inner.account_dirty = false;
+                if let Some(account) = inner.account.clone() {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        save_account(&handle, &account).await;
+                    });
+                }
+            }
             if inner.status() != before {
                 let _ = app.emit("friends-status-changed", inner.status());
             }
@@ -340,8 +403,12 @@ where
         inner.config.enabled = false;
         inner.config.share_game = false;
         inner.config.share_library = false;
+        inner.config.share_history = false;
         inner.library_synced_at = None;
         inner.library_error = None;
+        inner.history_synced_at = None;
+        inner.history_error = None;
+        inner.deletion_pending = false;
         inner.account = None;
         inner.connected = false;
         inner.generation += 1;
@@ -369,6 +436,8 @@ pub async fn stop(app: &AppHandle, persist: bool) {
         {
             crate::app_warn!("[friends] {error}");
         }
+        clear_account(app).await;
+        let _ = settings_set(app.clone(), DELETE_RECEIPT_KEY.into(), None).await;
         let _ = app.emit("friends-status-changed", state.inner.lock().await.status());
     } else {
         let _ = tokio::time::timeout(Duration::from_secs(1), async {
@@ -585,5 +654,90 @@ mod tests {
         let inner = inner.lock().await;
         assert!(inner.tokens.is_none() && inner.account.is_none());
         assert!(saved.load(Ordering::SeqCst) && cleared.load(Ordering::SeqCst));
+    }
+
+    fn account() -> Account {
+        Account {
+            id: "id".into(),
+            username: "alice".into(),
+            nickname: "Alice".into(),
+            avatar: 0,
+            friend_code: "CODE".into(),
+        }
+    }
+
+    #[test]
+    fn unfinished_deletion_blocks_identity_changes_and_preserves_login() {
+        let mut inner=Inner {tokens:Some(tokens()),account:Some(account()),deletion_pending:true,..Inner::default()};
+        assert!(inner.allow_account_change().is_err());
+        inner.failed(&CmdError("FRIENDS_SESSION: deleted Auth token".into()));
+        assert!(inner.tokens.is_some()&&inner.account.is_some());
+        inner.deletion_pending=false;
+        assert!(inner.allow_account_change().is_ok());
+    }
+
+    #[test]
+    fn offline_failures_keep_the_login_and_only_auth_failures_clear_it() {
+        let mut inner = Inner {
+            config: Config {
+                enabled: true,
+                share_game: true,
+                ..Config::default()
+            },
+            tokens: Some(tokens()),
+            account: Some(account()),
+            connected: true,
+            ..Inner::default()
+        };
+        inner.failed(&CmdError(
+            "FRIENDS_NETWORK: 无法连接内测服务，请稍后重试".into(),
+        ));
+        assert!(!inner.connected, "a transport failure is not connected");
+        assert!(inner.tokens.is_some() && inner.account.is_some() && inner.config.enabled);
+        assert!(
+            inner
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("FRIENDS_NETWORK")
+        );
+        // Server-side rejections also never erase the login.
+        for error in [
+            "FRIENDS_RATE: 操作过于频繁",
+            "FRIENDS_UNAVAILABLE: 对方不可用",
+            "FRIENDS_REQUEST: 状态已变化",
+            "FRIENDS_IP_BANNED: 网络已被禁止注册",
+        ] {
+            inner.failed(&CmdError(error.into()));
+            assert!(
+                inner.tokens.is_some() && inner.account.is_some(),
+                "{error} must not log out"
+            );
+        }
+        inner.failed(&CmdError("FRIENDS_SESSION: 登录已失效".into()));
+        assert!(inner.tokens.is_none() && inner.account.is_none() && !inner.config.enabled);
+    }
+
+    #[tokio::test]
+    async fn cached_account_short_circuits_claim_only_while_connected() {
+        let mut inner = Inner {
+            config: Config {
+                enabled: true,
+                server_url: "http://127.0.0.1:1".into(),
+                public_key: "sb_publishable_test".into(),
+                ..Config::default()
+            },
+            tokens: Some(tokens()),
+            account: Some(account()),
+            connected: true,
+            ..Inner::default()
+        };
+        let mut retry = ResumeRetry::default();
+        assert!(recover_account(&mut inner, &mut retry, Instant::now()).await);
+        // A cached account is still shown while disconnected, and the publisher
+        // keeps retrying the claim without erasing it on failure.
+        inner.connected = false;
+        assert!(!recover_account(&mut inner, &mut retry, Instant::now()).await);
+        assert!(inner.account.is_some() && inner.tokens.is_some());
     }
 }

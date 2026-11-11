@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {StaticRouter} from 'react-router-dom/server.js';
+import {rawMarkdown} from './helpers/raw-markdown.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const require=createRequire(new URL('../package.json',import.meta.url));
@@ -14,7 +15,7 @@ const {build}=viteRequire('esbuild');
 // Exercise the real TSX, without adding a production export for its private card.
 const compiled=await build({absWorkingDir:root,bundle:true,write:false,platform:'node',format:'cjs',packages:'external',
   stdin:{contents:"export {default as FriendsPage} from './src/features/friends/FriendsPage'; export {useFriendsStore} from './src/features/friends/store'; export {LibraryCard} from './src/features/friends/FriendProfilePage';",resolveDir:root,loader:'tsx'},
-  plugins:[{name:'expose-private-card-for-render',setup(builder){builder.onLoad({filter:/FriendProfilePage\.tsx$/},async({path})=>({contents:`${await readFile(path,'utf8')}\nexport {LibraryCard};`,loader:'tsx'}));}}],
+  plugins:[rawMarkdown,{name:'expose-private-card-for-render',setup(builder){builder.onLoad({filter:/FriendProfilePage\.tsx$/},async({path})=>({contents:`${await readFile(path,'utf8')}\nexport {LibraryCard};`,loader:'tsx'}));}}],
 });
 const module={exports:{}};
 new Function('require','module','exports',compiled.outputFiles[0].text)(require,module,module.exports);

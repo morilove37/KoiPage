@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -7,11 +7,14 @@ import { initDatabase } from '@/lib/db';
 import { invoke } from '@/lib/logging';
 import { errorMessage } from '@/features/io/io';
 import { acceptRefreshState, isRefreshActive } from './metadata-refresh-state';
-import type { RefreshPhase, RefreshState } from './metadata-refresh-state';
+import type { RefreshOutcome, RefreshPhase, RefreshState } from './metadata-refresh-state';
 
 const phaseLabels: Record<RefreshPhase, string> = {
   idle: '尚未运行', backingUp: '正在备份，尚未改写资料', running: '正在刷新资料',
   completed: '刷新完成', stopped: '已停止，已应用的资料仍保留', failed: '刷新未完成',
+};
+const statusLabels: Record<RefreshOutcome['status'], string> = {
+  updated: '已更新', needsReview: '待确认', needsAuthorization: '需配置令牌', failed: '失败', skipped: '已跳过',
 };
 const overwriteWarning = '将覆盖已有游戏名、原名、开发商、发售日期、公共评分和简介，并合并标签。';
 
@@ -27,6 +30,11 @@ export function MetadataRefreshPanel() {
   const actionPending = useRef(false);
   const active = isRefreshActive(state);
 
+  /** The backend owns resolutions across navigation; revision rejects late reads. */
+  const applyState = useCallback((next: RefreshState) => {
+    setState(current => acceptRefreshState(current, next));
+  }, []);
+
   useEffect(() => {
     const generation = ++lifetime.current;
     let disposed = false;
@@ -34,7 +42,7 @@ export function MetadataRefreshPanel() {
     setReady(false);
     setError(null);
     const accept = (next: RefreshState) => {
-      if (!disposed && generation === lifetime.current) setState(current => acceptRefreshState(current, next));
+      if (!disposed && generation === lifetime.current) applyState(next);
     };
     void (async () => {
       await initDatabase();
@@ -47,7 +55,7 @@ export function MetadataRefreshPanel() {
       if (!disposed) setReady(true);
     })().catch(cause => { if (!disposed) setError(errorMessage(cause)); });
     return () => { disposed = true; lifetime.current++; unlisten?.(); };
-  }, [retry]);
+  }, [retry, applyState]);
 
   useEffect(() => { if (!active) setStopRequested(false); }, [active]);
 
@@ -58,7 +66,7 @@ export function MetadataRefreshPanel() {
     setBusy(true); setError(null); setConfirmOpen(false); setStopRequested(false);
     try {
       const next = await invoke<RefreshState>('metadata_refresh_start', { confirmed: true });
-      if (generation === lifetime.current) setState(current => acceptRefreshState(current, next));
+      if (generation === lifetime.current) applyState(next);
     } catch (cause) {
       if (generation === lifetime.current) setError(errorMessage(cause));
     } finally {
@@ -74,7 +82,7 @@ export function MetadataRefreshPanel() {
     setBusy(true); setError(null); setStopRequested(true);
     try {
       const next = await invoke<RefreshState>('metadata_refresh_cancel');
-      if (generation === lifetime.current) setState(current => acceptRefreshState(current, next));
+      if (generation === lifetime.current) applyState(next);
     } catch (cause) {
       if (generation === lifetime.current) { setError(errorMessage(cause)); setStopRequested(false); }
     } finally {
@@ -83,7 +91,17 @@ export function MetadataRefreshPanel() {
     }
   }
 
-  const unresolved = state?.outcomes.filter(outcome => outcome.status !== 'updated') ?? [];
+  const outcomes = state?.outcomes ?? [];
+  const pendingReview = outcomes.filter(outcome =>
+    outcome.status === 'needsReview' || outcome.status === 'needsAuthorization');
+  const failedItems = outcomes.filter(outcome => outcome.status === 'failed');
+  const skippedItems = outcomes.filter(outcome => outcome.status === 'skipped');
+
+  const outcomeItem = (outcome: RefreshOutcome) => <li key={outcome.gameId} className="rounded-md border border-border p-2">
+    <p><Link to={`/library/${outcome.gameId}`} className="text-primary underline">{outcome.title}</Link><span className="ml-2 text-xs text-muted-foreground">{statusLabels[outcome.status]}</span></p>
+    <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{outcome.message}</p>
+  </li>;
+
   return <div className="mt-5 space-y-3 border-t border-border pt-4">
     <h3 className="text-sm font-semibold">一键资料焕新</h3>
     <p className="text-sm leading-relaxed text-muted-foreground">按当前启用的数据源、默认源和标题语言设置，重新获取游戏库中已有作品的资料；简介按当前中文简介优先设置获取。</p>
@@ -104,11 +122,17 @@ export function MetadataRefreshPanel() {
       </div>
       <progress aria-label="资料刷新进度" max={Math.max(1, state.total)} value={state.processed} className="h-2 w-full accent-primary" />
       {state.backupPath && <p className="break-all text-xs text-muted-foreground">本次资料库备份：<span className="select-text">{state.backupPath}</span></p>}
-      {state.needsReview > 0 && <p className="text-xs text-muted-foreground">待确认也可能包含资料已更新、Bangumi ID 仍待匹配的作品。</p>}
-      {unresolved.length > 0 && <details open className="text-sm"><summary className="cursor-pointer font-medium">待处理与跳过详情（{unresolved.length}）</summary><ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">{unresolved.map((outcome, index) => <li key={`${outcome.gameId}-${index}`} className="rounded-md border border-border p-2">
-        <p><Link to={`/library/${outcome.gameId}`} className="text-primary underline">{outcome.title}</Link><span className="ml-2 text-xs text-muted-foreground">{outcome.status === 'needsAuthorization' ? '需配置令牌' : outcome.status === 'needsReview' ? '待确认' : outcome.status === 'failed' ? '失败' : '已跳过'}</span></p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{outcome.message}</p>
-      </li>)}</ul></details>}
+      {pendingReview.length > 0 && <details open className="text-sm">
+        <summary className="cursor-pointer font-medium">待确认（{pendingReview.length}）</summary>
+        <p className="mt-2 text-xs text-muted-foreground">待确认也可能包含资料已更新、Bangumi ID 仍待匹配的作品。</p>
+        <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">{pendingReview.map(outcomeItem)}</ul>
+      </details>}
+      {failedItems.length > 0 && <details open className="text-sm">
+        <summary className="cursor-pointer font-medium">失败（{failedItems.length}）</summary>
+        <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">{failedItems.map(outcomeItem)}</ul>
+      </details>}
+      {skippedItems.length > 0 && <p className="text-xs text-muted-foreground">另有 {skippedItems.length} 款作品已跳过：资料源没有可更新的内容，或作品已被移除。</p>}
+      {outcomes.length > 0 && pendingReview.length === 0 && failedItems.length === 0 && skippedItems.length === 0 && <p className="text-xs text-muted-foreground">本次刷新没有待处理项。</p>}
     </div>}
     {active && <p className="text-xs leading-relaxed text-muted-foreground">离开设置页后任务仍会继续。停止会等待当前网络请求结束，在下一次改写前停止；已经应用的资料不会撤回。</p>}
     {(error || state?.error) && <div role="alert" className="space-y-2 text-sm text-destructive"><p className="whitespace-pre-wrap break-words">{error || state?.error}</p>{!active && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setRetry(value => value + 1)}>重新读取任务状态</Button>}</div>}

@@ -46,6 +46,9 @@ struct Subject {
     tags: Vec<Tag>,
     #[serde(default)]
     infobox: Vec<Infobox>,
+    /// Adults-only flag; drives the forced cover blur in the shared library.
+    #[serde(default)]
+    nsfw: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,6 +387,7 @@ pub async fn detail(id: &str) -> super::CmdResult<MetadataDetail> {
         tags: super::merge::dedupe_tags(tags.into_iter().map(|(name, _)| name)),
         vndb_id: None,
         bangumi_id: Some(subject.id.to_string()),
+        nsfw: subject.nsfw,
         attribution: Some("Bangumi".to_string()),
     })
 }
@@ -472,6 +476,7 @@ mod tests {
             rating: None,
             tags: vec![],
             infobox: vec![],
+            nsfw: None,
         };
         assert_eq!(best_title(&with_cn), "克兰纳德");
 
@@ -485,6 +490,7 @@ mod tests {
             rating: None,
             tags: vec![],
             infobox: vec![],
+            nsfw: None,
         };
         assert_eq!(best_title(&without_cn), "CLANNAD");
     }

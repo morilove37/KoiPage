@@ -95,6 +95,11 @@ pub fn merge_into(primary: &mut MetadataDetail, secondary: MetadataDetail) {
     if primary.bangumi_id.is_none() {
         primary.bangumi_id = secondary.bangumi_id.clone();
     }
+    // Age rating is a provider-wide fact, not a user preference: any source that
+    // knows the game is adults-only should be able to force censorship on.
+    if primary.nsfw.is_none() || secondary.nsfw == Some(true) {
+        primary.nsfw = secondary.nsfw;
+    }
 
     // Ratings: keep every source, then let the preference order decide.
     primary.ratings.extend(secondary.ratings);
@@ -161,6 +166,19 @@ fn some_attribution(a: &Option<String>, b: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn age_flag_reaches_a_primary_that_has_no_answer_of_its_own() {
+        use super::super::Provider;
+        let mut primary = MetadataDetail { provider: Some(Provider::Vndb), ..Default::default() };
+        merge_into(&mut primary, MetadataDetail { provider: Some(Provider::Bangumi), nsfw: Some(true), ..Default::default() });
+        assert_eq!(primary.nsfw, Some(true));
+
+        // Any provider's adult evidence takes precedence over safe answers.
+        let mut known_safe = MetadataDetail { nsfw: Some(false), ..Default::default() };
+        merge_into(&mut known_safe, MetadataDetail { nsfw: Some(true), ..Default::default() });
+        assert_eq!(known_safe.nsfw, Some(true));
+    }
 
     #[test]
     fn merge_keeps_all_nonempty_intro_choices_even_when_not_selected() {

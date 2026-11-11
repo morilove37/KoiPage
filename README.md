@@ -122,6 +122,8 @@
 
 ## 使用文档与开发
 
+[隐私政策](docs/legal/privacy-policy.md) · [好友内测服务协议](docs/legal/friends-terms.md) · [个人信息出境告知](docs/legal/cross-border.md) · [第三方服务清单](docs/legal/third-party-services.md)。好友账号注册前需主动同意当前版本协议、隐私政策，并单独同意已告知的出境处理；不注册仍可使用本地管理。好友账号可在「设置 → 账号注销」自助注销并删除服务器数据（不可恢复），本机游戏库、存档与资料不受影响；未部署该功能的版本或特殊情况可通过 `3375482795@qq.com` 申请。
+
 [转区启动](docs/locale-emulator.md) · [Magpie 窗口缩放](docs/magpie.md) · [Luna 游戏翻译](docs/luna-translator.md) · [压缩包解压](docs/archive-import.md) · [标签汉化](docs/localization.md)
 
 技术栈：**Tauri 2 · Rust · React · TypeScript · Vite · Tailwind CSS · SQLite**。

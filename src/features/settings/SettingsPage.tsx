@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { open, save } from '@tauri-apps/plugin-dialog';
 
 import {
@@ -28,12 +29,15 @@ import {
   scanRootsList,
   scanRootUpdate,
   settingsGet,
+  settingsGetAll,
   settingsSet,
   syncAssetScope,
 } from '@/lib/db';
+import { COVER_SETTING_PREFIX, parseCoverPreferences } from '@/features/covers/model';
 import type { ScanRoot } from '@/types/game';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
+import { LegalDocuments } from '@/features/legal/LegalDocuments';
 import { loadLocalizationPreference, OFFLINE_TAG_COUNT, setLocalizationEnabled, useLocalizationStore } from '@/lib/localization';
 import {
   TITLE_LANGUAGE_KEY,
@@ -79,6 +83,11 @@ import {
 } from '@/lib/backdrop';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select } from '@/components/ui/select';
+import { ConfirmDialog } from '@/components/ui/dialog';
+import { CoverImage } from '@/components/ui/cover-image';
+import { friendsCoverStatus, friendsDeleteAccount, friendsResumeDeletion, friendsStatus } from '@/features/friends/api';
+import { useFriendsStore } from '@/features/friends/store';
+import type { Account, CoverStatus } from '@/features/friends/types';
 import { GithubProfileLink } from '@/components/ui/github-profile-link';
 import { UpdateSettings } from '@/features/updates/UpdateSettings';
 import { AnnouncementSettings } from '@/features/announcements/AnnouncementSettings';
@@ -113,7 +122,8 @@ function Section({
   description,
   children,
 }: {
-  id: SettingsSectionId;
+  /** Nav literals keep autocomplete; the extra sections are not listed in the nav yet. */
+  id: SettingsSectionId | (string & {});
   title: string;
   description?: string;
   children: React.ReactNode;
@@ -1139,6 +1149,190 @@ function MetadataSection() {
 }
 
 // ---------------------------------------------------------------------------
+// 公开游戏库 — custom-cover verification (design item 3)
+// ---------------------------------------------------------------------------
+
+/** Cloud cover review is disabled; custom-cover works remain private. */
+function PublicLibrarySection() {
+  const [covers, setCovers] = useState<CoverStatus[] | null>(null);
+  const [coverPaths, setCoverPaths] = useState<Record<number, string | null>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError(null);
+    void Promise.all([friendsCoverStatus(), settingsGetAll()])
+      .then(([list, settings]) => {
+        if (!alive) return;
+        setCovers(list);
+        const paths: Record<number, string | null> = {};
+        for (const setting of settings) {
+          if (!setting.key.startsWith(COVER_SETTING_PREFIX)) continue;
+          const gameId = Number(setting.key.slice(COVER_SETTING_PREFIX.length));
+          if (Number.isInteger(gameId)) paths[gameId] = parseCoverPreferences(setting.value).customPath;
+        }
+        setCoverPaths(paths);
+      })
+      .catch(cause => { if (alive) setError(errorMessage(cause)); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [attempt]);
+  const custom = (covers ?? []).filter(cover => cover.customCover);
+  const labels: Record<CoverStatus['reviewStatus'], string> = {
+    disabled: '云端封面审核未启用，该作品暂不公开',
+    offline: '暂未取得公开状态，该作品暂不公开',
+    unavailable: '暂时无法读取公开状态，该作品暂不公开',
+    notSubmitted: '未提交封面，该作品暂不公开',
+    pending: '封面待审核，该作品暂不公开',
+    approved: '当前版本未启用云端封面审核，该作品暂不公开',
+    rejected: '封面未通过审核，该作品暂不公开',
+  };
+  return <Section id="settings-public-library" title="公开游戏库" description="当前版本未启用云端封面审核。使用自定义封面的作品暂不展示给好友。">
+    <p className="text-sm leading-relaxed text-muted-foreground">来源封面可随公开游戏库分享；NSFW 或分级未知的来源封面会自动打码。使用自定义封面的作品暂不公开，恢复来源封面后可按分享设置同步。</p>
+    <div className="mt-3"><Button disabled={loading} onClick={() => setAttempt(value => value + 1)}>{loading ? '正在读取封面状态…' : '刷新封面状态'}</Button></div>
+    {error ? <Status tone="error">无法读取封面状态：{error}</Status> : null}
+    {!loading && !error && custom.length === 0 ? <Status tone="info">没有使用自定义封面的作品。</Status> : null}
+    {custom.length > 0 ? <ul className="mt-3 max-h-96 space-y-2 overflow-y-auto">
+      {custom.map(cover => <li key={cover.gameId} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2">
+        <div className="h-16 w-12 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={cover.gameId} path={coverPaths[cover.gameId] ?? null} alt={cover.title} className="h-full w-full object-cover" fallbackText="" /></div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{cover.title}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{labels[cover.reviewStatus]}</p>
+          {cover.nsfw ? <p className="mt-1 text-xs text-muted-foreground">NSFW 或分级未知；恢复来源封面并公开时会自动打码。</p> : null}
+        </div>
+        <Link to={`/library/${cover.gameId}`} className="text-xs text-primary hover:underline">查看作品</Link>
+      </li>)}
+    </ul> : null}
+    <p className="mt-3 text-xs leading-relaxed text-muted-foreground">本机封面偏好无法授予公开权限。私人游戏库仍可正常使用自定义封面、打码和裁剪设置。</p>
+  </Section>;
+}
+
+// ---------------------------------------------------------------------------
+// 账号注销 — irreversible account deletion (design item 15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Two-step destructive flow: type the account's own `@username`, then confirm
+ * in a destructive ConfirmDialog. On success the cached frontend identity is
+ * dropped (`useFriendsStore.invalidate()`); a failed call surfaces the backend
+ * error and never claims success.
+ */
+function AccountDeletionSection() {
+  const [account, setAccount] = useState<Account | null>(null);
+  const [deletionPending, setDeletionPending] = useState(false);
+  const [resumePassword, setResumePassword] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [typed, setTyped] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoaded(false);
+    setLoadError(null);
+    void friendsStatus()
+      .then(status => { if (alive) { setAccount(status.account); setDeletionPending(status.deletionPending === true); } })
+      .catch(cause => { if (alive) setLoadError(errorMessage(cause)); })
+      .finally(() => { if (alive) setLoaded(true); });
+    return () => { alive = false; };
+  }, [reload]);
+
+  const required = account ? `@${account.username}` : '';
+  const matches = account !== null && typed.trim() === required;
+
+  async function removeAccount(reauthenticate = false) {
+    if ((!account && !deletionPending) || busy) return;
+    setBusy(true);
+    setDeleteError(null);
+    setSuccess(null);
+    try {
+      if (reauthenticate && account) await friendsResumeDeletion(resumePassword, account.id);
+      else await friendsDeleteAccount(account?.id);
+      useFriendsStore.getState().invalidate();
+      setAccount(null);
+      setDeletionPending(false);
+      setTyped('');
+      setConfirming(false);
+      setSuccess('账号已注销，本机登录状态已清除。本机游戏库、存档与资料未受影响。');
+    } catch (cause) {
+      setConfirming(false);
+      setDeleteError(`注销失败：${errorMessage(cause)}`);
+      try { setDeletionPending((await friendsStatus()).deletionPending === true); } catch { /* Keep the existing pending state. */ }
+    } finally {
+      setResumePassword('');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section
+      id="settings-account"
+      title="账号注销"
+      description="永久删除好友账号及其服务器数据，此操作不可恢复。"
+    >
+      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+        <p className="text-sm font-medium text-destructive">危险操作</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          注销会立即删除你的账号，以及好友关系、待处理请求、公开游戏库同步数据和最近游玩记录同步数据。服务器数据删除后无法恢复，也无法用同一账号重新登录找回。本机游戏库、存档和资料不会被删除。
+        </p>
+      </div>
+      {!loaded ? <Status tone="info">正在读取账号状态…</Status> : null}
+      {loadError ? <div className="mt-3 space-y-2">
+        <Status tone="error">无法读取账号状态：{loadError}</Status>
+        <Button onClick={() => setReload(value => value + 1)}>重新读取</Button>
+      </div> : null}
+      {loaded && !loadError && !account && !success && !deletionPending ? <Status tone="info">当前未登录好友账号。请先在「好友」页登录，再回来注销。</Status> : null}
+      {deletionPending ? <div className="mt-3 space-y-2">
+        <Status tone="info">上次注销结果尚待确认，好友同步已暂停，登录凭据已保留。请重试确认；只有服务器确认认证账号已删除后才会显示完成。</Status>
+        <Button disabled={busy} onClick={() => void removeAccount()}>{busy ? '正在确认…' : '重试并确认注销结果'}</Button>
+        {account ? <details className="rounded-md border border-border p-3"><summary className="cursor-pointer text-sm">原登录会话已失效？验证原账号后继续注销</summary>
+          <p className="mt-2 text-xs text-muted-foreground">仅验证 @{account.username}，不会切换注销对象。</p>
+          <input type="password" autoComplete="current-password" aria-label="原注销账号的密码" value={resumePassword} disabled={busy} onChange={event => setResumePassword(event.target.value)} className="mt-2 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"/>
+          <div className="mt-2"><Button disabled={busy || resumePassword.length < 12} onClick={() => void removeAccount(true)}>验证原账号并继续注销</Button></div>
+        </details> : null}
+      </div> : null}
+      {account && !deletionPending ? <div className="mt-3 space-y-2">
+        <p className="text-sm">当前账号：<span className="font-medium">{required}</span>{account.nickname && account.nickname !== account.username ? `（${account.nickname}）` : ''}</p>
+        <label className="block text-sm" htmlFor="account-delete-confirm">
+          <span className="text-xs text-muted-foreground">输入 <span className="select-text font-medium text-foreground">{required}</span> 以确认注销</span>
+          <input
+            id="account-delete-confirm"
+            value={typed}
+            disabled={busy}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={required}
+            onChange={event => setTyped(event.target.value)}
+            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          />
+        </label>
+        <Button variant="danger" disabled={!matches || busy} onClick={() => setConfirming(true)}>注销账号</Button>
+      </div> : null}
+      {deleteError ? <Status tone="error">{deleteError}</Status> : null}
+      {success ? <Status tone="ok">{success}</Status> : null}
+      <ConfirmDialog
+        open={confirming}
+        title="确认注销账号？"
+        confirmText="永久注销账号"
+        destructive
+        busy={busy}
+        description={<div className="space-y-2 text-sm">
+          <p>将删除账号 <span className="select-text font-medium">{required}</span>，以及好友关系、公开游戏库和游玩记录同步数据。</p>
+          <p>此操作不可恢复，也无法找回。本机游戏库、存档与资料不受影响。</p>
+        </div>}
+        onCancel={() => { if (!busy) setConfirming(false); }}
+        onConfirm={() => void removeAccount()}
+      />
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -1171,6 +1365,7 @@ export default function SettingsPage() {
           <BirthdayReminderSettings />
         </Section>
         <DataSection />
+        <PublicLibrarySection />
         <Section id="settings-paths" title="游戏路径" description="检查离线或缺失的游戏，并在搬盘后批量修复路径。">
           <PathRepairPanel />
         </Section>
@@ -1180,6 +1375,7 @@ export default function SettingsPage() {
         <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
           <AnnouncementSettings />
         </Section>
+        <AccountDeletionSection />
         <Section id="settings-about" title="关于恋页">
           <div className="flex items-center gap-4">
             <img src={BRAND.icon} alt="恋页应用图标" width={64} height={64} className="h-16 w-16 shrink-0" />
@@ -1191,6 +1387,7 @@ export default function SettingsPage() {
             </div>
           </div>
           <UpdateSettings />
+          <div className="mt-4 space-y-2"><p className="text-sm font-medium">协议与隐私</p><LegalDocuments/></div>
           <p className="mt-4 text-xs text-muted-foreground">开源协议：GNU GPL v3（GPL-3.0-only）。第三方工具、角色与资料遵循各自的许可声明。</p>
           <AnnouncementContact />
         </Section>

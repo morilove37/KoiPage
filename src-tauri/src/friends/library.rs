@@ -26,6 +26,29 @@ pub struct Source {
     bangumi_id: Option<String>,
     cover_path: Option<String>,
     cover_preferences: Option<String>,
+    /// Effective provider/manual classification; unknown games are censored.
+    nsfw: bool,
+}
+
+impl Source {
+    fn cover_preferences(&self) -> serde_json::Value {
+        preferences(&self.cover_preferences)
+    }
+    /// A hand-picked cover exists (verified or not).
+    fn custom_cover(&self) -> bool {
+        custom_path(&self.cover_preferences()).is_some()
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverStatus {
+    pub game_id: i64,
+    pub title: String,
+    pub nsfw: bool,
+    pub custom_cover: bool,
+    pub verified: bool,
+    pub review_status: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -41,10 +64,29 @@ pub struct Entry {
     vndb_id: Option<String>,
     bangumi_id: Option<String>,
     cover_url: Option<String>,
+    cover_kind: String,
+    nsfw: bool,
 }
 
 fn short(value: &str) -> String {
     value.trim().chars().take(200).collect()
+}
+/// Stable public key for one local game. Shared with history sync so friend
+/// history cards can join the same public library entry.
+pub(super) fn library_key(game_id: i64) -> String {
+    format!("{:x}", Sha256::digest(format!("library:{game_id}")))
+}
+fn preferences(raw: &Option<String>) -> serde_json::Value {
+    raw.as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+fn custom_path(value: &serde_json::Value) -> Option<String> {
+    value["customPath"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 fn project(source: &Source, cover: Option<String>) -> Option<Entry> {
     let title = short(&source.title);
@@ -66,7 +108,7 @@ fn project(source: &Source, cover: Option<String>) -> Option<Entry> {
         "unplayed".into()
     };
     Some(Entry {
-        key: format!("{:x}", Sha256::digest(format!("library:{}", source.id))),
+        key: library_key(source.id),
         title,
         original_title: source
             .original_title
@@ -98,6 +140,13 @@ fn project(source: &Source, cover: Option<String>) -> Option<Entry> {
             .filter(|s| (1..=12).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit()))
             .cloned(),
         cover_url: cover,
+        cover_kind: if source.custom_cover() {
+            "custom"
+        } else {
+            "source"
+        }
+        .into(),
+        nsfw: source.nsfw,
     })
 }
 fn thumbnail_with_options(
@@ -157,18 +206,10 @@ fn thumbnail_with_options(
 }
 
 fn cover_choice(source: &Source) -> (Option<String>, bool, Option<serde_json::Value>) {
-    let value: serde_json::Value = source
-        .cover_preferences
-        .as_deref()
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_default();
-    let path = value["customPath"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| source.cover_path.clone());
-    let censored = value["censored"] == true;
+    let value = source.cover_preferences();
+    let path = custom_path(&value).or_else(|| source.cover_path.clone());
+    // The NSFW flag is a hard mask: a user cannot turn it off through preferences.
+    let censored = value["censored"] == true || source.nsfw;
     let crop = value
         .get("crop")
         .filter(|crop| {
@@ -234,6 +275,13 @@ fn prepare_entries(
         .into_iter()
         .filter(|source| !hidden.contains(&source.id))
     {
+        // Cloud review is deliberately disabled in this release. Withhold the
+        // whole custom-cover work before reading images or reusing cached entries;
+        // local "verified" preferences cannot authorize public sharing.
+        // TODO: only submit candidates after server quarantine/review is enabled.
+        if source.custom_cover() {
+            continue;
+        }
         if entries.len() >= 10000 {
             return Err(CmdError(
                 "FRIENDS_INPUT: 最多可分享 10000 部作品，请隐藏部分作品后重试".into(),
@@ -289,7 +337,57 @@ fn current(inner: &runtime::Inner, generation: u64, id: &str) -> bool {
 }
 
 async fn load_sources(db: &sqlx::SqlitePool) -> CmdResult<Vec<Source>> {
-    Ok(sqlx::query_as::<_, Source>("SELECT g.id,g.title,g.original_title,g.developer,g.status,CAST(g.rating AS REAL) AS rating,g.play_time_seconds,g.vndb_id,g.bangumi_id,g.cover_path,s.value AS cover_preferences FROM games g LEFT JOIN settings s ON s.key='game_cover:'||g.id ORDER BY g.id").fetch_all(db).await?)
+    Ok(sqlx::query_as::<_, Source>("SELECT g.id,g.title,g.original_title,g.developer,g.status,CAST(g.rating AS REAL) AS rating,g.play_time_seconds,g.vndb_id,g.bangumi_id,g.cover_path,s.value AS cover_preferences,CASE WHEN p.value='0' AND COALESCE(n.value,'0')='0' THEN 0 ELSE 1 END AS nsfw FROM games g LEFT JOIN settings s ON s.key='game_cover:'||g.id LEFT JOIN settings n ON n.key='game_nsfw:'||g.id LEFT JOIN settings p ON p.key='game_nsfw_source:'||g.id ORDER BY g.id").fetch_all(db).await?)
+}
+
+fn cover_status_row(
+    game_id: i64,
+    title: &str,
+    nsfw: Option<&str>,
+    cover: Option<&str>,
+) -> Option<CoverStatus> {
+    let raw = cover.map(str::to_string);
+    let value = preferences(&raw);
+    let custom = custom_path(&value).is_some();
+    let nsfw = nsfw == Some("1");
+    (nsfw || custom).then(|| CoverStatus {
+        game_id,
+        title: title.trim().to_string(),
+        nsfw,
+        custom_cover: custom,
+        verified: false,
+        review_status: "disabled".into(),
+    })
+}
+
+pub(super) async fn cover_status(app: &AppHandle) -> CmdResult<Vec<CoverStatus>> {
+    let db = crate::commands::games::pool(app).await?;
+    let rows: Vec<_> = load_sources(&db)
+        .await?
+        .into_iter()
+        .filter_map(|source| {
+            cover_status_row(
+                source.id,
+                &source.title,
+                Some(if source.nsfw { "1" } else { "0" }),
+                source.cover_preferences.as_deref(),
+            )
+        })
+        .collect();
+    // Read-only local status: review interfaces are not deployed. Do not sync
+    // candidates or query any deferred cloud review RPC from this settings view.
+    Ok(rows)
+}
+
+pub(super) async fn verify_cover(
+    _app: &AppHandle,
+    _game_id: i64,
+    _verified: bool,
+) -> CmdResult<serde_json::Value> {
+    Err(CmdError(
+        "FRIENDS_INPUT: 当前版本未启用云端封面审核，自定义封面作品暂不公开，无法在本机确认通过。"
+            .into(),
+    ))
 }
 
 async fn synchronize(
@@ -492,6 +590,28 @@ mod tests {
         let rows = load_sources(&db).await.unwrap();
         assert_eq!(rows[0].rating, Some(0.0));
         assert_eq!(rows[1].rating, Some(8.73));
+        assert!(
+            rows.iter().all(|row| row.nsfw),
+            "unknown classification must be masked"
+        );
+        sqlx::query("INSERT INTO settings VALUES('game_nsfw:1','0'),('game_nsfw_source:1','1'),('game_nsfw_source:2','0')").execute(&db).await.unwrap();
+        let classified = load_sources(&db).await.unwrap();
+        assert!(
+            classified[0].nsfw,
+            "manual safe cannot erase provider adult evidence"
+        );
+        assert!(
+            !classified[1].nsfw,
+            "provider safe can be displayed without manual override"
+        );
+        sqlx::query("DELETE FROM settings WHERE key='game_nsfw_source:1'")
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(
+            load_sources(&db).await.unwrap()[0].nsfw,
+            "manual safe alone is not provider evidence"
+        );
         assert_eq!(
             rows[0].cover_preferences.as_deref(),
             Some("{\"censored\":true}")
@@ -552,7 +672,101 @@ mod tests {
             bangumi_id: Some("456".into()),
             cover_path: Some(r"C:\private\cover.png".into()),
             cover_preferences: None,
+            nsfw: false,
         }
+    }
+
+    #[test]
+    fn library_keys_are_stable_and_shared_with_history_sync() {
+        let key = library_key(7);
+        assert_eq!(key.len(), 64);
+        assert_eq!(key, library_key(7));
+        assert_eq!(project(&source(7), None).unwrap().key, key);
+    }
+
+    #[test]
+    fn nsfw_games_are_censored_even_without_any_saved_mask() {
+        let mut row = source(1);
+        assert!(!cover_choice(&row).1);
+        row.nsfw = true;
+        row.cover_preferences = Some(json!({"censored":false}).to_string());
+        assert!(
+            cover_choice(&row).1,
+            "the NSFW flag must force blur 12.0 regardless of preferences"
+        );
+    }
+
+    #[test]
+    fn custom_cover_works_are_withheld_while_cloud_review_is_disabled() {
+        let config = Config {
+            share_library: true,
+            ..Config::default()
+        };
+        let mut unverified = source(1);
+        unverified.cover_preferences =
+            Some(json!({"customPath":"C:/custom/one.png","censored":true}).to_string());
+        let mut verified = source(2);
+        verified.cover_preferences =
+            Some(json!({"customPath":"C:/custom/two.png","verified":true}).to_string());
+        let entries = prepare_entries(
+            &config,
+            vec![unverified, verified, source(3)],
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
+        assert!(!entries.contains_key(&1));
+        assert!(!entries.contains_key(&2));
+        assert!(entries.contains_key(&3));
+    }
+
+    #[test]
+    fn cover_status_cannot_trust_local_self_approval() {
+        assert!(cover_status_row(1, "A", Some("1"), None).unwrap().nsfw);
+        let custom = cover_status_row(
+            2,
+            " B ",
+            None,
+            Some(r#"{"customPath":"C:/x.png","censored":true}"#),
+        )
+        .unwrap();
+        assert!(custom.custom_cover && !custom.verified && !custom.nsfw);
+        assert_eq!(custom.review_status, "disabled");
+        assert_eq!(custom.title, "B");
+        assert!(
+            !cover_status_row(
+                3,
+                "C",
+                None,
+                Some(r#"{"customPath":"C:/x.png","verified":true}"#)
+            )
+            .unwrap()
+            .verified
+        );
+        assert!(cover_status_row(4, "D", None, None).is_none());
+        assert!(cover_status_row(5, "E", Some("0"), Some("{}")).is_none());
+    }
+
+    #[test]
+    fn withholding_custom_cover_does_not_change_private_preferences_or_reuse_cached_public_work() {
+        let mut row = source(1);
+        row.cover_preferences = Some(json!({"customPath":"C:/private.png","verified":true,
+            "censored":true,"crop":{"path":"C:/private.png","x":0.1,"y":0.1,"width":0.5,"height":0.5}}).to_string());
+        let original = row.cover_preferences.clone();
+        let cached = HashMap::from([(
+            1,
+            (
+                "old".into(),
+                project(&row, Some("old-public-cover".into())).unwrap(),
+            ),
+        )]);
+        let entries = prepare_entries(&Config::default(), vec![row.clone()], &cached, &[]).unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(row.cover_preferences, original);
+        let (path, censored, crop) = cover_choice(&row);
+        assert_eq!(path.as_deref(), Some("C:/private.png"));
+        assert!(censored && crop.is_some());
+        assert!(row.cover_preferences()["verified"].as_bool().unwrap());
     }
     #[test]
     fn library_projection_preserves_zero_score_and_total_time_without_local_paths() {
@@ -563,7 +777,9 @@ mod tests {
         assert_eq!(value["playTimeSeconds"], 7200);
         assert_eq!(value["status"], "completed");
         assert_eq!(value["key"].as_str().unwrap().len(), 64);
-        assert_eq!(value.as_object().unwrap().len(), 10);
+        assert_eq!(value.as_object().unwrap().len(), 12);
+        assert_eq!(value["coverKind"], "source");
+        assert_eq!(value["nsfw"], false);
         assert!(!value.to_string().contains("private"));
         let mut invalid = source(1);
         invalid.title = "  ".into();

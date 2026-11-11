@@ -143,6 +143,11 @@ pub struct MetadataDetail {
     /// External ids we learned, so they can be stored on the game row.
     pub vndb_id: Option<String>,
     pub bangumi_id: Option<String>,
+    /// Upstream content-safety evidence. `None` is unknown, not an all-ages
+    /// answer. Stored separately from manual flags as `game_nsfw_source:<id>`;
+    /// adult evidence from any source must never be weakened by a safe answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nsfw: Option<bool>,
     /// Attribution string the provider requires us to display.
     pub attribution: Option<String>,
 }

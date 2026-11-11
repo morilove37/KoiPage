@@ -138,6 +138,14 @@ pub fn run() {
             friends::friends_action,
             friends::friends_preferences,
             friends::friends_change_password,
+            friends::friends_search_users,
+            friends::friends_request_user,
+            friends::friends_report,
+            friends::friends_history,
+            friends::friends_delete_account,
+            friends::friends_resume_deletion,
+            friends::friends_cover_status,
+            friends::friends_verify_cover,
             logging::logs_info,
             logging::logs_write,
             logging::logs_export,
@@ -262,6 +270,7 @@ pub fn run() {
             commands::window::app_hide_to_tray,
             commands::window::app_quit,
             commands::window::manager_running_count,
+            commands::window::app_set_fullscreen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

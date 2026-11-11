@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -64,6 +65,11 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings", label: "设置", icon: "settings" },
 ];
 
+/** Nested friend routes (including `/friends/me`) highlight the 好友 tab. */
+function isNavActive(item: NavItem, pathname: string): boolean {
+  return item.prefix ? pathname.startsWith(item.to) : pathname === item.to;
+}
+
 function PageFallback() {
   return (
     <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -77,9 +83,30 @@ export default function App() {
   const { pathname } = useLocation();
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
-  const activeNavIndex = Math.max(0, NAV_ITEMS.findIndex(item =>
-    item.prefix ? pathname.startsWith(item.to) : pathname === item.to,
-  ));
+  const [fullscreen, setFullscreen] = useState(false);
+  const toggleFullscreen = useCallback(async () => {
+    const next = !fullscreen;
+    try {
+      const applied = await invoke<boolean>("app_set_fullscreen", { fullscreen: next });
+      setFullscreen(applied);
+    } catch (cause) {
+      console.warn("[fullscreen] toggle failed:", cause);
+    }
+  }, [fullscreen]);
+  useEffect(() => {
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "F11") {
+        event.preventDefault();
+        void toggleFullscreen();
+      } else if (event.key === "Escape" && fullscreen) {
+        event.preventDefault();
+        void toggleFullscreen();
+      }
+    };
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
+  }, [fullscreen, toggleFullscreen]);
+  const activeNavIndex = Math.max(0, NAV_ITEMS.findIndex(item => isNavActive(item, pathname)));
 
   useEffect(() => {
     let alive = true;
@@ -165,15 +192,12 @@ export default function App() {
             <NavLink
               key={item.to}
               to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  "relative z-10 flex h-9 shrink-0 items-center gap-2.5 rounded-md px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  isActive ||
-                    (item.prefix && pathname.startsWith(item.to))
-                    ? "text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )
-              }
+              className={cn(
+                "relative z-10 flex h-9 shrink-0 items-center gap-2.5 rounded-md px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isNavActive(item, pathname)
+                  ? "text-primary-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
             >
               <GeometryIcon name={item.icon} />
               <span>{item.label}</span>
@@ -183,6 +207,20 @@ export default function App() {
         </nav>
 
         <div className="flex min-w-0 items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => void toggleFullscreen()}
+            title={fullscreen ? "退出全屏（Esc / F11）" : "全屏（F11）"}
+            aria-label={fullscreen ? "退出全屏" : "全屏"}
+            aria-pressed={fullscreen}
+            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              {fullscreen
+                ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+                : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+            </svg>
+          </button>
           <span className="shrink-0">v{BRAND.version}</span>
           <span aria-hidden="true">·</span>
           <GithubProfileLink className="truncate text-muted-foreground transition-colors hover:text-primary" />
@@ -210,6 +248,7 @@ export default function App() {
               <Route path="/tools" element={<ToolsPage />} />
               <Route path="/tags" element={<TagsPage />} />
               <Route path="/friends" element={<FriendsPage />} />
+              <Route path="/friends/me" element={<FriendProfilePage />} />
               <Route path="/friends/:id" element={<FriendProfilePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/home" replace />} />
