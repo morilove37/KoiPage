@@ -131,7 +131,6 @@ pub fn run() {
             friends::friends_library_games,
             friends::friends_profile,
             friends::friends_sync_library,
-            friends::friends_configure,
             friends::friends_authenticate,
             friends::friends_logout,
             friends::friends_snapshot,

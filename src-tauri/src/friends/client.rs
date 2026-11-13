@@ -8,14 +8,25 @@ pub struct Api {
     http: Client,
     config: Config,
 }
+fn retryable_query(method: &Method, path: &str) -> bool {
+    (*method == Method::GET && path == "/auth/v1/user")
+        || (*method == Method::POST && matches!(path,
+            "/rest/v1/rpc/koipage_snapshot" | "/rest/v1/rpc/koipage_search_users"
+            | "/rest/v1/rpc/koipage_friend_profile" | "/rest/v1/rpc/koipage_friend_history"
+            | "/rest/v1/rpc/koipage_friend_history_covers"))
+}
 impl Api {
     pub fn new(config: &Config) -> CmdResult<Self> {
+        let mut builder = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::none());
+        if config.server_url.trim_end_matches('/') == Config::default().server_url {
+            builder = builder.no_proxy();
+        }
         Ok(Self {
             config: config.clone(),
-            http: Client::builder()
-                .timeout(Duration::from_secs(8))
-                .connect_timeout(Duration::from_secs(5))
-                .redirect(reqwest::redirect::Policy::none())
+            http: builder
                 .build()
                 .map_err(|_| CmdError("FRIENDS_NETWORK: 无法建立连接".into()))?,
         })
@@ -27,6 +38,7 @@ impl Api {
         token: Option<&str>,
         body: Value,
     ) -> CmdResult<Value> {
+        let may_retry = retryable_query(&method, path);
         let mut request = self
             .http
             .request(method, format!("{}{path}", self.config.server_url))
@@ -35,10 +47,21 @@ impl Api {
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }
-        let mut response = request
-            .json(&body)
-            .send()
-            .await
+        let request = request.json(&body);
+        let retry = if may_retry { request.try_clone() } else { None };
+        let result = request.send().await;
+        let mut response = match (result, retry) {
+            (Err(error), Some(retry)) if error.is_connect() || error.is_timeout() => {
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                retry.send().await
+            }
+            (Ok(response), Some(retry)) if matches!(response.status().as_u16(), 502 | 503 | 504) => {
+                drop(response);
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                retry.send().await
+            }
+            (result, _) => result,
+        }
             .map_err(|_| CmdError("FRIENDS_NETWORK: 无法连接内测服务，请稍后重试".into()))?;
         let status = response.status();
         let mut bytes = Vec::new();

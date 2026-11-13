@@ -166,10 +166,7 @@ pub(super) async fn remove(app: &AppHandle, expected_account: Option<&str>) -> C
         return Err(error);
     }
     let server = inner.config.server_url.clone();
-    inner.config.enabled = false;
-    inner.config.share_game = false;
-    inner.config.share_library = false;
-    inner.config.share_history = false;
+    inner.config = Config::default();
     // Even if local persistence fails, the opaque receipt remains available for
     // another confirmation attempt. The server's completed deletion is final.
     let _ = runtime::save(app, &inner.config).await;

@@ -29,7 +29,6 @@ export const friendsStatus=()=>call<FriendsStatus>('friends_status');
 export const friendsLibraryGames=()=>call<HideableGame[]>('friends_library_games');
 export const friendsProfile=({target,query,status,offset}:ProfileFilters)=>call<FriendProfile>('friends_profile',{target,query,status,offset});
 export const friendsSyncLibrary=()=>call<FriendsStatus>('friends_sync_library');
-export const configureFriends=(serverUrl:string,publicKey:string)=>call<FriendsStatus>('friends_configure',{input:{serverUrl,publicKey}});
 export const authenticateFriends=(input:{mode:'login'|'register'|'reset';username:string;password:string;nickname?:string;inviteCode?:string;resetCode?:string;consent?:RegistrationConsentValue})=>call<FriendsStatus>('friends_authenticate',{input});
 export const logoutFriends=()=>call<FriendsStatus>('friends_logout');
 export const friendsSnapshot=(revision:string|null)=>call<Snapshot>('friends_snapshot',{revision});

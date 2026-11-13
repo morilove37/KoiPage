@@ -16,12 +16,6 @@ use tauri::{AppHandle, Manager};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectInput {
-    server_url: String,
-    public_key: String,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AuthInput {
     mode: String,
     username: String,
@@ -71,41 +65,6 @@ pub async fn friends_library_games(app: AppHandle) -> CmdResult<Vec<HideableGame
 pub async fn friends_status(app: AppHandle) -> CmdResult<Status> {
     runtime::ensure(&app).await;
     Ok(app.state::<FriendsState>().inner.lock().await.status())
-}
-#[tauri::command]
-pub async fn friends_configure(app: AppHandle, input: ProjectInput) -> CmdResult<Status> {
-    let address = validate_project(&input.server_url, &input.public_key)?;
-    runtime::ensure(&app).await;
-    let state = app.state::<FriendsState>();
-    let mut inner = state.inner.lock().await;
-    inner.allow_account_change()?;
-    if inner.config.server_url != address || inner.config.public_key != input.public_key.trim() {
-        if inner.tokens.is_some() {
-            // Keep the old session/configuration if collection retraction fails.
-            library::retract_before_forgetting(&mut inner).await?;
-            let _ = runtime::rpc(&mut inner, "koipage_leave", json!({})).await;
-        }
-        credentials::delete(&inner.config.server_url)?;
-        let next = Config {
-            server_url: address,
-            public_key: input.public_key.trim().into(),
-            ..Config::default()
-        };
-        runtime::save(&app, &next).await?;
-        inner.config = next;
-        inner.tokens = None;
-        inner.account = None;
-        inner.connected = false;
-        inner.error = None;
-        inner.library_synced_at = None;
-        inner.library_error = None;
-        inner.history_synced_at = None;
-        inner.history_error = None;
-        inner.account_dirty = false;
-        inner.generation += 1;
-        runtime::clear_account(&app).await;
-    }
-    Ok(inner.status())
 }
 #[tauri::command]
 pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult<Status> {

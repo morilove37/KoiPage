@@ -11,7 +11,6 @@ import {errorMessage} from '@/features/io/io';
 import {BRAND} from '@/lib/brand';
 import {LegalDocuments} from '@/features/legal/LegalDocuments';
 import {RegistrationConsent} from '@/features/legal/RegistrationConsent';
-import defaultProject from '../../../src-tauri/src/friends/defaults.json';
 import {emptyRegistrationConsent,isRegistrationConsentValid,isPolicyService} from '@/features/legal/consent';
 import * as api from './api';
 import {createSnapshotController,elapsedSeconds,normalizePrivacy,sortFriends} from './model';
@@ -37,8 +36,6 @@ interface ReportTarget {id:string;username:string;nickname:string;gameKey:string
 export default function FriendsPage(){
   const status=useFriendsStore(s=>s.status),account=status?.account;
   const [view,setView]=useState<ViewSnapshot|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
-  const [serverUrl,setServerUrl]=useState(''),[publicKey,setPublicKey]=useState('');
-  const [connectionOpen,setConnectionOpen]=useState(false);
   const [mode,setMode]=useState<'login'|'register'|'reset'>('login'),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[inviteCode,setInviteCode]=useState(''),[resetCode,setResetCode]=useState('');
   const [registrationConsent,setRegistrationConsent]=useState(emptyRegistrationConsent);
   const [nickname,setNickname]=useState(''),[avatar,setAvatar]=useState(0),[newPassword,setNewPassword]=useState('');
@@ -52,7 +49,6 @@ export default function FriendsPage(){
   const refreshStatus=useCallback(async()=>{const state=useFriendsStore.getState(),epoch=state.epoch;const next=await api.friendsStatus();if(active.current)state.apply(next,epoch);return next;},[]);
   useEffect(()=>{active.current=true;void refreshStatus().catch(e=>{if(active.current)setError(errorMessage(e));});return()=>{active.current=false;};},[refreshStatus]);
   useEffect(()=>{let alive=true;setGames([]);if(account)void api.friendsLibraryGames().then(value=>{if(alive)setGames(value);}).catch(()=>{});return()=>{alive=false;};},[account?.id]);
-  useEffect(()=>{if(status){setServerUrl(status.config.serverUrl);setPublicKey(status.config.publicKey);}},[status?.config.serverUrl,status?.config.publicKey]);
   useEffect(()=>{setNickname(account?.nickname??'');setAvatar(avatarPreset(account?.avatar??0).id);},[account?.id,account?.nickname,account?.avatar]);
   useEffect(()=>{
     if(!account){setView(null);return;}
@@ -111,7 +107,7 @@ export default function FriendsPage(){
   const librarySynced=formatSyncTime(status?.librarySyncedAt),historySynced=formatSyncTime(status?.historySyncedAt);
   return <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">邀请内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">看看朋友正在推哪部作品。</p></div>
-      <div className="flex items-center gap-2"><Button size="sm" variant="ghost" disabled={status?.deletionPending} aria-expanded={connectionOpen} aria-controls="friends-service-connection" onClick={()=>setConnectionOpen(open=>!open)}>连接设置</Button>{account?<Button variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
+      <div className="flex items-center gap-2">{account?<Button variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
     {!account?<section aria-label="好友内测说明" className="rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm">
       <p className="font-medium">进群可参与好友内测邀请码抽取。</p>
       <p className="mt-1 text-xs leading-relaxed text-muted-foreground">好友功能仅供测试使用，后续版本可能移除。</p>
@@ -127,13 +123,7 @@ export default function FriendsPage(){
       <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={()=>void perform(api.friendsStatus)}>立即重试</Button>
     </section>:null}
     {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
-    {connectionOpen?<section id="friends-service-connection" className="rounded-lg border border-border bg-card p-4"><h2 className="text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</h2>
-      {config?.serverUrl.replace(/\/$/,'')==='https://cdzrpejirivzjrwsahew.supabase.co'?<div className="mt-3 space-y-2 text-xs leading-relaxed"><p>当前使用旧版直连地址。可以切换到 Cloudflare 网络入口，数据库仍保留在新加坡。切换会退出当前会话并恢复默认分享设置，重新登录前需要阅读新版告知并同意。</p><Button size="sm" variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(()=>api.configureFriends(defaultProject.serverUrl,defaultProject.publicKey),'已切换访问入口，请阅读新版告知并重新登录。',true)}>使用新的访问入口</Button></div>:null}
-      <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();void perform(()=>api.configureFriends(serverUrl,publicKey),'服务地址已保存。',true);}}>
-        <Field label="项目地址"><Input value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="管理员提供的 HTTPS 项目地址" disabled={busy}/></Field>
-        <Field label="项目公钥" hint="使用管理员提供的 publishable / anon 公钥。"><Input value={publicKey} onChange={e=>setPublicKey(e.target.value)} placeholder="sb_publishable_…" disabled={busy}/></Field>
-        <Button type="submit" disabled={busy||!serverUrl||!publicKey} className="sm:col-span-2 sm:justify-self-start">保存连接</Button>
-      </form></section>:null}
+
     {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取内测配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友内测</CardTitle></CardHeader><CardContent>
       <div className="mb-5 flex gap-2">{(['login','register','reset'] as const).map(item=><Button key={item} size="sm" variant={mode===item?'default':'outline'} disabled={busy} onClick={()=>{setMode(item);setPassword('');setRegistrationConsent(emptyRegistrationConsent());setError('');}}>{item==='login'?'登录':item==='register'?'邀请码注册':'重置密码'}</Button>)}</div>
       {mode==='register'?<p className="mb-4 max-w-lg text-xs leading-relaxed text-muted-foreground">每个公网 IP 仅可注册一个账号，同一网络下的设备可能共用名额。只有账号创建成功才占用名额；提交后若连接中断，可先用原用户名和密码尝试登录。</p>:null}

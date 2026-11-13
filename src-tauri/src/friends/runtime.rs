@@ -155,6 +155,26 @@ pub async fn ensure(app: &AppHandle) {
             inner.deletion_pending = deletion
                 .and_then(|value| serde_json::from_str::<DeletionReceipt>(&value).ok())
                 .is_some_and(|value| value.server_url == inner.config.server_url);
+            // Keep an outstanding deletion bound to its original service only.
+            // Normal sessions always use the built-in official endpoint.
+            let official = Config::default();
+            if !inner.deletion_pending
+                && (inner.config.server_url != official.server_url
+                    || inner.config.public_key != official.public_key)
+            {
+                inner.config.server_url = official.server_url;
+                inner.config.public_key = official.public_key;
+                inner.config.enabled = false;
+                inner.config.share_game = false;
+                inner.config.share_library = false;
+                inner.config.share_history = false;
+                inner.generation += 1;
+                inner.error = Some("好友服务已切换至官方入口，请阅读新版告知并重新登录。".into());
+                if let Err(error) = save(app, &inner.config).await {
+                    crate::app_warn!("[friends] {error}");
+                }
+                clear_account(app).await;
+            }
             if inner.config.enabled {
                 let resume = async {
                     validate_project(&inner.config.server_url, &inner.config.public_key)?;
