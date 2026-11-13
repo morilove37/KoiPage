@@ -1,9 +1,10 @@
 {
-  "version": "2026-11-11.1",
-  "effectiveDate": "2026-11-11",
+  "version": "2026-11-13.1",
+  "effectiveDate": "2026-11-13",
+  "legacyDirectConsentVersion": "2026-11-11.1",
   "operator": "恋页开发者",
   "contactEmail": "3375482795@qq.com",
-  "recipient": "Supabase Pte. Ltd.",
-  "region": "新加坡",
-  "serverUrl": "https://cdzrpejirivzjrwsahew.supabase.co"
+  "recipient": "Supabase Pte. Ltd.、Cloudflare, Inc.",
+  "region": "数据库位于新加坡；网络接入经 Cloudflare 全球网络处理",
+  "serverUrl": "https://api.koipage.xyz"
 }

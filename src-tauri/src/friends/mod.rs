@@ -115,6 +115,9 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
     let mut inner = state.inner.lock().await;
     inner.allow_account_change()?;
     validate_project(&inner.config.server_url, &inner.config.public_key)?;
+    if inner.config.server_url.trim_end_matches('/') == Config::default().server_url {
+        consent::validate(input.consent.as_ref(), &inner.config.server_url)?;
+    }
     let api = client::Api::new(&inner.config)?;
     let email = format!("{username}@accounts.koipage.invalid");
     let tokens = match input.mode.as_str() {

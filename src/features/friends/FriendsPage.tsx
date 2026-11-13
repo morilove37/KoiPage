@@ -11,6 +11,7 @@ import {errorMessage} from '@/features/io/io';
 import {BRAND} from '@/lib/brand';
 import {LegalDocuments} from '@/features/legal/LegalDocuments';
 import {RegistrationConsent} from '@/features/legal/RegistrationConsent';
+import defaultProject from '../../../src-tauri/src/friends/defaults.json';
 import {emptyRegistrationConsent,isRegistrationConsentValid,isPolicyService} from '@/features/legal/consent';
 import * as api from './api';
 import {createSnapshotController,elapsedSeconds,normalizePrivacy,sortFriends} from './model';
@@ -72,6 +73,7 @@ export default function FriendsPage(){
     finally{if(active.current)setBusy(false);}
   }
   const config=status?.config;
+  const requiresConsent=mode==='register'||isPolicyService(config?.serverUrl??'');
   useEffect(()=>{setRegistrationConsent(emptyRegistrationConsent());},[config?.serverUrl]);
   const privacy=normalizePrivacy(config);
   const togglePrivacy=(patch:Partial<typeof privacy>)=>void perform(()=>api.savePrivacy({...privacy,...patch}),'分享设置已保存。');
@@ -126,6 +128,7 @@ export default function FriendsPage(){
     </section>:null}
     {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
     {connectionOpen?<section id="friends-service-connection" className="rounded-lg border border-border bg-card p-4"><h2 className="text-sm font-medium">内测服务连接{config?.serverUrl?' · 已配置':''}</h2>
+      {config?.serverUrl.replace(/\/$/,'')==='https://cdzrpejirivzjrwsahew.supabase.co'?<div className="mt-3 space-y-2 text-xs leading-relaxed"><p>当前使用旧版直连地址。可以切换到 Cloudflare 网络入口，数据库仍保留在新加坡。切换会退出当前会话并恢复默认分享设置，重新登录前需要阅读新版告知并同意。</p><Button size="sm" variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(()=>api.configureFriends(defaultProject.serverUrl,defaultProject.publicKey),'已切换访问入口，请阅读新版告知并重新登录。',true)}>使用新的访问入口</Button></div>:null}
       <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={e=>{e.preventDefault();void perform(()=>api.configureFriends(serverUrl,publicKey),'服务地址已保存。',true);}}>
         <Field label="项目地址"><Input value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="管理员提供的 HTTPS 项目地址" disabled={busy}/></Field>
         <Field label="项目公钥" hint="使用管理员提供的 publishable / anon 公钥。"><Input value={publicKey} onChange={e=>setPublicKey(e.target.value)} placeholder="sb_publishable_…" disabled={busy}/></Field>
@@ -134,13 +137,13 @@ export default function FriendsPage(){
     {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取内测配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友内测</CardTitle></CardHeader><CardContent>
       <div className="mb-5 flex gap-2">{(['login','register','reset'] as const).map(item=><Button key={item} size="sm" variant={mode===item?'default':'outline'} disabled={busy} onClick={()=>{setMode(item);setPassword('');setRegistrationConsent(emptyRegistrationConsent());setError('');}}>{item==='login'?'登录':item==='register'?'邀请码注册':'重置密码'}</Button>)}</div>
       {mode==='register'?<p className="mb-4 max-w-lg text-xs leading-relaxed text-muted-foreground">每个公网 IP 仅可注册一个账号，同一网络下的设备可能共用名额。只有账号创建成功才占用名额；提交后若连接中断，可先用原用户名和密码尝试登录。</p>:null}
-      <form className="grid max-w-lg gap-4" onSubmit={e=>{e.preventDefault();if(mode==='register'&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config?.serverUrl??''))){setError('请先阅读并同意本服务当前版本的协议、隐私政策和出境告知。');return;}const attempt={mode,username,password,nickname,inviteCode,resetCode,consent:mode==='register'?registrationConsent:undefined};setPassword('');setInviteCode('');setResetCode('');void perform(()=>api.authenticateFriends(attempt),mode==='register'?'注册成功，已登录。':'已登录。',true);}}>
+      <form className="grid max-w-lg gap-4" onSubmit={e=>{e.preventDefault();if(requiresConsent&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config?.serverUrl??''))){setError('请先阅读并同意本服务当前版本的协议、隐私政策和出境告知。');return;}const attempt={mode,username,password,nickname,inviteCode,resetCode,consent:requiresConsent?registrationConsent:undefined};setPassword('');setInviteCode('');setResetCode('');void perform(()=>api.authenticateFriends(attempt),mode==='register'?'注册成功，已登录。':'已登录。',true);}}>
         <Field label="用户名" hint="3–32 位字母、数字或下划线。"><Input autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} disabled={busy}/></Field>
         {mode==='register'?<><Field label="昵称"><Input value={nickname} maxLength={32} onChange={e=>setNickname(e.target.value)} disabled={busy}/></Field><Field label="邀请码"><Input required autoComplete="off" value={inviteCode} onChange={e=>setInviteCode(e.target.value)} disabled={busy}/></Field></>:null}
         {mode==='reset'?<Field label="管理员提供的重置码"><Input required autoComplete="off" value={resetCode} onChange={e=>setResetCode(e.target.value)} disabled={busy}/></Field>:null}
         <Field label={mode==='reset'?'新密码':'密码'} hint="12–72 位英文字母、数字或符号，不支持中文和空格。"><Input type="password" required minLength={12} maxLength={72} pattern="[!-~]{12,72}" title="请输入 12–72 位英文字母、数字或符号，不支持中文和空格" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete={mode==='login'?'current-password':'new-password'} value={password} onChange={e=>setPassword(e.target.value)} disabled={busy}/></Field>
-        {mode==='register'?<RegistrationConsent value={registrationConsent} onChange={setRegistrationConsent} serverUrl={config?.serverUrl??''} disabled={busy}/>:null}
-        <Button type="submit" disabled={busy||!config?.serverUrl||(mode==='register'&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config.serverUrl)))}>{busy?'处理中…':mode==='login'?'登录':mode==='register'?'注册并登录':'设置新密码并登录'}</Button>
+        {requiresConsent?<RegistrationConsent value={registrationConsent} onChange={setRegistrationConsent} serverUrl={config?.serverUrl??''} disabled={busy}/>:null}
+        <Button type="submit" disabled={busy||!config?.serverUrl||(requiresConsent&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config.serverUrl)))}>{busy?'处理中…':mode==='login'?'登录':mode==='register'?'注册并登录':'设置新密码并登录'}</Button>
       </form></CardContent></Card>:<>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
         <Card><CardHeader><CardTitle>我的资料</CardTitle></CardHeader><CardContent className="space-y-4">

@@ -1,8 +1,8 @@
 # 个人信息出境告知与单独同意
 
-版本：2026-11-11.1
+版本：2026-11-13.1
 
-更新及生效日期：2026 年 11 月 11 日
+更新及生效日期：2026 年 11 月 13 日
 
 告知方：恋页开发者。联系邮箱：3375482795@qq.com。
 
@@ -14,7 +14,7 @@
 
 主要接收方为 Supabase Pte. Ltd.，为好友功能提供认证、数据库和接口托管。联系邮箱：privacy@supabase.com；隐私说明：https://supabase.com/privacy；数据处理条款：https://supabase.com/legal/customer-resources/data-processing-addendum。
 
-当前好友数据库选择新加坡区域，服务地址为 https://cdzrpejirivzjrwsahew.supabase.co。数据库区域不代表所有基础设施、函数、访问日志、运维和分包处理只发生在新加坡。Supabase 使用必要的基础设施提供方；其处理和分包信息见 https://supabase.com/legal/subprocessors。网络接入使用 Cloudflare，提供方 Cloudflare, Inc.，联系渠道及隐私说明：https://www.cloudflare.com/privacypolicy/。相关接入及安全处理可能涉及全球节点。我们不会把当前区域说明当作对任意新增接收方或用途的预先授权。
+当前好友数据库选择新加坡区域，客户端访问入口为 https://api.koipage.xyz，由 Cloudflare Workers 转发至 Supabase。原服务地址 https://cdzrpejirivzjrwsahew.supabase.co 保留用于旧版兼容。数据库区域不代表所有基础设施、函数、访问日志、运维和分包处理只发生在新加坡。Supabase 使用必要的基础设施提供方；其处理和分包信息见 https://supabase.com/legal/subprocessors。网络接收方 Cloudflare, Inc. 提供 HTTPS 入口、安全处理和接口转发，会处理公网 IP、请求头及经该入口提交的注册登录信息、会话令牌和同步请求内容；不是只处理域名解析。Cloudflare 的相关网络处理可能涉及全球节点，联系渠道及隐私说明：https://www.cloudflare.com/privacypolicy/。应用层不缓存账号和私人接口响应，不记录请求正文或令牌；基础设施处理仍受提供方规则约束。我们不会把当前区域说明当作对任意新增接收方或用途的预先授权。
 
 ## 三、信息范围、目的与方式
 
