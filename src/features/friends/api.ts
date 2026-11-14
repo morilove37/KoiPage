@@ -1,6 +1,6 @@
 import {invoke} from '@/lib/logging';
 import {initDatabase} from '@/lib/db';
-import type {FriendsStatus,Privacy,Snapshot,HideableGame,FriendProfile,ProfileFilters,UserSearchResult,FriendRelation,FriendHistory,HistorySession,CoverStatus} from './types';
+import type {FriendsStatus,Privacy,Snapshot,HideableGame,FriendProfile,ProfileFilters,UserSearchResult,FriendRelation,FriendHistory,HistorySession,CoverStatus,SharedLibraryGame} from './types';
 import type {RegistrationConsentValue} from '@/features/legal/consent';
 async function call<T>(command:string,args?:Record<string,unknown>):Promise<T>{await initDatabase();return invoke<T>(command,args);}
 function isRecord(value:unknown):value is Record<string,unknown>{return Boolean(value)&&typeof value==='object'&&!Array.isArray(value);}
@@ -28,8 +28,9 @@ function coverStatus(value:unknown):CoverStatus|null{
 export const friendsStatus=()=>call<FriendsStatus>('friends_status');
 export const friendsLibraryGames=()=>call<HideableGame[]>('friends_library_games');
 export const friendsProfile=({target,query,status,offset}:ProfileFilters)=>call<FriendProfile>('friends_profile',{target,query,status,offset});
+export const friendsHistoryCovers=(target:string)=>call<SharedLibraryGame[]>('friends_history_covers',{target});
 export const friendsSyncLibrary=()=>call<FriendsStatus>('friends_sync_library');
-export const authenticateFriends=(input:{mode:'login'|'register'|'reset';username:string;password:string;nickname?:string;inviteCode?:string;resetCode?:string;consent?:RegistrationConsentValue})=>call<FriendsStatus>('friends_authenticate',{input});
+export const authenticateFriends=(input:{mode:'login'|'register'|'reset';username:string;password:string;nickname?:string;resetCode?:string;consent?:RegistrationConsentValue})=>call<FriendsStatus>('friends_authenticate',{input});
 export const logoutFriends=()=>call<FriendsStatus>('friends_logout');
 export const friendsSnapshot=(revision:string|null)=>call<Snapshot>('friends_snapshot',{revision});
 export const friendsAction=(action:string,target:string|null=null,value:Record<string,unknown>={})=>call<FriendsStatus>('friends_action',{action,target,value});

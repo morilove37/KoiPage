@@ -7,12 +7,14 @@
 use super::{client::Api, library, model::*};
 use crate::commands::error::{CmdError, CmdResult};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 const WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 const BATCH: usize = 100;
 const TICK: Duration = Duration::from_secs(60);
+const RECONCILE: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Default)]
 pub(super) struct Cache {
@@ -21,6 +23,18 @@ pub(super) struct Cache {
     enabled: Option<bool>,
     attempted_generation: Option<u64>,
     next_attempt: Option<Instant>,
+    published: HashMap<String, Value>,
+    reconciled_at: Option<Instant>,
+}
+
+fn payload_map(payloads: &[Value]) -> HashMap<String, Value> {
+    payloads.iter().filter_map(|value| value["key"].as_str().map(|key| (key.to_owned(), value.clone()))).collect()
+}
+
+fn changed_payloads(payloads: Vec<Value>, published: &HashMap<String, Value>, reconcile: bool) -> Vec<Value> {
+    payloads.into_iter().filter(|value| {
+        reconcile || value["key"].as_str().is_some_and(|key| published.get(key) != Some(value))
+    }).collect()
 }
 
 #[derive(sqlx::FromRow)]
@@ -51,6 +65,10 @@ fn iso(seconds: i64) -> String {
 
 fn short(value: &str) -> String {
     value.trim().chars().take(200).collect()
+}
+
+fn visible_payloads(sessions: &[LocalSession], hidden: &[i64]) -> Vec<Value> {
+    sessions.iter().filter(|row| !hidden.contains(&row.game_id)).filter_map(session_payload).collect()
 }
 
 /// Map one local session to the narrow payload accepted by `koipage_history_sync`.
@@ -190,16 +208,32 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
                 .await?,
             ));
         }
+        // Privacy changes must retract old data even if the local database is unavailable.
+        let privacy_reset = cache.generation != Some(generation) || cache.enabled != Some(true);
+        if privacy_reset {
+            cache.generation = None;
+            request(&state, generation, json!({"p_enabled":false,"p_sessions":[]})).await?;
+        }
         let db = crate::commands::games::pool(app).await?;
         let cutoff = iso(now() - WINDOW_SECONDS);
         let sessions = local_sessions(&db, &cutoff).await?;
-        let payloads = sessions.iter().filter_map(session_payload).collect::<Vec<_>>();
+        let payloads = visible_payloads(&sessions, &config.hidden_game_ids);
+        let current = payload_map(&payloads);
+        let reconcile = privacy_reset
+            || cache.reconciled_at.is_none_or(|at| at.elapsed() >= RECONCILE)
+            || cache.published.keys().any(|key| !current.contains_key(key));
+        if reconcile {
+            // Leave the cache invalid until every batch succeeds, so a partial
+            // upload or lost response is cleared and retried from scratch.
+            cache.generation = None;
+            if !privacy_reset {
+                request(&state, generation, json!({"p_enabled":false,"p_sessions":[]})).await?;
+            }
+        }
+        let changes = changed_payloads(payloads, &cache.published, reconcile);
         let mut last = None;
-        if payloads.is_empty() {
-            if cache.enabled != Some(true)
-                || cache.generation != Some(generation)
-                || force
-            {
+        if changes.is_empty() {
+            if reconcile {
                 last = Some(
                     request(
                         &state,
@@ -210,7 +244,7 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
                 );
             }
         } else {
-            for chunk in payloads.chunks(BATCH) {
+            for chunk in changes.chunks(BATCH) {
                 last = Some(
                     request(
                         &state,
@@ -221,6 +255,8 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
                 );
             }
         }
+        cache.published = current;
+        if reconcile { cache.reconciled_at = Some(Instant::now()); }
         Ok(last)
     }
     .await;
@@ -237,6 +273,7 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
                 inner.history_synced_at = synced_at(&value);
             }
             inner.history_error = None;
+            inner.history_pending = false;
             let _ = app.emit("friends-status-changed", inner.status());
             Ok(inner.status())
         }
@@ -255,7 +292,7 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
 
 pub(super) async fn publisher(app: AppHandle) {
     loop {
-        tokio::time::sleep(TICK).await;
+        tokio::time::sleep(if super::runtime::low_activity(&app) { Duration::from_secs(300) } else { TICK }).await;
         let state = app.state::<super::runtime::FriendsState>();
         if state.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             continue;
@@ -299,6 +336,30 @@ mod tests {
             vndb_id: Some("v123".into()),
             bangumi_id: Some("456".into()),
         }
+    }
+
+    #[test]
+    fn hidden_works_are_excluded_from_history_publication() {
+        let mut other = row();
+        other.game_id = 8;
+        let sessions = vec![row(), other];
+        let payloads = visible_payloads(&sessions, &[7]);
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["gameKey"], library::library_key(8));
+        assert!(visible_payloads(&sessions, &[7, 8]).is_empty());
+    }
+
+    #[test]
+    fn history_incremental_upload_includes_only_new_or_changed_sessions() {
+        let original = session_payload(&row()).unwrap();
+        let published = payload_map(&[original.clone()]);
+        assert!(changed_payloads(vec![original.clone()], &published, false).is_empty());
+        let mut changed = original.clone();
+        changed["durationSeconds"] = json!(123);
+        let mut added = original.clone();
+        added["key"] = json!("7:other");
+        assert_eq!(changed_payloads(vec![original.clone(), changed.clone(), added.clone()], &published, false), vec![changed, added]);
+        assert_eq!(changed_payloads(vec![original.clone()], &published, true), vec![original]);
     }
 
     #[test]

@@ -56,7 +56,7 @@ export function ProfilePlayHistory({history,error,games,isSelf,onRetry}:{history
           </li>;
         })}</ol>
       </div>:null}
-      {expanded&&history?.enabled&&!error?<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3"><p role="status" className="text-xs text-muted-foreground">最近 7 天 · 已显示全部 {history.sessions.length} 次游玩</p><Button size="sm" variant="ghost" onClick={()=>{setExpanded(false);headerButton.current?.focus({preventScroll:true});}}>收起记录</Button></div>:null}
+      {expanded&&history?.enabled&&!error?<div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3"><p role="status" className="text-xs text-muted-foreground">最近 7 天 · 显示 {history.sessions.length} 次游玩（最多 200 次）</p><Button size="sm" variant="ghost" onClick={()=>{setExpanded(false);headerButton.current?.focus({preventScroll:true});}}>收起记录</Button></div>:null}
     </div>
   </section>;
 }

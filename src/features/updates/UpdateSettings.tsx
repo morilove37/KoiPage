@@ -22,7 +22,6 @@ export function UpdateSettings() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 id="automatic-update-label" className="text-sm font-medium">启动时检查更新</h3>
-          <p className="mt-1 text-xs text-muted-foreground">发现新版时提醒，确认后才下载并安装。</p>
         </div>
         <button type="button" role="switch" aria-checked={state.automatic} aria-labelledby="automatic-update-label"
           disabled={!state.preferenceLoaded || saving} onClick={() => void toggle()}

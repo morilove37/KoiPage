@@ -64,7 +64,6 @@ export function AccentSettings() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-medium" id="accent-settings-label">主题色</h3>
-          <p className="mt-1 text-xs text-muted-foreground">用于导航选中态、标签滑块、按钮与进度条；切换外观时保留。</p>
         </div>
         <Button type="button" variant="outline" size="sm" disabled={!loaded} onClick={() => void commit({ ...DEFAULT_ACCENT })}>
           恢复默认
@@ -133,7 +132,7 @@ export function AccentSettings() {
         </label>
         <Button type="button" variant="outline" size="md" disabled={!loaded} onClick={applyHex}>应用颜色</Button>
       </div>
-      <p id="accent-color-hint" className="text-xs text-muted-foreground">支持 3 位或 6 位颜色值。文字和焦点颜色会随外观自动调整，保持清晰可读。</p>
+      <p id="accent-color-hint" className="text-xs text-muted-foreground">支持 3 位或 6 位十六进制颜色。</p>
       {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       {status ? <p role="status" className="text-xs text-muted-foreground">{status}</p> : null}
     </div>

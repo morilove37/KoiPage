@@ -17,6 +17,7 @@ import { BirthdayCelebrationDialog } from "@/features/birthdays/BirthdayCelebrat
 import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
 import { BangumiSyncRuntime } from "@/features/bangumi-sync/BangumiSyncRuntime";
 import { FriendsRuntime } from "@/features/friends/FriendsRuntime";
+import { AiAssistant } from "@/features/ai/AiAssistant";
 import type { SyncReport } from "@/features/bangumi-sync/api";
 import type { RefreshState } from "@/features/metadata/metadata-refresh-state";
 import { useAppStore } from "@/store/app";
@@ -206,6 +207,7 @@ export default function App() {
           ))}
         </nav>
 
+        <AiAssistant />
         <div className="flex min-w-0 items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
           <button
             type="button"

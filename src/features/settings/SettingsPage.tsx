@@ -20,7 +20,9 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 import {
   scanRootCreate,
@@ -35,7 +37,7 @@ import type { ScanRoot } from '@/types/game';
 import { cn } from '@/lib/utils';
 import { BRAND } from '@/lib/brand';
 import { LegalDocuments } from '@/features/legal/LegalDocuments';
-import { loadLocalizationPreference, OFFLINE_TAG_COUNT, setLocalizationEnabled, useLocalizationStore } from '@/lib/localization';
+import { loadLocalizationPreference, setLocalizationEnabled, useLocalizationStore } from '@/lib/localization';
 import {
   TITLE_LANGUAGE_KEY,
   ALL_PROVIDERS,
@@ -97,6 +99,7 @@ import { AnnouncementContact } from '@/features/announcements/AnnouncementContac
 import { AccentSettings } from './AccentSettings';
 import { GlassAppearanceSettings } from './GlassAppearanceSettings';
 import { LogSettings } from './LogSettings';
+import { AiSettings } from '@/features/ai/AiSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
   type ExportFormat,
@@ -331,7 +334,6 @@ function ScanRootsSection() {
     <Section
       id="settings-scan"
       title="扫描根管理"
-      description="扫描器会在这些目录下递归查找游戏。深度越大扫描越慢。"
     >
       <div className="space-y-3">
         {loading ? (
@@ -575,10 +577,6 @@ function BackdropControls() {
           仅在「液态玻璃」下显示
         </span>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        选择一张本地图片作为液态玻璃主题的壁纸。它显示在流动光斑和玻璃面板下方，
-        图片只会被读取显示，不会被修改或复制到别处。
-      </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button variant="primary" disabled={!loaded} onClick={() => void pickImage()}>
@@ -620,7 +618,6 @@ function BackdropControls() {
             onChange={(e) => void commit({ opacity: Number.parseInt(e.target.value, 10) })}
             className="h-4 w-full cursor-pointer accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <span>仅调节所选壁纸；未选择图片时不影响外观。</span>
         </label>
 
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
@@ -638,7 +635,6 @@ function BackdropControls() {
             onChange={(e) => void commit({ blur: Number.parseInt(e.target.value, 10) })}
             className="h-4 w-full cursor-pointer accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <span>仅模糊所选壁纸；调节面板请使用上方「玻璃磨砂强度」。</span>
         </label>
       </div>
 
@@ -664,9 +660,6 @@ function BackdropControls() {
             </button>
           ))}
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          {BACKDROP_FIT_DESCRIPTIONS[backdrop.fit]}
-        </p>
       </div>
 
       {info ? <div className="mt-3"><Status tone="ok">{info}</Status></div> : null}
@@ -709,7 +702,6 @@ function ThemeSection() {
     <Section
       id="settings-appearance"
       title="外观"
-      description="「跟随系统」会随操作系统的深浅色设置实时切换；「液态玻璃」是带磨砂玻璃与流动光斑背景的深色主题。"
     >
       <div className="flex flex-wrap gap-2">
         {THEMES.map((option) => (
@@ -733,10 +725,6 @@ function ThemeSection() {
       </div>
 
       <ThemePreview theme={theme} />
-
-      <p className="mt-3 text-xs text-muted-foreground">
-        {THEME_DESCRIPTIONS[theme]}
-      </p>
 
       <AccentSettings />
       {loaded && isGlassTheme(theme) ? <><GlassAppearanceSettings /><BackdropControls /></> : null}
@@ -810,11 +798,10 @@ function LocalizationSection() {
     finally { setSaving(false); }
   }
   return (
-    <Section id="settings-localization" title="资料汉化" description="使用内置词典离线汉化标签，适用于已有游戏和新导入资料；简介保留原文。">
+    <Section id="settings-localization" title="资料汉化">
       <div className="flex items-center justify-between gap-4">
         <div>
           <p id="localization-label" className="text-sm font-medium">标签离线汉化</p>
-          <p className="mt-1 text-xs text-muted-foreground">即时生效，无需联网；关闭后恢复原始标签名称。</p>
         </div>
         <button
           type="button" role="switch" aria-checked={enabled} aria-labelledby="localization-label"
@@ -824,10 +811,6 @@ function LocalizationSection() {
           <span className={cn('inline-block h-4 w-4 rounded-full bg-white transition-transform', enabled ? 'translate-x-6' : 'translate-x-1')} />
         </button>
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        内置 {OFFLINE_TAG_COUNT} 条标签译名，涵盖题材、人物、剧情、结局与系统功能。
-        词典未收录的内容保留原文；简介不翻译。汉化只改变显示，不修改标签名称或游戏资料。
-      </p>
       {error ? <Status tone="error">{error}</Status> : null}
     </Section>
   );
@@ -920,7 +903,6 @@ function DataSection() {
     <Section
       id="settings-data"
       title="数据管理"
-      description="完整备份可用于换机与恢复；JSON / CSV 用于交换游戏条目，导入按安装路径去重。"
     >
       <div className="space-y-4">
         <BackupPanel />
@@ -966,9 +948,6 @@ function DataSection() {
               {busy === 'import' ? '导入中…' : '导入游戏库'}
             </Button>
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            导入支持 .json 和 .csv（按扩展名判断格式）。CSV 中的逗号、引号与换行会正确处理。
-          </p>
         </div>
 
         {message ? <Status tone={message.tone}>{message.text}</Status> : null}
@@ -1021,7 +1000,6 @@ function WindowSection() {
     <Section
       id="settings-window"
       title="窗口"
-      description="点击窗口关闭按钮时的行为；「每次询问」会先弹出「缩小至托盘 / 直接关闭」的选择。"
     >
       <div className="max-w-sm space-y-1.5">
         <label htmlFor="close-behavior" className="text-xs font-medium text-muted-foreground">关闭按钮行为</label>
@@ -1034,10 +1012,6 @@ function WindowSection() {
           onValueChange={(value) => void change(value)}
         />
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        选择「缩小至托盘」后，点击关闭按钮会隐藏窗口，应用继续在系统托盘运行；左键点击托盘图标或选择菜单「显示恋页」可恢复，托盘菜单也能直接退出。
-        弹窗里的「今后不再提示」会写入同一个设置。
-      </p>
       {error ? <Status tone="error">{error}</Status> : null}
     </Section>
   );
@@ -1102,7 +1076,6 @@ function MetadataSection() {
     <Section
       id="settings-metadata"
       title="资料匹配"
-      description="设置导入和联网补全时优先采用的数据源，以及游戏标题的语言。"
     >
       <div className="mb-4 max-w-sm space-y-1.5">
         <SearchSourcesSettings onChange={setEnabledSources} />
@@ -1115,9 +1088,6 @@ function MetadataSection() {
           options={enabledSources.map(value => ({ value, label: PROVIDER_LABELS[value] }))}
           onValueChange={value => void changeSource(value)}
         />
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          导入优先采用默认源的可信匹配，没有合适结果或请求失败时使用其他已启用来源。默认源被关闭后，会自动使用已启用列表中的首个来源；手动搜索也只使用上方勾选的范围。更改后即时保存。
-        </p>
       </div>
       <div className="max-w-sm space-y-1.5">
         <label htmlFor="metadata-title-language" className="text-xs font-medium text-muted-foreground">标题语言</label>
@@ -1134,10 +1104,6 @@ function MetadataSection() {
           onValueChange={(value) => void change(value)}
         />
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-        中文名优先：中文标题 → 日文原名 → 数据源标题；日文原名优先：日文原名 → 中文标题 → 数据源标题。
-        搜索名称仅用于查找作品，不会盖过资料中的中文标题；已有游戏可重新匹配资料并应用游戏名。
-      </p>
       {error ? <Status tone="error">{error}</Status> : null}
       <MetadataRefreshPanel />
     </Section>
@@ -1214,7 +1180,7 @@ function AccountDeletionSection() {
       <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
         <p className="text-sm font-medium text-destructive">危险操作</p>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          注销会立即删除你的账号，以及好友关系、待处理请求、公开游戏库同步数据和最近游玩记录同步数据。服务器数据删除后无法恢复，也无法用同一账号重新登录找回。本机游戏库、存档和资料不会被删除。
+          删除账号、好友关系及云端同步数据，本机游戏库与存档保留。
         </p>
       </div>
       {!loaded ? <Status tone="info">正在读取账号状态…</Status> : null}
@@ -1272,6 +1238,30 @@ function AccountDeletionSection() {
 // Page
 // ---------------------------------------------------------------------------
 
+function ProjectSupportLink() {
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="mt-4 text-xs text-muted-foreground">
+      <a
+        href={BRAND.supportUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="rounded-sm underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={event => {
+          if (!isTauri()) return;
+          event.preventDefault();
+          setError(null);
+          void openUrl(BRAND.supportUrl).catch(() => setError(`无法打开浏览器，请访问 ${BRAND.supportUrl}`));
+        }}
+      >
+        爱发电 · 支持恋页 <span aria-hidden="true">↗</span>
+      </a>
+      {error ? <p role="alert" className="mt-1">{error}</p> : null}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   return (
     <div className="mx-auto flex max-w-5xl items-start gap-6 p-6">
@@ -1285,9 +1275,6 @@ export default function SettingsPage() {
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <header>
           <h1 className="text-xl font-semibold">设置</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            扫描目录、外观、窗口、资料汉化、资料匹配与数据备份。
-          </p>
         </header>
 
         <ScanRootsSection />
@@ -1295,19 +1282,20 @@ export default function SettingsPage() {
         <WindowSection />
         <LocalizationSection />
         <MetadataSection />
-        <Section id="settings-bangumi-sync" title="Bangumi 双向同步" description="连接个人账号，同步游玩状态与个人记录。"><BangumiSyncSettings /></Section>
+        <Section id="settings-ai" title="AI 助手"><AiSettings /></Section>
+        <Section id="settings-bangumi-sync" title="Bangumi 双向同步"><BangumiSyncSettings /></Section>
 
-        <Section id="settings-birthdays" title="角色生日" description="在特别的日子，为喜欢的角色送上祝福。">
+        <Section id="settings-birthdays" title="角色生日">
           <BirthdayReminderSettings />
         </Section>
         <DataSection />
-        <Section id="settings-paths" title="游戏路径" description="检查离线或缺失的游戏，并在搬盘后批量修复路径。">
+        <Section id="settings-paths" title="游戏路径">
           <PathRepairPanel />
         </Section>
-        <Section id="settings-logs" title="日志" description="保存故障排查信息，并导出用于反馈问题的诊断日志。">
+        <Section id="settings-logs" title="日志">
           <LogSettings />
         </Section>
-        <Section id="settings-announcements" title="公告" description="随时重新查看应用公告和当前版本的更新内容。">
+        <Section id="settings-announcements" title="公告">
           <AnnouncementSettings />
         </Section>
         <AccountDeletionSection />
@@ -1325,6 +1313,7 @@ export default function SettingsPage() {
           <div className="mt-4 space-y-2"><p className="text-sm font-medium">协议与隐私</p><LegalDocuments/></div>
           <p className="mt-4 text-xs text-muted-foreground">开源协议：GNU GPL v3（GPL-3.0-only）。第三方工具、角色与资料遵循各自的许可声明。</p>
           <AnnouncementContact />
+          <ProjectSupportLink />
         </Section>
       </div>
     </div>

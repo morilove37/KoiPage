@@ -16,19 +16,12 @@ export function AnnouncementCommunity() {
       setCopied(true);
     } catch {setError('复制失败，请选择群号手动复制。');}
   };
-  return <section aria-label="交流群" className="rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm">
-    <h3 className="text-base font-semibold leading-relaxed">真的不进群玩玩吗？(｡･ω･｡)ﾉ♡</h3>
-    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">交流游玩心得、提建议、反馈问题，都欢迎来坐坐～</p>
-    <div className="mt-3 rounded-md border border-primary/20 bg-background/50 p-3 text-xs leading-relaxed">
-      <p className="font-medium">进群可参与好友内测邀请码抽取。</p>
-      <p className="mt-1 text-muted-foreground">好友功能仅供测试使用，后续版本可能移除。</p>
+  return <section aria-label="交流群" className="border-b border-border pb-3 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p>QQ 群：<span className="select-all tabular-nums text-foreground">{BRAND.communityGroup}</span></p>
+      <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={()=>void copy()}>{copied?'已复制':'复制群号'}</Button>
     </div>
-    <div className="mt-3 flex flex-wrap items-center gap-3">
-      <p>QQ 群号：<span className="select-all text-base font-semibold tabular-nums tracking-wide text-primary">{BRAND.communityGroup}</span></p>
-      <Button size="sm" variant="outline" onClick={()=>void copy()}>{copied?'已复制':'复制群号'}</Button>
-    </div>
-    <p className="mt-3 border-t border-primary/15 pt-3 text-xs leading-relaxed"><strong className="font-semibold">入群前请先阅读群介绍，并正确回答群介绍里的问题。</strong></p>
-    <p className="mt-2 rounded-md bg-primary/10 px-3 py-2 text-xs leading-relaxed"><strong className="font-semibold">建议使用手机 QQ 申请加群，</strong>PC 端可能无法显示入群问题。</p>
+    <p className="mt-1 leading-relaxed">加群前请阅读群介绍并回答入群问题，推荐使用手机 QQ。</p>
     <span role="status" className="sr-only">{copied?'群号已复制':null}</span>
     {error?<p role="alert" className="mt-2 text-xs text-destructive">{error}</p>:null}
   </section>;

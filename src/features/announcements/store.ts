@@ -30,7 +30,7 @@ export function initializeAnnouncements(): Promise<void> {
     initialization = (async () => {
       try {
         const stored = await settingsGet(ANNOUNCEMENTS_SETTING);
-        const plan = planStartup(parsePreferences(stored), BRAND.version);
+        const plan = planStartup(parsePreferences(stored), BRAND.updateVersion);
         const serialized = JSON.stringify(plan.preferences);
         if (serialized !== stored) await settingsSet(ANNOUNCEMENTS_SETTING, serialized);
         useAnnouncementStore.setState({ ...plan, loading: false });
@@ -53,7 +53,7 @@ export async function closeAnnouncement(dismissed: boolean): Promise<void> {
   if (!kind || !state.preferences || state.saving) return;
   useAnnouncementStore.setState({ saving: true, error: null });
   try {
-    const preferences = setDismissed(state.preferences, kind, BRAND.version, dismissed);
+    const preferences = setDismissed(state.preferences, kind, BRAND.updateVersion, dismissed);
     if (JSON.stringify(preferences) !== JSON.stringify(state.preferences)) {
       await settingsSet(ANNOUNCEMENTS_SETTING, JSON.stringify(preferences));
     }

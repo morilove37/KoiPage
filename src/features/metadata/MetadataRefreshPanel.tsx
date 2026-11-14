@@ -104,11 +104,8 @@ export function MetadataRefreshPanel() {
 
   return <div className="mt-5 space-y-3 border-t border-border pt-4">
     <h3 className="text-sm font-semibold">一键资料焕新</h3>
-    <p className="text-sm leading-relaxed text-muted-foreground">按当前启用的数据源、默认源和标题语言设置，重新获取游戏库中已有作品的资料；简介按当前中文简介优先设置获取。</p>
     <p className="text-sm leading-relaxed text-amber-600 dark:text-amber-400">{overwriteWarning}</p>
-    <p className="text-xs leading-relaxed text-muted-foreground">保留游戏路径、游玩状态与时长、私人备注、存档、封面、我的评分及 Bangumi 短评；已有外部 ID 保持不变。只要启用了 Bangumi 数据源，就会尝试补全缺失的 Bangumi ID，不受默认数据源选择影响；匹配不明确的作品会列为待确认，不会强行绑定。</p>
-    <p className="text-xs leading-relaxed text-muted-foreground">部分成人条目需要 Bangumi 个人令牌才能检索。可在「设置 → Bangumi 同步」验证并保存令牌，资料查询会自动使用该令牌；无需开启双向自动同步。</p>
-    <p className="text-xs leading-relaxed text-muted-foreground">请先退出正在运行的游戏。开始改写前会自动生成资料库 .koibak 备份；备份失败则中止。若已开启 Bangumi 自动同步，新绑定的作品可能在本批次完成后参与同步。</p>
+    <p className="text-xs leading-relaxed text-muted-foreground">刷新前请退出游戏；将自动创建完整备份。</p>
     <div className="flex flex-wrap items-center gap-2">
       <Button type="button" disabled={!ready || busy || active} onClick={() => setConfirmOpen(true)}>{state && state.phase !== 'idle' ? '重新焕新全部资料' : '一键资料焕新'}</Button>
       {active && <Button type="button" variant="outline" disabled={busy || stopRequested} onClick={() => void stop()}>{stopRequested ? '正在等待停止…' : '停止刷新'}</Button>}

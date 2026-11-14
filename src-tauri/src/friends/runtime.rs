@@ -30,6 +30,8 @@ pub struct Inner {
     pub library_error: Option<String>,
     pub history_synced_at: Option<String>,
     pub history_error: Option<String>,
+    pub library_pending: bool,
+    pub history_pending: bool,
     /// Set when a claim refresh produced a newer snapshot than the one cached
     /// in settings. The publisher flushes it and clears the flag.
     pub account_dirty: bool,
@@ -42,6 +44,7 @@ pub struct FriendsState {
     pub(super) history: Mutex<super::history::Cache>,
     initialized: OnceCell<()>,
     pub stopping: AtomicBool,
+    pub idle: AtomicBool,
 }
 impl Inner {
     pub fn allow_account_change(&self) -> CmdResult<()> {
@@ -62,6 +65,8 @@ impl Inner {
             library_error: self.library_error.clone(),
             history_synced_at: self.history_synced_at.clone(),
             history_error: self.history_error.clone(),
+            library_pending: self.library_pending,
+            history_pending: self.history_pending,
             deletion_pending: self.deletion_pending,
         }
     }
@@ -160,10 +165,12 @@ pub async fn ensure(app: &AppHandle) {
             let official = Config::default();
             if !inner.deletion_pending
                 && (inner.config.server_url != official.server_url
-                    || inner.config.public_key != official.public_key)
+                    || inner.config.public_key != official.public_key
+                    || inner.config.policy_version != official.policy_version)
             {
                 inner.config.server_url = official.server_url;
                 inner.config.public_key = official.public_key;
+                inner.config.policy_version = official.policy_version;
                 inner.config.enabled = false;
                 inner.config.share_game = false;
                 inner.config.share_library = false;
@@ -190,6 +197,8 @@ pub async fn ensure(app: &AppHandle) {
                     // re-claims in the background and replaces it when the
                     // network comes back.
                     inner.account = cached_account.and_then(|v| serde_json::from_str(&v).ok());
+                    inner.library_pending = inner.account.is_some();
+                    inner.history_pending = inner.account.is_some();
                 }
                 if let Err(error) = resume {
                     inner.failed(&error);
@@ -271,10 +280,15 @@ async fn recover_account(inner: &mut Inner, retry: &mut ResumeRetry, at: Instant
     let result = async {
         validate_project(&inner.config.server_url, &inner.config.public_key)?;
         let profile = rpc(inner, "koipage_claim", json!({})).await?;
+        let new_account = inner.account.is_none();
         inner.account = Some(
             serde_json::from_value(profile)
                 .map_err(|_| CmdError("FRIENDS_PROTOCOL: 账号资料格式无效".into()))?,
         );
+        if new_account {
+            inner.library_pending = true;
+            inner.history_pending = true;
+        }
         inner.account_dirty = true;
         Ok::<(), CmdError>(())
     }
@@ -305,6 +319,10 @@ where
         .ok()
         .and_then(Result::ok)
         .and_then(|games| select_game(config, &games))
+}
+pub(super) fn low_activity(app: &AppHandle) -> bool {
+    app.state::<FriendsState>().idle.load(Ordering::Relaxed)
+        || !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 async fn publisher(app: AppHandle) {
     let mut last_signature = String::new();
@@ -354,7 +372,8 @@ async fn publisher(app: AppHandle) {
             object.remove("duration");
         }
         let signature = format!("{}:{}:{stable}", inner.generation, inner.config.invisible);
-        if signature == last_signature && last_publish.elapsed() < Duration::from_secs(30) {
+        let heartbeat = if game.is_some() || !low_activity(&app) { 60 } else { 300 };
+        if signature == last_signature && last_publish.elapsed() < Duration::from_secs(heartbeat) {
             continue;
         }
         if signature == attempted_signature && Instant::now() < retry_at {

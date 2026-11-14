@@ -36,10 +36,13 @@ jobs:
         id: notes
         shell: pwsh
         run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = $package.version
+          $displayVersion = if ($package.releaseVersion) { $package.releaseVersion } else { $version }
+          "displayVersion=$displayVersion" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "body<<KOIPAGE_RELEASE_NOTES" >> $env:GITHUB_OUTPUT
-          Get-Content "docs/releases/v$version.md" -Raw >> $env:GITHUB_OUTPUT
+          Get-Content "docs/releases/v$displayVersion.md" -Raw >> $env:GITHUB_OUTPUT
           "KOIPAGE_RELEASE_NOTES" >> $env:GITHUB_OUTPUT
       - name: Build signed installers and updater manifest
         uses: tauri-apps/tauri-action@v1
@@ -49,7 +52,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v${{ steps.notes.outputs.version }}
-          releaseName: 恋页 KoiPage v${{ steps.notes.outputs.version }}
+          releaseName: 恋页 KoiPage v${{ steps.notes.outputs.displayVersion }}
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false

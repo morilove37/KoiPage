@@ -28,7 +28,7 @@ test('registration begins with separate unchecked required consent controls and 
   assert.equal((html.match(/required=""/g)??[]).length,2);
   assert.doesNotMatch(html,/checked=""/);
   assert.match(html,/服务协议/);assert.match(html,/隐私政策/);assert.match(html,/出境告知/);
-  assert.match(html,/新加坡/);assert.match(html,/Supabase/);assert.match(html,/本地/);
+  assert.doesNotMatch(html,/好友账号连接开发者自托管|提供者：|隐私、删除及注销申请：/);
 });
 
 test('all consent values must be exact booleans and match the displayed version',()=>{
@@ -42,7 +42,7 @@ test('all consent values must be exact booleans and match the displayed version'
   assert.equal(emptyRegistrationConsent().termsAccepted,false);
 });
 
-test('a custom service cannot inherit consent to the official Singapore service',()=>{
+test('a custom service cannot inherit consent to the official Hong Kong service',()=>{
   assert.equal(isPolicyService(POLICY.serverUrl+'/'),true);
   assert.equal(isPolicyService('https://another.supabase.co'),false);
   const html=render(emptyRegistrationConsent(),'https://another.supabase.co');
@@ -57,5 +57,7 @@ test('the four offline documents name the approved contact and track the shared 
   }
   const privacy=LEGAL_DOCUMENTS.privacy.content;
   assert.match(privacy,/不会在账号删除时自动释放/);
-  assert.match(LEGAL_DOCUMENTS.crossBorder.content,/privacy@supabase.com/);
+  assert.match(LEGAL_DOCUMENTS.crossBorder.content,/雨云/);
+  assert.match(LEGAL_DOCUMENTS.crossBorder.content,/中国香港/);
+  assert.match(LEGAL_DOCUMENTS.crossBorder.content,/不再通过 Workers/);
 });

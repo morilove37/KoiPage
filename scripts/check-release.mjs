@@ -14,6 +14,6 @@ const updater = config.plugins?.updater;
 if (updater?.endpoints?.[0] !== 'https://github.com/morilove37/KoiPage/releases/latest/download/latest.json') throw new Error('Unexpected update endpoint.');
 if (!Buffer.from(updater.pubkey ?? '', 'base64').toString('utf8').startsWith('untrusted comment: minisign public key:')) throw new Error('A valid updater public key is required.');
 const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
-if (!changelog.includes(`## [${pkg.version}]`)) throw new Error('Add the current version to CHANGELOG.md.');
-readFileSync(new URL(`../docs/releases/v${pkg.version}.md`, import.meta.url), 'utf8');
+if (!changelog.includes(`## [${pkg.releaseVersion ?? pkg.version}]`)) throw new Error('Add the current version to CHANGELOG.md.');
+readFileSync(new URL(`../docs/releases/v${pkg.releaseVersion ?? pkg.version}.md`, import.meta.url), 'utf8');
 console.log(`Release v${pkg.version}: versions, storage IDs, update endpoint, public key and release notes agree.`);

@@ -17,6 +17,10 @@ pub struct RegistrationConsent {
     cross_border_accepted: bool,
 }
 
+pub fn version() -> &'static str {
+    POLICY["version"].as_str().unwrap_or_default()
+}
+
 pub fn validate(value: Option<&RegistrationConsent>, server_url: &str) -> CmdResult<()> {
     if server_url.trim_end_matches('/') != POLICY["serverUrl"].as_str().unwrap_or_default() {
         return Err(CmdError("FRIENDS_CONSENT_REQUIRED: 当前连接不是本政策告知的服务，请恢复默认连接或联系维护者".into()));

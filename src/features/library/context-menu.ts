@@ -1,7 +1,7 @@
 import { GAME_STATUSES, GAME_STATUS_LABELS, isFavorite } from '../../types/game.ts';
 import type { Game, GameStatus } from '../../types/game.ts';
 
-export type GameContextActionId = 'detail' | 'files' | 'launch' | 'directory' | 'metadata' | 'backup'
+export type GameContextActionId = 'detail' | 'files' | 'launch' | 'metadata' | 'backup'
   | 'favorite:on' | 'favorite:off' | `status:${GameStatus}`;
 export interface GameContextAction {
   id: GameContextActionId;
@@ -59,8 +59,6 @@ export function gameContextActions(games: readonly Game[], state: GameContextSta
   return [
     { id: 'launch', label: starting ? '启动中…' : running ? '查看运行中的游戏' : '启动游戏', group: 'game',
       disabled: busy || Boolean(launchHint), hint: launchHint, destination: 'launch' },
-    { id: 'directory', label: '打开游戏目录', group: 'game', disabled: busy || !state.loaded || state.archived || !game.installPath.trim(),
-      hint: state.archived ? '游戏已卸载 / 已归档' : !game.installPath.trim() ? '尚未设置游戏目录' : undefined },
     { id: 'detail', label: '查看游戏详情', group: 'game', disabled: busy },
     { id: 'files', label: '路径与启动设置…', group: 'game', disabled: busy },
     ...favorites, ...statuses,
@@ -93,7 +91,7 @@ export function isContextMenuKey(event: { key: string; shiftKey: boolean }): boo
 }
 
 export function allowsGameContextEvent(target: { closest?: (selector: string) => unknown } | null, eventType = 'pointerdown'): boolean {
-  return eventType === 'contextmenu' || Boolean(target?.closest?.('[data-game-context-trigger], [data-game-context-menu]'));
+  return eventType === 'contextmenu' || Boolean(target?.closest?.('[data-game-context-trigger], [data-game-context-menu], [data-society-logo-trigger], [data-society-logo-menu]'));
 }
 
 export function restoreFocusAfterOutsideClick(target: { closest?: (selector: string) => unknown } | null, button: number): boolean {

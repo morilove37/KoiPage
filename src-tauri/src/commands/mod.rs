@@ -89,3 +89,5 @@ pub(crate) fn escape_like(input: &str) -> String {
         .replace('%', "\\%")
         .replace('_', "\\_")
 }
+
+pub mod society_logos;

@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 pub struct Config {
     pub server_url: String,
     pub public_key: String,
+    #[serde(default)]
+    pub policy_version: String,
     pub enabled: bool,
     pub share_game: bool,
     pub share_library: bool,
@@ -23,6 +25,7 @@ impl Default for Config {
         Self {
             server_url: project["serverUrl"].as_str().unwrap_or_default().into(),
             public_key: project["publicKey"].as_str().unwrap_or_default().into(),
+            policy_version: super::consent::version().into(),
             enabled: false,
             share_game: false,
             share_library: false,
@@ -80,6 +83,10 @@ pub struct Status {
     pub library_error: Option<String>,
     pub history_synced_at: Option<String>,
     pub history_error: Option<String>,
+    #[serde(default)]
+    pub library_pending: bool,
+    #[serde(default)]
+    pub history_pending: bool,
     #[serde(default)]
     pub deletion_pending: bool,
 }
@@ -368,6 +375,8 @@ mod tests {
             library_error: None,
             history_synced_at: Some("2026-11-11T00:00:00Z".into()),
             history_error: None,
+            library_pending: false,
+            history_pending: false,
             deletion_pending: false,
         })
         .unwrap();

@@ -356,10 +356,7 @@ export default function TagsPage() {
       <div>
         <h1 className="text-lg font-semibold tracking-tight">标签管理</h1>
         <p className="text-xs text-muted-foreground">
-          {loading ? "载入中…" : `共 ${tags.length} 个标签 · 可在游戏详情页里给游戏打标签`}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          没有任何游戏使用的标签会在进入本页时自动删除；点击标签整行即可展开使用它的作品。
+          {loading ? "载入中…" : `共 ${tags.length} 个标签`}
         </p>
       </div>
 

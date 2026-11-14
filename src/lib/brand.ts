@@ -14,10 +14,12 @@ export const BRAND = {
   githubUrl: `https://github.com/${GITHUB_USERNAME}`,
   repositoryUrl: REPOSITORY_URL,
   releasesUrl: `${REPOSITORY_URL}/releases`,
+  supportUrl: 'https://ifdian.net/a/koipage',
   douyinName: '女友为了我变成4i',
   douyinId: 'shuiwuyueying.',
   douyinUrl: 'https://www.douyin.com/user/MS4wLjABAAAAcKXZbXNLc87TzVG6SzTXl4hUtoA0QbGgt57arDh-HxvVRSovn5fPvJvcD2mbrX8f?from_tab_name=main',
   license: 'GPL-3.0-only',
   communityGroup: '1055772679',
-  version,
+  version: "0.7.3",
+  updateVersion: version,
 } as const;

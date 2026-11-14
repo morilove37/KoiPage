@@ -174,15 +174,12 @@ export default function ToolsPage() {
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <header>
           <h1 className="text-xl font-semibold">实用工具</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            启动增强、窗口缩放、游戏翻译与压缩包解压工具的集中配置。
-          </p>
         </header>
 
         <ToolCard
           id="tools-archive"
           title="游戏解压"
-          description="把 .zip / .rar / .7z 或分卷压缩包直接拖进来，自动解压到扫描目录（可更换）。加密压缩包会提示输入密码；解压成功后原压缩包会移入回收站（可恢复），并可直接扫描其中的启动文件。"
+          description="拖入压缩包解压并导入。成功后原压缩包移入回收站。"
         >
           <ArchiveImportPanel
             defaultDestination={scanRoots[0] ?? ""}
@@ -208,7 +205,7 @@ export default function ToolsPage() {
         <ToolCard
           id="tools-locale"
           title="转区启动"
-          description="日文游戏在中文 Windows 上可能需要日语区域环境才能正常启动。内置 Locale Emulator 可离线使用，无需另装。"
+          description="使用 Locale Emulator 以日语区域启动游戏。"
         >
           <LocaleToolSection />
         </ToolCard>
@@ -216,7 +213,7 @@ export default function ToolsPage() {
         <ToolCard
           id="tools-luna"
           title="游戏翻译"
-          description="内置 LunaTranslator，为原文游戏提供文本提取与翻译工具，可直接启动使用。"
+          description="使用 LunaTranslator 提取并翻译游戏文本。"
         >
           <LunaToolSection />
         </ToolCard>
@@ -224,7 +221,7 @@ export default function ToolsPage() {
         <ToolCard
           id="tools-magpie"
           title="窗口缩放"
-          description="Magpie 使用 GPU 缩放与滤镜，把低分辨率的游戏窗口放大到全屏。这里可以管理内置或外部 Magpie，并让它随游戏一起启动。"
+          description="使用 Magpie 放大游戏窗口。"
           action={<FeatureIntroToggle checked={introOpen} disabled={!introLoaded} onToggle={() => void toggleIntro()} />}
         >
           <MagpieToolSection />

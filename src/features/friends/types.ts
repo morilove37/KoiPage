@@ -1,7 +1,7 @@
 export interface Account { id:string; username:string; nickname:string; avatar:number; friendCode:string }
 import type {GameStatus} from '@/types/game';
 export interface FriendsConfig {serverUrl:string;publicKey:string;enabled:boolean;shareGame:boolean;shareLibrary:boolean;shareHistory:boolean;invisible:boolean;hiddenGameIds:number[]}
-export interface FriendsStatus {config:FriendsConfig;account:Account|null;connected:boolean;lastError:string|null;generation:number;librarySyncedAt?:number|null;libraryError?:string|null;historySyncedAt?:string|null;historyError?:string|null;deletionPending?:boolean}
+export interface FriendsStatus {config:FriendsConfig;account:Account|null;connected:boolean;lastError:string|null;generation:number;librarySyncedAt?:number|null;libraryError?:string|null;historySyncedAt?:string|null;historyError?:string|null;libraryPending?:boolean;historyPending?:boolean;deletionPending?:boolean}
 export interface HideableGame{id:number;title:string;originalTitle:string|null}
 export interface CurrentGame {title:string;vndbId:string|null;bangumiId:string|null;startedAt:number}
 export interface Friend extends Account {online:boolean;game:CurrentGame|null}

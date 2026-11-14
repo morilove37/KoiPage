@@ -11,9 +11,10 @@ import {errorMessage} from '@/features/io/io';
 import {FriendAvatar} from './FriendAvatar';
 import {createProfileController,elapsedSeconds,libraryCoverSource,loadHistoryLibrary} from './model';
 import {ProfilePlayHistory} from './ProfilePlayHistory';
-import {friendsHistory,friendsProfile,friendsReport,friendsStatus} from './api';
+import {friendsHistory,friendsHistoryCovers,friendsProfile,friendsReport,friendsStatus} from './api';
 import type {ReportReason} from './api';
 import {ReportDialog} from './ReportDialog';
+import {startFriendsPolling} from './polling';
 import {useFriendsStore} from './store';
 import type {FriendHistory,FriendProfileView,SharedLibraryGame} from './types';
 
@@ -77,6 +78,8 @@ export default function FriendProfilePage(){
   const [notice,setNotice]=useState(''),[reportError,setReportError]=useState('');
   const [clock,setClock]=useState(Date.now());
   const controller=useRef<ReturnType<typeof createProfileController>|null>(null);
+  const fallbackCovers=useRef<{key:string;games:SharedLibraryGame[]}|null>(null);
+  const libraryVersion=useRef<number|null>(null);
   const view=result.key===requestKey?result.value:null;
   const error=failure.key===requestKey?failure.message:'';
   const loading=Boolean(account)&&(pending.key!==requestKey||pending.loading);
@@ -98,6 +101,7 @@ export default function FriendProfilePage(){
       onChange:value=>{if(alive){
         setResult({key:requestKey,value});
         if(value){
+          libraryVersion.current=value.syncedAt;
           setFailure({key:requestKey,message:''});
           setHistoryAccess({key:identity,allowed:value.libraryShared&&(value.self||value.viewerLibraryShared),self:value.self});
         }
@@ -106,11 +110,8 @@ export default function FriendProfilePage(){
       onError:cause=>{if(alive){setFailure({key:requestKey,message:profileError(cause)});const state=useFriendsStore.getState(),currentEpoch=state.epoch;void friendsStatus().then(value=>{if(alive)state.apply(value,currentEpoch);}).catch(()=>{});}},
     });
     controller.current=next;
-    const refresh=()=>{if(document.visibilityState!=='hidden')void next.refresh({target,...filter});};
-    refresh();
-    const timer=window.setInterval(refresh,15000);
-    window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
-    return()=>{alive=false;window.clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);next.reset();if(controller.current===next)controller.current=null;};
+    const stopPolling=startFriendsPolling(()=>next.refresh({target,...filter}),60_000);
+    return()=>{alive=false;stopPolling();next.reset();if(controller.current===next)controller.current=null;};
   },[identity,requestKey,account?.id,target,filter.query,filter.status,filter.offset]);
 
   useEffect(()=>{
@@ -119,17 +120,28 @@ export default function FriendProfilePage(){
     const load=()=>{
       if(pending)return;
       pending=true;
-      const covers=loadHistoryLibrary(target,friendsProfile,()=>alive)
-        .then(games=>{if(alive)setHistoryLibrary({key:identity,games});})
-        .catch(()=>{if(alive)setHistoryLibrary({key:identity,games:[]});});
-      const records=friendsHistory({target,days:7})
-        .then(value=>{if(alive)setHistory({key:identity,value,error:''});})
-        .catch(cause=>{if(alive)setHistory({key:identity,value:null,error:profileError(cause)});});
-      void Promise.all([covers,records]).finally(()=>{pending=false;});
+      void (async()=>{
+        try{
+          const value=await friendsHistory({target,days:7});
+          if(!alive)return;
+          setHistory({key:identity,value,error:''});
+          if(!value.enabled||!value.sessions.length){setHistoryLibrary({key:identity,games:[]});return;}
+          let games:SharedLibraryGame[];
+          try{games=await friendsHistoryCovers(target);}
+          catch{
+            // Older servers have no batch endpoint. Cache the compatible scan
+            // until the visible history or the library sync version changes.
+            const key=JSON.stringify([identity,libraryVersion.current,value.sessions]);
+            games=fallbackCovers.current?.key===key?fallbackCovers.current.games:await loadHistoryLibrary(target,friendsProfile,()=>alive);
+            if(alive)fallbackCovers.current={key,games};
+          }
+          if(alive)setHistoryLibrary({key:identity,games});
+        }catch(cause){if(alive){setHistory({key:identity,value:null,error:profileError(cause)});setHistoryLibrary({key:identity,games:[]});}}
+        finally{pending=false;}
+      })();
     };
-    load();
-    const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')load();},60000);
-    return()=>{alive=false;window.clearInterval(timer);};
+    const stopPolling=startFriendsPolling(load,60_000);
+    return()=>{alive=false;stopPolling();};
   },[identity,account?.id,target,historyAttempt]);
 
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),1000);return()=>window.clearInterval(timer);},[]);

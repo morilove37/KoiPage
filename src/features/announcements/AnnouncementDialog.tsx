@@ -19,6 +19,7 @@ function VersionContent() {
   return <div className="space-y-4 text-sm leading-relaxed">
     {blocks.map((block, index) => {
       if (index === 0 && /^#{1,2}\s/.test(block)) return null;
+      if (block.startsWith(`QQ 群：${BRAND.communityGroup}`)) return null;
       if (/^#{1,6}\s/.test(block)) return <h3 key={index} className="font-semibold">{plainText(block.replace(/^#{1,6}\s+/, ""))}</h3>;
       if (/^- /.test(block)) return <ul key={index} className="list-disc space-y-1.5 pl-5 text-muted-foreground">{block.split(/\r?\n/).map((line, item) => <li key={item}>{plainText(line.replace(/^- /, ""))}</li>)}</ul>;
       return <p key={index} className="whitespace-pre-line text-muted-foreground">{plainText(block)}</p>;
@@ -54,7 +55,7 @@ function Announcement({ kind, blocked }: { kind: AnnouncementKind; blocked: bool
   const state = useAnnouncementStore();
   const [dismissed, setDismissed] = useState(kind === "welcome"
     ? state.preferences?.welcomeDismissed === true
-    : state.preferences?.dismissedUpdateVersion === BRAND.version);
+    : state.preferences?.dismissedUpdateVersion === BRAND.updateVersion);
   const close = () => { if (!state.saving && !blocked) void closeAnnouncement(dismissed); };
   return <Dialog
     open={!blocked}

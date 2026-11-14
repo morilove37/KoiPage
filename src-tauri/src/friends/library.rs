@@ -208,8 +208,8 @@ fn thumbnail_with_options(
 fn cover_choice(source: &Source) -> (Option<String>, bool, Option<serde_json::Value>) {
     let value = source.cover_preferences();
     let path = custom_path(&value).or_else(|| source.cover_path.clone());
-    // The NSFW flag is a hard mask: a user cannot turn it off through preferences.
-    let censored = value["censored"] == true || source.nsfw;
+    // Public thumbnails are shared without blur; local display preferences stay local.
+    let censored = false;
     let crop = value
         .get("crop")
         .filter(|crop| {
@@ -418,6 +418,7 @@ async fn synchronize(
         cache.published.clear();
         inner.library_synced_at = None;
         inner.library_error = None;
+        inner.library_pending = false;
         return Ok(inner.status());
     }
     let db = crate::commands::games::pool(app).await?;
@@ -487,6 +488,7 @@ async fn synchronize(
     let mut inner = state.inner.lock().await;
     if current(&inner, generation, id) {
         inner.library_error = None;
+        inner.library_pending = false;
     }
     Ok(inner.status())
 }
@@ -539,7 +541,7 @@ pub(super) async fn sync(app: &AppHandle, force: bool) -> CmdResult<Status> {
 
 pub(super) async fn publisher(app: AppHandle) {
     loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(if runtime::low_activity(&app) { 60 } else { 15 })).await;
         let state = app.state::<runtime::FriendsState>();
         if state.stopping.load(std::sync::atomic::Ordering::SeqCst) {
             continue;
@@ -685,15 +687,14 @@ mod tests {
     }
 
     #[test]
-    fn nsfw_games_are_censored_even_without_any_saved_mask() {
+    fn public_covers_are_not_blurred_by_nsfw_or_local_mask_preferences() {
         let mut row = source(1);
         assert!(!cover_choice(&row).1);
         row.nsfw = true;
         row.cover_preferences = Some(json!({"censored":false}).to_string());
-        assert!(
-            cover_choice(&row).1,
-            "the NSFW flag must force blur 12.0 regardless of preferences"
-        );
+        assert!(!cover_choice(&row).1);
+        row.cover_preferences = Some(json!({"censored":true}).to_string());
+        assert!(!cover_choice(&row).1);
     }
 
     #[test]
@@ -765,7 +766,7 @@ mod tests {
         assert_eq!(row.cover_preferences, original);
         let (path, censored, crop) = cover_choice(&row);
         assert_eq!(path.as_deref(), Some("C:/private.png"));
-        assert!(censored && crop.is_some());
+        assert!(!censored && crop.is_some());
         assert!(row.cover_preferences()["verified"].as_bool().unwrap());
     }
     #[test]
@@ -787,17 +788,17 @@ mod tests {
     }
 
     #[test]
-    fn public_covers_follow_custom_image_mask_and_matching_crop_preferences() {
+    fn public_covers_follow_matching_crop_preferences_without_mask() {
         let mut row = source(1);
         row.cover_preferences = Some(json!({"customPath":"C:/safe.png","censored":true,"crop":{"path":"C:/safe.png","x":0.2,"y":0.1,"width":0.5,"height":0.5}}).to_string());
         let (path, censored, crop) = cover_choice(&row);
         assert_eq!(path.as_deref(), Some("C:/safe.png"));
-        assert!(censored);
+        assert!(!censored);
         assert_eq!(crop.unwrap()["width"], 0.5);
         row.cover_preferences = Some(json!({"customPath":null,"censored":true,"crop":{"path":"unrelated","x":0,"y":0,"width":1,"height":1}}).to_string());
         let (path, censored, crop) = cover_choice(&row);
         assert_eq!(path, row.cover_path);
-        assert!(censored && crop.is_none());
+        assert!(!censored && crop.is_none());
     }
 
     #[test]

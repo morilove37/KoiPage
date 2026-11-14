@@ -31,7 +31,6 @@ export function LogSettings() {
     finally { setBusy(false); }
   }
   return <div className="space-y-3" data-log-settings>
-    <p className="text-xs leading-relaxed text-muted-foreground">自动记录应用启动、扫描导入、资料匹配、游戏启动与退出及异常信息。日志仅保存在本机，密钥和令牌会过滤；导出为包含版本、系统信息和保留日志的 TXT 文件。</p>
     <div className="flex flex-wrap gap-2">
       <Button disabled={busy || !info} onClick={() => void exportLogs()}>{busy ? '导出中…' : '导出日志'}</Button>
       <Button variant="outline" disabled={busy || !info} onClick={() => {

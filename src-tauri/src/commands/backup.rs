@@ -61,6 +61,8 @@ pub struct Manifest {
     pub games: i64,
     pub sessions: i64,
     pub assets: usize,
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub skipped_images: usize,
     #[serde(default, skip_serializing_if = "is_false")]
     pub includes_save_snapshots: bool,
     #[serde(default, skip_serializing_if = "is_zero_usize")]
@@ -84,6 +86,7 @@ impl Manifest {
             games: 0,
             sessions: 0,
             assets: 0,
+            skipped_images: 0,
             includes_save_snapshots: false,
             save_snapshots: 0,
             save_bytes: 0,
@@ -282,13 +285,13 @@ async fn references(db: &SqlitePool) -> CmdResult<Vec<String>> {
         .await?,
     );
     let custom: Vec<String> =
-        sqlx::query_scalar("SELECT value FROM settings WHERE key GLOB 'game_cover:*'")
+        sqlx::query_scalar("SELECT value FROM settings WHERE key GLOB 'game_cover:*' OR key GLOB 'society_logo:*'")
             .fetch_all(db)
             .await?;
     for value in custom {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&value) {
             if let Some(path) = value
-                .get("customPath")
+                .get("customPath").or_else(|| value.get("path"))
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
@@ -306,6 +309,46 @@ async fn references(db: &SqlitePool) -> CmdResult<Vec<String>> {
 }
 async fn create_archive(db: &SqlitePool, dest: &Path, temp_root: &Path) -> CmdResult<Manifest> {
     create_archive_with_saves(db, dest, temp_root, None).await
+}
+/// Only a missing file is optional. Permission errors and damaged images still
+/// fail loudly so a backup never hides an unrelated disk problem.
+fn read_optional_image(path: &Path) -> CmdResult<Option<Vec<u8>>> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(error(e)),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_IMAGE + 1).read_to_end(&mut bytes).map_err(error)?;
+    if bytes.len() as u64 > MAX_IMAGE { return Err(error("图片超过大小限制")); }
+    validate_image(&bytes)?;
+    Ok(Some(bytes))
+}
+/// Clear unavailable references in the export snapshot, never the live DB.
+async fn clear_missing_image(db: &SqlitePool, source: &str) -> CmdResult<()> {
+    sqlx::query("UPDATE games SET cover_path=NULL WHERE cover_path=?").bind(source).execute(db).await?;
+    let birthdays: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name='birthday_characters'").fetch_one(db).await?;
+    if birthdays > 0 {
+        sqlx::query("UPDATE birthday_characters SET avatar_path=NULL WHERE avatar_path=?").bind(source).execute(db).await?;
+        sqlx::query("UPDATE birthday_characters SET override_avatar=NULL WHERE override_avatar=?").bind(source).execute(db).await?;
+    }
+    sqlx::query("UPDATE settings SET value=NULL WHERE key='background_image_path' AND value=?").bind(source).execute(db).await?;
+    let prefs: Vec<(String, String)> = sqlx::query_as("SELECT key,value FROM settings WHERE (key GLOB 'game_cover:*' OR key GLOB 'society_logo:*') AND value IS NOT NULL").fetch_all(db).await?;
+    for (key, raw) in prefs {
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            let mut changed = false;
+            for field in ["customPath", "path"] {
+                if value.get(field).and_then(|v| v.as_str()).map(str::trim) == Some(source) {
+                    value[field] = serde_json::Value::Null; changed = true;
+                }
+            }
+            if value.get("crop").and_then(|v| v.get("path")).and_then(|v| v.as_str()) == Some(source) {
+                value["crop"] = serde_json::Value::Null; changed = true;
+            }
+            if changed { sqlx::query("UPDATE settings SET value=? WHERE key=?").bind(value.to_string()).bind(key).execute(db).await?; }
+        }
+    }
+    Ok(())
 }
 async fn create_archive_with_saves(db: &SqlitePool, dest: &Path, temp_root: &Path, save_root: Option<&Path>) -> CmdResult<Manifest> {
     let tmp = TempDir::new(temp_root)?;
@@ -325,6 +368,23 @@ async fn create_archive_with_saves(db: &SqlitePool, dest: &Path, temp_root: &Pat
             .fetch_one(&snap)
             .await?;
         let paths = references(&snap).await?;
+        let mut images = Vec::new();
+        let mut image_bytes = 0u64;
+        for source in paths {
+            if source.starts_with("http:") || source.starts_with("https:") {
+                return Err(error(format!("图片尚未保存在本地：{source}，请先重新匹配封面")));
+            }
+            match read_optional_image(Path::new(&source))? {
+                Some(bytes) => {
+                    image_bytes += bytes.len() as u64;
+                    if image_bytes + fs::metadata(&snapshot).map_err(error)?.len() > MAX_ARCHIVE { return Err(error("备份超过 1 GB 限制")); }
+                    images.push((source, bytes));
+                },
+                None => { clear_missing_image(&snap, &source).await?; m.skipped_images += 1; }
+            }
+        }
+        // Checkpoint snapshot edits before reading the database payload.
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&snap).await?;
         let mut payloads = vec![read_limited(&snapshot, MAX_ARCHIVE)?];
         m.entries.push(Entry {
             path: "database.sqlite".into(),
@@ -333,15 +393,7 @@ async fn create_archive_with_saves(db: &SqlitePool, dest: &Path, temp_root: &Pat
             sha256: hash(&payloads[0]),
         });
         let mut total = payloads[0].len() as u64;
-        for source in paths {
-            if source.starts_with("http:") || source.starts_with("https:") {
-                return Err(error(format!(
-                    "图片尚未保存在本地：{source}，请先重新匹配封面"
-                )));
-            }
-            let b = read_limited(Path::new(&source), MAX_IMAGE)
-                .map_err(|e| error(format!("无法备份引用图片 {source}：{e}")))?;
-            validate_image(&b)?;
+        for (source, b) in images {
             total += b.len() as u64;
             if total > MAX_ARCHIVE {
                 return Err(error("备份超过 1 GB 限制"));
@@ -547,6 +599,7 @@ pub struct BackupEstimate {
     games: i64,
     sessions: i64,
     assets: usize,
+    skipped_images: usize,
     save_snapshots: usize,
     save_bytes: u64,
     estimated_bytes: u64,
@@ -560,11 +613,13 @@ pub async fn backup_estimate(app: AppHandle, include_save_snapshots: bool) -> Cm
     let db = pool(&app).await?;
     let paths = references(&db).await?;
     let mut asset_bytes = 0u64;
+    let mut skipped_images = 0usize;
     for path in &paths {
         if path.starts_with("http:") || path.starts_with("https:") { return Err(error("存在尚未保存在本地的图片，请先重新匹配封面")); }
-        let bytes = read_limited(Path::new(path), MAX_IMAGE)?;
-        validate_image(&bytes)?;
-        asset_bytes += bytes.len() as u64;
+        match read_optional_image(Path::new(path))? {
+            Some(bytes) => asset_bytes += bytes.len() as u64,
+            None => skipped_images += 1,
+        }
         if asset_bytes > MAX_ARCHIVE { return Err(error("图片总量超过 1 GB 限制")); }
     }
     let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM games").fetch_all(&db).await?;
@@ -576,7 +631,7 @@ pub async fn backup_estimate(app: AppHandle, include_save_snapshots: bool) -> Cm
     let size: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(&db).await?;
     let estimated_bytes = (pages * size) as u64 + asset_bytes + save_bytes + 4096 + (files.len() + paths.len()) as u64 * 512;
     if estimated_bytes > MAX_ARCHIVE { return Err(error("预计迁移包超过 1 GB 限制，请减少存档快照后重试")); }
-    Ok(BackupEstimate { games: ids.len() as i64, sessions: sqlx::query_scalar("SELECT COUNT(*) FROM play_sessions").fetch_one(&db).await?, assets: paths.len(), save_snapshots, save_bytes, estimated_bytes })
+    Ok(BackupEstimate { games: ids.len() as i64, sessions: sqlx::query_scalar("SELECT COUNT(*) FROM play_sessions").fetch_one(&db).await?, assets: paths.len() - skipped_images, skipped_images, save_snapshots, save_bytes, estimated_bytes })
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -733,12 +788,16 @@ async fn stage_restore(
             .execute(&mut *tx)
             .await?;
             let prefs: Vec<(String, String)> =
-                sqlx::query_as("SELECT key,value FROM settings WHERE key GLOB 'game_cover:*'")
+                sqlx::query_as("SELECT key,value FROM settings WHERE key GLOB 'game_cover:*' OR key GLOB 'society_logo:*'")
                     .fetch_all(&mut *tx)
                     .await?;
             for (key, value) in prefs {
                 if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&value) {
                     let mut changed = false;
+                    if key.starts_with("society_logo:") && value.get("path").and_then(|v| v.as_str()) == Some(source.as_str()) {
+                        value["path"] = serde_json::Value::String(dest.to_string());
+                        changed = true;
+                    }
                     if value
                         .get("customPath")
                         .and_then(|v| v.as_str())
@@ -1231,9 +1290,13 @@ mod tests {
             .execute(&db)
             .await
             .unwrap();
+        image::RgbaImage::new(4, 4).save(tmp.0.join("logo.png")).unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('society_logo:test',?)")
+            .bind(serde_json::json!({"path":tmp.0.join("logo.png").to_string_lossy(),"custom":true,"source":"custom","checkedAt":1,"retryAfter":0}).to_string())
+            .execute(&db).await.unwrap();
         let archive = tmp.0.join("complete.koibak");
         let manifest = create_archive(&db, &archive, &tmp.0).await.unwrap();
-        assert_eq!((manifest.games, manifest.assets), (1, 2));
+        assert_eq!((manifest.games, manifest.assets), (1, 3));
         let (m, p) = inspect(&archive, &tmp.0).await.unwrap();
         sqlx::query("UPDATE games SET title='Changed'")
             .execute(&db)
@@ -1262,7 +1325,7 @@ mod tests {
             "Original"
         );
         let refs = references(&restored).await.unwrap();
-        assert_eq!(refs.len(), 2);
+        assert_eq!(refs.len(), 3);
         assert!(Path::new(&refs[0]).is_file());
         assert!(refs[0].contains("restored-assets"));
         let prefs: String =
@@ -1297,6 +1360,11 @@ mod tests {
         assert_eq!(source_prefs["crop"]["path"], refs[0]);
         assert_eq!(source_prefs["crop"]["x"], 0.2);
         assert_eq!(source_prefs["crop"]["height"], 0.4);
+        let logo: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='society_logo:test'").fetch_one(&restored).await.unwrap();
+        let logo: serde_json::Value = serde_json::from_str(&logo).unwrap();
+        assert!(logo["path"].as_str().unwrap().contains("restored-assets"));
+        assert!(Path::new(logo["path"].as_str().unwrap()).is_file());
+        assert_eq!(logo["custom"], true);
         restored.close().await;
     }
     #[tokio::test]
@@ -1408,13 +1476,54 @@ mod tests {
         restored.close().await;
     }
     #[tokio::test]
-    async fn missing_images_abort_without_creating_incomplete_backup() {
+    async fn missing_images_are_skipped_only_in_snapshot_and_custom_cover_survives() {
         let tmp = TempDir::new(&test_root()).unwrap();
         let db = fixture(&tmp.0).await;
         fs::remove_file(tmp.0.join("original.png")).unwrap();
         let archive = tmp.0.join("bad.koibak");
-        assert!(create_archive(&db, &archive, &tmp.0).await.is_err());
-        assert!(!archive.exists());
+        let manifest = create_archive(&db, &archive, &tmp.0).await.unwrap();
+        assert_eq!(manifest.assets, 1);
+        assert_eq!(manifest.skipped_images, 1);
+        let (manifest, payloads) = inspect(&archive, &tmp.0).await.unwrap();
+        let snapshot = tmp.0.join("checked.sqlite");
+        fs::write(&snapshot, &payloads[0]).unwrap();
+        let restored = open_db(&snapshot).await.unwrap();
+        let cover: Option<String> = sqlx::query_scalar("SELECT cover_path FROM games WHERE id=7").fetch_one(&restored).await.unwrap();
+        assert!(cover.is_none());
+        let prefs: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='game_cover:7'").fetch_one(&restored).await.unwrap();
+        assert!(prefs.contains("custom.png"));
+        assert_eq!(manifest.games, 1);
+        let original: Option<String> = sqlx::query_scalar("SELECT cover_path FROM games WHERE id=7").fetch_one(&db).await.unwrap();
+        assert!(original.is_some());
+        restored.close().await;
+        db.close().await;
+    }
+    #[tokio::test]
+    async fn missing_custom_cover_clears_only_its_snapshot_reference_and_crop() {
+        let tmp = TempDir::new(&test_root()).unwrap();
+        let db = fixture(&tmp.0).await;
+        fs::remove_file(tmp.0.join("custom.png")).unwrap();
+        let archive = tmp.0.join("missing-custom.koibak");
+        let manifest = create_archive(&db, &archive, &tmp.0).await.unwrap();
+        assert_eq!((manifest.assets, manifest.skipped_images), (1, 1));
+        let (_, payloads) = inspect(&archive, &tmp.0).await.unwrap();
+        let snapshot = tmp.0.join("snapshot.sqlite"); fs::write(&snapshot, &payloads[0]).unwrap();
+        let restored = open_db(&snapshot).await.unwrap();
+        let raw: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='game_cover:7'").fetch_one(&restored).await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(value["customPath"].is_null()); assert!(value["crop"].is_null()); assert_eq!(value["censored"], true);
+        let cover: Option<String> = sqlx::query_scalar("SELECT cover_path FROM games WHERE id=7").fetch_one(&restored).await.unwrap();
+        assert!(cover.is_some());
+        let raw: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='game_cover:7'").fetch_one(&db).await.unwrap();
+        assert!(raw.contains("custom.png"));
+        restored.close().await; db.close().await;
+    }
+    #[tokio::test]
+    async fn corrupt_images_still_abort_without_publishing_a_backup() {
+        let tmp = TempDir::new(&test_root()).unwrap(); let db = fixture(&tmp.0).await;
+        fs::write(tmp.0.join("custom.png"), b"invalid image").unwrap();
+        let archive = tmp.0.join("corrupt.koibak");
+        assert!(create_archive(&db, &archive, &tmp.0).await.is_err()); assert!(!archive.exists());
         db.close().await;
     }
     #[tokio::test]

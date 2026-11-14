@@ -60,7 +60,7 @@ export function BackupPanel() {
   }
   return <div className="mt-5 border-t border-border pt-4">
     <h3 className="text-sm font-medium">完整备份与恢复</h3>
-    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">完整备份保存数据库、游戏封面、角色生日头像、自定义背景、设置和游玩记录。换电脑可使用「迁移到新电脑」，一并打包已创建的存档快照。均不包含游戏本体和未备份的实际存档。备份与恢复前请结束正在运行的游戏。</p>
+    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">备份游戏库与设置；迁移另含已创建的存档快照。不包含游戏本体和未备份的实际存档。操作前请退出游戏。</p>
     <div className="mt-3 flex flex-wrap gap-2">
       <button type="button" className={button} disabled={busy || prepared} onClick={create}>{busy ? '处理中…' : '创建完整备份…'}</button>
       <button type="button" className={button} disabled={busy || prepared} onClick={inspect}>选择备份并预览…</button>

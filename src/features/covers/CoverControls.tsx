@@ -53,7 +53,7 @@ export function CoverControls({ gameId, sourcePath, title, cropControls }: { gam
         onClick={() => void run(() => updateCoverPreferences(gameId, { censored: !preferences.censored }),
           preferences.censored ? '已取消封面打码。' : '已开启封面打码。')}>{preferences.censored ? '取消打码' : '封面打码'}</Button>
     </div>
-    <p className="text-[11px] text-muted-foreground">{preferences.customPath ? '使用自定义封面' : '使用原封面'}{preferences.censored ? ' · 已打码' : ''} · 设置即时保存</p>
+    <p className="text-[11px] text-muted-foreground">{preferences.customPath ? '使用自定义封面' : '使用原封面'}{preferences.censored ? ' · 已打码' : ''}</p>
     {error || loadError ? <p role="alert" className="text-xs text-destructive">{error ?? loadError}</p> : null}
     {!loaded && loadError ? <Button size="sm" variant="outline" onClick={() => void run(loadCoverPreferences, '已重新读取封面设置。')}>重试读取</Button> : null}
     {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}

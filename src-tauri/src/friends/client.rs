@@ -43,7 +43,8 @@ impl Api {
             .http
             .request(method, format!("{}{path}", self.config.server_url))
             .header("apikey", &self.config.public_key)
-            .header("Content-Type", "application/json");
+            .header("Content-Type", "application/json")
+            .header("X-Koipage-Policy", super::consent::version());
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }

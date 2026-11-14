@@ -2,7 +2,7 @@
 
 应用公告由 `src/features/announcements/AnnouncementDialog.tsx` 内的 `WelcomeContent` 维护。
 
-版本公告读取当前安装版本对应的 `docs/releases/v<版本号>.md`，随应用打包，无需联网。发布新版本时应同时更新 package.json、Tauri / Cargo 版本与该版本的公告文件。未提供对应文件时会显示当前版本和缺少详细说明的提示，不会误用其他版本的公告。
+版本公告读取对外版本对应的 `docs/releases/v<版本号>.md`，随应用打包，无需联网。发布新版本时应同时更新 package.json、Tauri / Cargo 版本与该版本的公告文件。未提供对应文件时会显示当前版本和缺少详细说明的提示，不会误用其他版本的公告。
 
 提醒选择保存在现有数据库 settings 表的 `announcements_preferences_v1` 中，无需修改数据库结构。
 
@@ -16,3 +16,7 @@
 - 应用公告和后续每个版本公告均显示水无月萤 Q 版小人；点击展开进群小提示与群号。由共用页脚统一提供，无需为新版本重复配置。
 
 运行 `pnpm test:announcements` 检查首次启动、跨版本提醒、独立关闭、设置恢复与异常数据处理。
+
+## 0.7.3 修订版的更新识别
+
+对外版本仍为 0.7.3，package.json 的 releaseVersion 为 0.7.3；package / Tauri / Cargo 的内部版本为 0.7.3001，用于旧客户端更新比较和安装包升级。公告偏好使用 BRAND.updateVersion 标记修订，展示和公告文件使用 BRAND.version，原 0.7.3 已关闭的公告不会抑制本次修订提醒。发布流程按 releaseVersion 读取公告，并使用内部版本生成更新元数据。后续内部版本必须大于 0.7.3001（例如 0.7.3002 或 0.8.0），避免旧客户端认为已是最新版。安装升级标识与签名公钥保持不变。

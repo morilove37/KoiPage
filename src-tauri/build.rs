@@ -11,6 +11,10 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // The frontend imports this file through Vite; the native consent validator
+    // embeds the same policy. Rebuild native code when that shared input changes.
+    println!("cargo:rerun-if-changed=../supabase/functions/_shared/legal-policy.json");
+    println!("cargo:rerun-if-changed=src/friends/defaults.json");
     generate_bundled_manifest("magpie", "magpie_files.rs");
     generate_bundled_manifest("7zip", "sevenzip_files.rs");
     tauri_build::build();

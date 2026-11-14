@@ -28,6 +28,7 @@ test('single game actions reflect favourite, status and configured backup destin
   assert.equal(actions.find(a => a.id === 'status:playing').checked, true);
   assert.equal(actions.find(a => a.id === 'backup').destination, 'backup');
   assert.equal(actions.find(a => a.id === 'metadata').disabled, false);
+  assert.equal(actions.some(a => a.id === 'directory'), false);
 });
 
 test('archived, missing paths and starting games cannot be launched from the menu', () => {
@@ -38,8 +39,6 @@ test('archived, missing paths and starting games cannot be launched from the men
     assert.equal(actions.find(a => a.id === 'launch').disabled, true);
     assert.equal(actions.find(a => a.id === 'files').disabled, false);
   }
-  assert.equal(gameContextActions([game(1, { installPath: '' })], ready).find(a => a.id === 'directory').disabled, true);
-  assert.equal(gameContextActions([game(1)], { ...ready, archived: true }).find(a => a.id === 'directory').disabled, true);
 });
 
 test('running games open their launch panel and cannot be backed up before exit', () => {

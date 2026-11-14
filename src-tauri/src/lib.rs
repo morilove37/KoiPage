@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
+mod ai;
 mod bangumi_sync;
 pub mod birthdays;
 pub mod commands;
@@ -83,6 +84,7 @@ pub fn run() {
     logging::init();
 
     tauri::Builder::default()
+        .manage(ai::AiState::default())
         .manage(friends::FriendsState::default())
         .manage(bangumi_sync::SyncState::default())
         .manage(commands::metadata_refresh::RefreshJob::default())
@@ -127,7 +129,12 @@ pub fn run() {
         // at runtime if the state was never managed.
         .manage(launcher::RunningGames::default())
         .invoke_handler(tauri::generate_handler![
+            ai::ai_config_get,
+            ai::ai_config_save,
+            ai::ai_request,
+            ai::ai_cancel,
             friends::friends_status,
+            friends::friends_activity,
             friends::friends_library_games,
             friends::friends_profile,
             friends::friends_sync_library,
@@ -141,6 +148,7 @@ pub fn run() {
             friends::friends_request_user,
             friends::friends_report,
             friends::friends_history,
+            friends::friends_history_covers,
             friends::friends_delete_account,
             friends::friends_resume_deletion,
             friends::friends_cover_status,
@@ -218,6 +226,8 @@ pub fn run() {
             commands::metadata::metadata_cover_cache,
             commands::metadata::metadata_cover_preview,
             commands::covers::game_cover_import,
+            commands::society_logos::society_logo_get,
+            commands::society_logos::society_logo_set,
             commands::covers::covers_migrate,
             commands::metadata::metadata_autofetch,
             commands::metadata_refresh::metadata_refresh_status,

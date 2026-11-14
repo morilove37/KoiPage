@@ -1,7 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { openPath } from '@tauri-apps/plugin-opener';
 
 import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
 import { matchesInstallation } from "@/features/installation/model";
@@ -55,6 +54,7 @@ import type { LibraryModalState } from './modal-boundary';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH } from './render-window';
 import { FolderPanel } from "./FolderPanel";
 import { FolderTile } from './FolderTile';
+import { SocietyFolderTile } from './SocietyFolderTile';
 import { FolderGamePicker } from './FolderGamePicker';
 import { FolderMoveDialog } from './FolderMoveDialog';
 import { canResetFolder, folderStatistics, moveFolder, replaceFolderGames, resetEmptyFolder } from './folder-operations';
@@ -679,7 +679,6 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           setImportNotice(`状态已更新为「${GAME_STATUS_LABELS[status]}」。`);
         }
       } else if (id === 'launch') await launcher.launch(contextGame);
-      else if (id === 'directory') await openPath(contextGame.installPath);
       else if (id === 'detail') navigate(`/library/${contextGame.id}`);
       else if (id === 'files') navigate(`/library/${contextGame.id}?tab=files`);
       else if (id === 'metadata') setMetadataEditGame(contextGame);
@@ -792,7 +791,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
         </div> : null) : folderOverview && folderTab === 'status' ? <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
           {statusFolders.map(folder => <FolderTile key={folder.value} name={folder.name} count={folder.count} onClick={() => { setLibraryFilters(normalizeFilters({})); setFolderParams({tab:'status',status:folder.value}); }} />)}
         </div> : folderOverview ? <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-            {societyFolders.map(folder => <FolderTile key={folder.value} name={folder.name} count={folder.gameIds.length} onClick={() => setFolderParams({society:folder.value})} />)}
+            {societyFolders.map(folder => <SocietyFolderTile key={folder.value} name={folder.name} value={folder.value} count={folder.gameIds.length} onClick={() => setFolderParams({society:folder.value})} />)}
             {!loading && games.length === 0 ? <p className="text-sm text-muted-foreground">添加游戏后，会自动按社团分类。</p> : null}
           </div> : folderTab === 'society' ? <div className="flex items-center gap-3">
             <BackButton onClick={() => { exitSelectMode(); setFolderParams({}); }}>返回社团</BackButton>

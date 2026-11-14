@@ -12,7 +12,7 @@ use reqwest::Method;
 pub use runtime::{FriendsState, stop};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,8 +22,6 @@ pub struct AuthInput {
     password: String,
     #[serde(default)]
     nickname: String,
-    #[serde(default)]
-    invite_code: String,
     #[serde(default)]
     reset_code: String,
     #[serde(default)]
@@ -62,6 +60,10 @@ pub async fn friends_library_games(app: AppHandle) -> CmdResult<Vec<HideableGame
 }
 
 #[tauri::command]
+pub fn friends_activity(app: AppHandle, idle: bool) {
+    app.state::<FriendsState>().idle.store(idle, std::sync::atomic::Ordering::Relaxed);
+}
+#[tauri::command]
 pub async fn friends_status(app: AppHandle) -> CmdResult<Status> {
     runtime::ensure(&app).await;
     Ok(app.state::<FriendsState>().inner.lock().await.status())
@@ -89,12 +91,10 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
                 input.nickname.trim().into()
             };
             if nickname.chars().count() > 32
-                || input.invite_code.len() > 128
-                || input.invite_code.trim().is_empty()
             {
-                return Err(CmdError("FRIENDS_INPUT: 请检查昵称和邀请码".into()));
+                return Err(CmdError("FRIENDS_INPUT: 请检查昵称".into()));
             }
-            api.request(Method::POST,"/functions/v1/friends-register",None,json!({"username":username,"password":input.password,"nickname":nickname,"inviteCode":input.invite_code.trim(),"consent":input.consent})).await?;
+            api.request(Method::POST,"/functions/v1/friends-register",None,json!({"username":username,"password":input.password,"nickname":nickname,"consent":input.consent})).await?;
             api.password_login(&username, &input.password).await?
         }
         "reset" => {
@@ -150,6 +150,8 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
     inner.library_error = None;
     inner.history_synced_at = None;
     inner.history_error = None;
+    inner.library_pending = true;
+    inner.history_pending = true;
     state
         .stopping
         .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -187,13 +189,20 @@ pub async fn friends_logout(app: AppHandle) -> CmdResult<Status> {
     runtime::clear_account(&app).await;
     if let Some(tokens) = tokens {
         if let Ok(api) = client::Api::new(&config) {
-            let _ = api
+            if let Err(error) = api
                 .rpc(
                     "koipage_history_sync",
                     &tokens.access_token,
                     json!({"p_enabled":false,"p_sessions":[]}),
                 )
-                .await;
+                .await
+            {
+                status.history_error = Some(format!("已退出登录，但云端游玩记录尚未撤回；请恢复连接并重新登录后确认。{}", error.0));
+                let mut inner = state.inner.lock().await;
+                if inner.generation == status.generation {
+                    inner.history_error = status.history_error.clone();
+                }
+            }
             if let Err(error) = api
                 .rpc(
                     "koipage_library_sync",
@@ -247,14 +256,17 @@ pub async fn friends_preferences(app: AppHandle, input: Preferences) -> CmdResul
     runtime::save(&app, &next).await?;
     inner.config = next;
     inner.generation += 1;
+    inner.library_pending = true;
+    inner.history_pending = true;
+    let _ = app.emit("friends-status-changed", inner.status());
     drop(inner);
     // Persist restrictive choices first. Failed remote updates stay visible and
     // the native worker retries even when the friends page is not open.
-    let _ = library::sync(&app, true).await;
     let history_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let _ = history::sync(&history_handle, true).await;
     });
+    let _ = library::sync(&app, true).await;
     Ok(state.inner.lock().await.status())
 }
 
@@ -459,6 +471,20 @@ pub async fn friends_report(
         }),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn friends_history_covers(app: AppHandle, target: String) -> CmdResult<Value> {
+    runtime::ensure(&app).await;
+    let state = app.state::<FriendsState>();
+    let mut inner = state.inner.lock().await;
+    let target = if target == "me" {
+        inner.account.as_ref().map(|account| account.id.clone())
+            .ok_or_else(|| CmdError("FRIENDS_SESSION: 请先登录".into()))?
+    } else if valid_uuid(&target) { target } else {
+        return Err(CmdError("FRIENDS_INPUT: 好友目标无效".into()));
+    };
+    runtime::rpc(&mut inner, "koipage_friend_history_covers", json!({"p_target":target})).await
 }
 
 #[tauri::command]
