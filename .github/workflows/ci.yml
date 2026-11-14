@@ -27,6 +27,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+      - run: node scripts/check-public-source.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm check:ipc

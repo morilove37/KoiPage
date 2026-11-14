@@ -21,7 +21,8 @@
     "test:metadata": "node --test tests/metadata-preferences.test.mjs",
     "test:logs": "node --test tests/log-model.test.mjs tests/logging-runtime.test.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check:public": "node scripts/check-public-source.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.3",
