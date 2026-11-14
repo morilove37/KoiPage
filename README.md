@@ -10,7 +10,8 @@
   <a href="#功能">功能介绍</a> ·
   <a href="#界面预览">界面预览</a> ·
   <a href="#快速上手">快速上手</a> ·
-  <a href="https://github.com/morilove37/KoiPage/issues">反馈问题</a>
+  <a href="https://github.com/morilove37/KoiPage/issues">反馈问题</a> ·
+  <a href="https://ifdian.net/a/koipage">爱发电支持</a>
 </div>
 
 ---
@@ -162,3 +163,9 @@ pnpm tauri dev
 作者：[@morilove37](https://github.com/morilove37)。
 
 抖音：**女友为了我变成4i** · 抖音号 **shuiwuyueying.** · [打开作者抖音主页](https://www.douyin.com/user/MS4wLjABAAAAcKXZbXNLc87TzVG6SzTXl4hUtoA0QbGgt57arDh-HxvVRSovn5fPvJvcD2mbrX8f?from_tab_name=main)。
+
+## 支持恋页
+
+如果恋页让你整理收藏、记录游玩时更方便，欢迎通过 [爱发电支持恋页](https://ifdian.net/a/koipage)，帮助项目持续开发、修复问题与维护相关服务。
+
+赞助完全自愿，是否赞助都不影响正常使用。感谢每一份使用、反馈、分享与支持。
