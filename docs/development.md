@@ -15,13 +15,13 @@ pnpm build
 pnpm check:ipc
 pnpm test
 pnpm check:release
-cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+cargo test --manifest-path src-tauri/Cargo.toml --tests --locked
 ```
 
 部分测试会访问外部数据源，默认忽略；手动运行联网测试会消耗数据源配额。
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml --lib live_tests -- --ignored --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --tests live_tests -- --ignored --nocapture --test-threads=1
 ```
 
 ## 目录
@@ -55,9 +55,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib live_tests -- --ignored --
 
 - `src-tauri/resources/locale-emulator`：内置 Locale Emulator，由 `launcher/locale.rs` 的 `include_bytes!` 清单直接内嵌。
 - `src-tauri/resources/magpie`：官方 Magpie 发布包（GPL-3.0，含 `COPYING`、`NOTICE.txt`）。`build.rs` 递归生成内嵌清单，首次使用时由 `launcher/magpie.rs` 解压到应用本地数据目录的 `tools/magpie/<版本>`；`.gitignore` 对这里的 `*.exe` 有白名单，新增二进制后确认 `git status` 能看到。
-- `src-tauri/resources/magpie-defaults/config.json`：随包分发的默认缩放配置（开发者调校的 `scalingModes` 与默认选择）。本机没有 Magpie 配置时由 `launcher/magpie.rs` 写入 `%LOCALAPPDATA%\Magpie\config\v4\config.json`；已有配置不会被覆盖。调整默认值后替换该文件即可，`cargo test --lib` 会校验它能被解析且包含缩放模式。
+- `src-tauri/resources/magpie-defaults/config.json`：随包分发的默认缩放配置（开发者调校的 `scalingModes` 与默认选择）。本机没有 Magpie 配置时由 `launcher/magpie.rs` 写入 `%LOCALAPPDATA%\Magpie\config\v4\config.json`；已有配置不会被覆盖。调整默认值后替换该文件即可，`cargo test --tests` 会校验它能被解析且包含缩放模式。
 - `src-tauri/resources/7zip`：官方 7-Zip 26.01 控制台组件（`7z.exe` + `7z.dll`，LGPL + unRAR restriction，含 `License.txt`、`NOTICE.txt`）。`build.rs` 生成 `sevenzip_files.rs`，首次解压时由 `extract/mod.rs` 释放到应用本地数据目录的 `tools/7zip/<版本>`；`.gitignore` 对 `7z.exe` 有白名单。升级时替换这两个文件并同步 `BUNDLED_VERSION`。
-- 升级内置 Magpie：替换 `src-tauri/resources/magpie` 的内容并同步 `NOTICE.txt`，修改 `launcher/magpie.rs` 的 `BUNDLED_VERSION`，再更新 `docs/magpie.md` 与 README 中的版本与 SHA-256。`cargo test --lib` 会校验内嵌资源完整性、解压幂等和内置版本号。
+- 升级内置 Magpie：替换 `src-tauri/resources/magpie` 的内容并同步 `NOTICE.txt`，修改 `launcher/magpie.rs` 的 `BUNDLED_VERSION`，再更新 `docs/magpie.md` 与 README 中的版本与 SHA-256。`cargo test --tests` 会校验内嵌资源完整性、解压幂等和内置版本号。
 
 ## 真实窗口验证
 

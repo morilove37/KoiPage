@@ -271,7 +271,7 @@ tauri-plugin-sql (v2.6.0) : @tauri-apps/plugin-sql (v2.5.0)
 `src-tauri/src/metadata/live_tests.rs` 里有 9 个 `#[ignore]` 的真机测试。默认不跑（需要网络 + 会消耗 VNDB 限流额度）。手动跑：
 
 ```powershell
-cargo test --lib live_tests -- --ignored --nocapture --test-threads=1
+cargo test --tests live_tests -- --ignored --nocapture --test-threads=1
 ```
 
 **它们不是可选的锦上添花** —— 上面那三个陷阱全是它们抓出来的，`cargo check` 和单元测试都发现不了。

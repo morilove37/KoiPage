@@ -33,7 +33,7 @@
 ## 开发验证
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml luna --lib --locked
+cargo test --manifest-path src-tauri/Cargo.toml luna --tests --locked
 pnpm build
 pnpm check:ipc
 ```

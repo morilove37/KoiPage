@@ -14,6 +14,11 @@ edition = "2024"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "galgame_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+# Windows 测试二进制需要嵌入 Common Controls v6 清单（见 build.rs），而
+# Cargo 的 `rustc-link-arg-tests` 只作用于显式声明的 test 目标，不会作用于
+# 内置的 lib 单元测试目标。因此关闭内置测试目标，改用下面的 `unit` 目标
+# 编译同一份 src/lib.rs。`cargo test` 仍会运行全部单元测试。
+test = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -77,3 +82,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[[test]]
+name = "unit"
+path = "src/lib.rs"
+

@@ -31,7 +31,7 @@ jobs:
       - run: pnpm check:ipc
       - run: pnpm test
       - run: pnpm check:release
-      - run: cargo test --lib --locked
+      - run: cargo test --tests --locked
         working-directory: src-tauri
       - name: Read release notes
         id: notes

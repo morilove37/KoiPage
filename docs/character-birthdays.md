@@ -17,7 +17,7 @@ pnpm test:birthdays
 node --test tests/*.test.mjs
 pnpm build
 pnpm check:ipc
-cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+cargo test --manifest-path src-tauri/Cargo.toml --tests --locked
 ```
 
 日期测试包含 30 天范围的跨年边界；Rust 回归测试覆盖来源解析、多作品去重、关联 ID 变化、缓存保留、修正保留、取消时事务回滚、导入原子校验及四种头像格式。开发验证使用真实 IPC 迁移、同步与读写；隔离浏览器验证首次同步、多位寿星、未知生日修正、隐藏恢复、错误态和三种主题的 1280/960 布局。未进行安装包构建。

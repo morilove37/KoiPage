@@ -5,7 +5,7 @@
 //! `cargo test`. Run it deliberately:
 //!
 //! ```text
-//! cargo test --lib live_tests -- --ignored --nocapture --test-threads=1
+//! cargo test --tests live_tests -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! This exists because unit tests with hand-written JSON prove only that our
