@@ -1,5 +1,9 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
-import {Link} from 'react-router-dom';
+import {Link,useSearchParams} from 'react-router-dom';
+import {GeometryIcon} from '@/components/ui/geometry-icon';
+import {cn} from '@/lib/utils';
+import {MailboxPanel} from './MailboxPanel';
+import {useMailbox} from './useMailbox';
 import {Button} from '@/components/ui/button';
 import {Card,CardContent,CardHeader,CardTitle} from '@/components/ui/card';
 import {Field,Input} from '@/components/ui/input';
@@ -35,6 +39,12 @@ interface ReportTarget {id:string;username:string;nickname:string;gameKey:string
 
 export default function FriendsPage(){
   const status=useFriendsStore(s=>s.status),account=status?.account;
+  const [params,setParams]=useSearchParams();
+  const tab=params.get('tab')??'friends';
+  const section=['friends','mail','discover','settings'].includes(tab)?tab:'friends';
+  const go=(value:string)=>setParams(value==='friends'?{}:{tab:value});
+  const mail=useMailbox(account?.id);
+  useEffect(()=>{setSearchResults(null);setAddTarget(null);setReportTarget(null);setConfirm(null);setNewPassword('');setNotice('');},[account?.id]);
   const [view,setView]=useState<ViewSnapshot|null>(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
   const [mode,setMode]=useState<'login'|'register'|'reset'>('login'),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[resetCode,setResetCode]=useState('');
   const [registrationConsent,setRegistrationConsent]=useState(emptyRegistrationConsent);
@@ -105,7 +115,7 @@ export default function FriendsPage(){
     void perform(async()=>{
       const result=await api.friendsReport({target:target.id,gameKey:target.gameKey,reason:input.reason,detail:input.detail||null});
       setReportTarget(null);
-      setNotice(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，管理员会尽快处理。');
+      setNotice(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，处理结果会通过站内邮件通知你。');
     },'');
   };
   const matchingGames=games.filter(g=>!query.trim()||`${g.title}\n${g.originalTitle??''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -113,8 +123,8 @@ export default function FriendsPage(){
   const friends=sortFriends(view?.friends??[]);
   const filteredFriends=friends.filter(friend=>(!onlineOnly||friend.online)&&`${friend.nickname}\n${friend.username}`.toLocaleLowerCase().includes(friendQuery.trim().toLocaleLowerCase()));
   const librarySynced=formatSyncTime(status?.librarySyncedAt),historySynced=formatSyncTime(status?.historySyncedAt);
-  return <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">看看朋友正在推哪部作品。</p></div>
+  return <div className={cn('mx-auto flex flex-col gap-6 p-4 sm:p-6 lg:p-8',account&&section==='mail'?'max-w-none':'max-w-7xl')}>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">与同好相聚，发现彼此的游戏时光。</p></div>
       <div className="flex items-center gap-2">{account?<Button variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
     {!account?<div className="text-xs text-muted-foreground"><LegalDocuments/></div>:null}
     {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>:null}
@@ -139,7 +149,23 @@ export default function FriendsPage(){
         {requiresConsent?<RegistrationConsent value={registrationConsent} onChange={setRegistrationConsent} serverUrl={config?.serverUrl??''} disabled={busy}/>:null}
         <Button type="submit" disabled={busy||!config?.serverUrl||(requiresConsent&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config.serverUrl)))}>{busy?'处理中…':mode==='login'?'登录':mode==='register'?'注册并登录':'设置新密码并登录'}</Button>
       </form></CardContent></Card>:<>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
+      <div className={cn('grid items-start gap-6',section==='mail'?'min-[900px]:grid-cols-[208px_minmax(0,1fr)] lg:grid-cols-[220px_minmax(0,1fr)]':'lg:grid-cols-[220px_minmax(0,1fr)]')}>
+        <aside className="space-y-4 lg:sticky lg:top-6">
+          <div className="rounded-2xl border border-border bg-card p-5">
+            <div className="flex items-center gap-3"><Avatar user={account}/><div className="min-w-0"><p className="truncate text-sm font-semibold">{account.nickname}</p><p className="mt-1 truncate text-xs text-muted-foreground">@{account.username}</p></div></div>
+            <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"><span className={cn('size-1.5 rounded-full',status.connected&&!config?.invisible?'bg-emerald-500':'bg-muted-foreground/40')}/>{config?.invisible?'隐身中':status.connected?'在线，与好友保持连接':'暂未连接'}</p>
+            <div className="mt-4 border-t border-border pt-4"><p className="text-[11px] text-muted-foreground">我的好友码</p><div className="mt-1 flex items-center justify-between gap-1"><code className="select-all text-xs tracking-wide">{account.friendCode}</code><Button size="sm" variant="ghost" className="h-7 px-2" onClick={()=>void perform(async()=>{await writeText(account.friendCode);},'好友码已复制。')}>复制</Button></div></div>
+            <Link to="/friends/me" className="mt-3 flex items-center justify-between rounded-xl bg-muted/60 px-3 py-2 text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">我的游戏主页 <span aria-hidden="true">↗</span></Link>
+          </div>
+          <nav aria-label="好友导航" className={cn('grid grid-cols-2 gap-1.5 rounded-2xl border border-border bg-card p-2',section==='mail'?'min-[900px]:grid-cols-1':'lg:grid-cols-1')}>
+            {([{id:'friends',label:'我的好友',icon:'friends',count:0},{id:'mail',label:'邮件',icon:'mail',count:mail.mailbox?.unread??0},{id:'discover',label:'发现好友',icon:'search',count:view?.incoming.length??0},{id:'settings',label:'资料与隐私',icon:'settings',count:0}] as const).map(item=><button key={item.id} type="button" aria-current={section===item.id?'page':undefined} onClick={()=>go(item.id)} className={cn('flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',section===item.id?'bg-primary/10 font-medium text-primary':'text-muted-foreground hover:bg-muted hover:text-foreground')}><GeometryIcon name={item.icon}/><span className="truncate">{item.label}</span>{item.count>0?<span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground" aria-label={item.id==='mail'?`${item.count} 封未读邮件`:`${item.count} 条好友申请`}>{item.count>99?'99+':item.count}</span>:null}</button>)}
+          </nav>
+          <p className="hidden px-3 text-xs leading-6 text-muted-foreground lg:block">在这里遇见同好，<br/>分享下一段值得期待的故事。</p>
+        </aside>
+        <main className="min-w-0 space-y-5">
+          {section==='mail'?<MailboxPanel key={account.id} mail={mail}/>:null}
+          {section==='settings'?<><div><h2 className="text-xl font-semibold">资料与隐私</h2><p className="mt-1 text-sm text-muted-foreground">用你喜欢的方式，分享你的游戏生活。</p></div>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card><CardHeader><CardTitle>我的资料</CardTitle></CardHeader><CardContent className="space-y-4">
           <div className="flex items-center gap-3">
             <Avatar user={account}/>
@@ -168,7 +194,13 @@ export default function FriendsPage(){
           <p className="text-xs leading-relaxed text-muted-foreground">隐藏的作品会从正在游玩、公开游戏库和最近游玩记录中排除。同步完成后，远端已有的相关记录也会撤回。每次重新登录默认关闭作品分享。网络中断后，好友看到的在线状态会在超时后失效。</p>
         </CardContent></Card>
       </div>
-      <Card><CardHeader><CardTitle>添加好友</CardTitle></CardHeader><CardContent className="space-y-3">
+          </>:null}
+          {section==='discover'?<>
+      {(view?.incoming.length||view?.outgoing.length)?<Card className="rounded-2xl border-primary/25"><CardHeader className="p-6 pb-4"><CardTitle className="text-lg"><span id="friend-requests">好友申请</span>{view.incoming.length?<Badge variant="secondary" className="ml-2 align-middle">{view.incoming.length} 条待处理</Badge>:null}</CardTitle><p className="text-sm text-muted-foreground">收到的申请统一显示在这里，处理后会立即更新好友列表。</p></CardHeader><CardContent className="space-y-3">
+        {view.incoming.map(request=><div key={request.id} id={`friend-request-${request.user.id}`} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"><Avatar user={request.user}/><span className="min-w-0 flex-1 truncate text-sm">{request.user.nickname} <span className="text-muted-foreground">@{request.user.username}</span> 想添加你为好友</span><Button size="sm" disabled={busy} onClick={()=>action('accept',request.id)}>同意</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('reject',request.id)}>拒绝</Button></div>)}
+        {view.outgoing.map(request=><div key={request.id} className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-border p-3 text-sm"><span className="min-w-0 flex-1 truncate">已向 {request.user.nickname} <span className="text-muted-foreground">@{request.user.username}</span> 发送申请，等待对方处理</span><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('cancel',request.id)}>取消申请</Button></div>)}
+      </CardContent></Card>:null}
+      <Card className="rounded-2xl"><CardHeader className="p-6 pb-4"><CardTitle className="text-lg">认识更多同好</CardTitle><p className="text-sm text-muted-foreground">从一个用户名，或一串好友码开始。</p></CardHeader><CardContent className="space-y-3">
         <form className="flex max-w-lg flex-wrap gap-2" onSubmit={e=>{e.preventDefault();void searchUsers();}}>
           <Input aria-label="搜索用户名或好友码" placeholder="输入用户名或 16 位好友码" value={addQuery} maxLength={32} onChange={e=>setAddQuery(e.target.value)} disabled={busy||searching} className="min-w-0 flex-1"/>
           <Button type="submit" disabled={busy||searching||!addQuery.trim()} loading={searching}>{searching?'搜索中…':'搜索'}</Button>
@@ -182,28 +214,32 @@ export default function FriendsPage(){
           {user.relation==='incoming'?<a href={`#friend-request-${user.id}`} className="text-xs text-primary hover:underline">处理申请</a>:null}
         </div>):<p role="status" className="text-xs text-muted-foreground">没有找到匹配的用户，请检查用户名或好友码。</p>}</div>:null}
       </CardContent></Card>
-      {(view?.incoming.length||view?.outgoing.length)?<Card><CardHeader><CardTitle><span id="friend-requests">好友申请</span></CardTitle></CardHeader><CardContent className="space-y-3">
-        {view.incoming.map(request=><div key={request.id} id={`friend-request-${request.user.id}`} className="flex flex-wrap items-center gap-3"><Avatar user={request.user}/><span className="min-w-0 flex-1 truncate text-sm">{request.user.nickname} <span className="text-muted-foreground">@{request.user.username}</span> 想添加你为好友</span><Button size="sm" disabled={busy} onClick={()=>action('accept',request.id)}>同意</Button><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('reject',request.id)}>拒绝</Button></div>)}
-        {view.outgoing.map(request=><div key={request.id} className="flex items-center gap-3 text-sm"><span className="min-w-0 flex-1 truncate">已向 {request.user.nickname} <span className="text-muted-foreground">@{request.user.username}</span> 发送申请</span><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('cancel',request.id)}>取消申请</Button></div>)}
-      </CardContent></Card>:null}
-      <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">好友列表 <span className="text-sm font-normal text-muted-foreground">{friends.length} 人</span></h2><Button size="sm" variant="outline" disabled={busy} onClick={()=>void controller.current?.refresh()}>刷新</Button></div>
+          </>:null}
+          {section==='friends'?<>
+      <div className="flex items-center justify-between"><div><h2 className="text-xl font-semibold">我的好友</h2><p className="mt-1 text-xs text-muted-foreground">{friends.length} 位好友<span className="mx-2">·</span>{view?.stale?"状态待更新":`${friends.filter(friend=>friend.online).length} 位在线`}</p></div><Button size="sm" variant="outline" disabled={busy} onClick={()=>void controller.current?.refresh()}>刷新</Button></div>
       {friends.length?<div className="flex flex-wrap items-center gap-3"><Input aria-label="搜索好友" placeholder="搜索昵称或用户名" value={friendQuery} onChange={e=>setFriendQuery(e.target.value)} className="max-w-sm"/><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={onlineOnly} onChange={e=>setOnlineOnly(e.target.checked)}/>仅看在线</label></div>:null}
       {view?.stale?<p role="status" className="text-sm text-muted-foreground">连接中断，好友状态待更新。</p>:null}
-      {!view?<p role="status" className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{error?'暂时无法获取好友列表，请检查连接后刷新。':'正在获取好友列表…'}</p>:!friends.length?<p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">还没有好友，把你的好友码发给一起推 Galgame 的朋友吧。</p>:!filteredFriends.length?<p role="status" className="text-sm text-muted-foreground">没有符合条件的好友。</p>:<div className="grid gap-3 md:grid-cols-2">{filteredFriends.map(friend=><div key={friend.id} className="flex min-w-0 items-start gap-3 rounded-lg border border-border bg-card p-4">
+      {!view?<p role="status" className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">{error?'暂时无法获取好友列表，请检查连接后刷新。':'正在获取好友列表…'}</p>:!friends.length?<p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">还没有好友，把你的好友码发给一起推 Galgame 的朋友吧。</p>:!filteredFriends.length?<p role="status" className="text-sm text-muted-foreground">没有符合条件的好友。</p>:<div className="grid gap-4 xl:grid-cols-2">{filteredFriends.map(friend=><div key={friend.id} className="group relative flex min-w-0 items-start gap-4 rounded-2xl border border-border bg-card p-5 transition-colors hover:border-primary/30">
         <Link to={`/friends/${encodeURIComponent(friend.id)}`} aria-label={`查看 ${friend.nickname} 的主页`} className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Avatar user={friend}/></Link>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-1"><Link to={`/friends/${encodeURIComponent(friend.id)}`} className="truncate rounded font-medium hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{friend.nickname}</Link><span className="truncate text-xs text-muted-foreground">@{friend.username}</span></div>
-          <p className="mt-1 text-xs text-muted-foreground">{view.stale?'状态待更新':friend.online?friend.game?'正在游玩':'在线':'离线'}</p>
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground"><span className={cn("size-1.5 rounded-full",friend.online&&!view.stale?"bg-emerald-500":"bg-muted-foreground/35")}/>{view.stale?'状态待更新':friend.online?friend.game?'正在游玩':'在线':'离线'}</p>
           {!view.stale&&friend.online&&friend.game?<><p className="mt-2 break-words text-sm font-medium text-primary">{friend.game.title}</p><p className="mt-1 text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(friend.game,view,clock))}</p></>:null}
-          <div className="mt-3 flex flex-wrap gap-3">
-            <Link to={`/friends/${encodeURIComponent(friend.id)}`} className="rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">查看主页</Link>
-            <button type="button" className="text-xs text-muted-foreground hover:text-destructive" disabled={busy} onClick={()=>setReportTarget({id:friend.id,username:friend.username,nickname:friend.nickname,gameKey:null,defaultReason:'cover'})}>举报</button>
-            <button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'remove',user:friend})}>删除好友</button>
-            <button disabled={busy} className="text-xs text-muted-foreground hover:text-destructive" onClick={()=>setConfirm({action:'block',user:friend})}>屏蔽</button>
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <Link to={`/friends/${encodeURIComponent(friend.id)}`} className="rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">走进 TA 的游戏库 <span aria-hidden="true">→</span></Link>
+            <details className="relative"><summary aria-label={`管理好友 ${friend.nickname}`} className="flex size-7 cursor-pointer list-none items-center justify-center rounded-lg text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"><span aria-hidden="true">•••</span></summary><div className="absolute bottom-8 right-0 z-10 flex w-32 flex-col rounded-xl border border-border bg-background p-1.5 text-foreground shadow-lg">
+              <button type="button" className="rounded-lg px-3 py-2 text-left text-xs hover:bg-muted" disabled={busy} onClick={()=>setReportTarget({id:friend.id,username:friend.username,nickname:friend.nickname,gameKey:null,defaultReason:'cover'})}>举报</button>
+              <button type="button" disabled={busy} className="rounded-lg px-3 py-2 text-left text-xs hover:bg-muted" onClick={()=>setConfirm({action:'block',user:friend})}>屏蔽用户</button>
+              <button type="button" disabled={busy} className="rounded-lg px-3 py-2 text-left text-xs text-destructive hover:bg-destructive/5" onClick={()=>setConfirm({action:'remove',user:friend})}>删除好友</button>
+            </div></details>
           </div>
         </div>
       </div>)}</div>}
       {view?.blocked.length?<details className="rounded-lg border border-border bg-card p-4"><summary className="cursor-pointer text-sm">已屏蔽 · {view.blocked.length} 人</summary><div className="mt-3 space-y-2">{view.blocked.map(user=><div key={user.id} className="flex items-center justify-between gap-3 text-sm"><span>{user.nickname}</span><Button size="sm" variant="ghost" disabled={busy} onClick={()=>action('unblock',user.id)}>解除屏蔽</Button></div>)}</div></details>:null}
+            {!friends.length&&view?<Button variant="outline" onClick={()=>go('discover')}>寻找第一位好友</Button>:null}
+          </>:null}
+        </main>
+      </div>
     </>}
     <ConfirmDialog open={Boolean(confirm)} title={confirm?.action==='block'?'屏蔽此用户？':'删除好友？'} description={confirm?`${confirm.user.nickname} 将无法继续查看你的在线状态、游玩状态和公开游戏库。`:''} confirmText={confirm?.action==='block'?'屏蔽':'删除好友'} destructive onCancel={()=>setConfirm(null)} onConfirm={()=>{if(confirm){action(confirm.action,confirm.user.id);setConfirm(null);}}}/>
     <ConfirmDialog open={Boolean(addTarget)} title="发送好友申请？" description={addTarget?`确认向 @${addTarget.username}（${addTarget.nickname}）发送好友申请？`:''} confirmText="发送申请" busy={busy} onCancel={()=>setAddTarget(null)} onConfirm={()=>{if(addTarget)requestUser(addTarget);}}/>

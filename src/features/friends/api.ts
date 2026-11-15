@@ -2,6 +2,8 @@ import {invoke} from '@/lib/logging';
 import {initDatabase} from '@/lib/db';
 import type {FriendsStatus,Privacy,Snapshot,HideableGame,FriendProfile,ProfileFilters,UserSearchResult,FriendRelation,FriendHistory,HistorySession,CoverStatus,SharedLibraryGame} from './types';
 import type {RegistrationConsentValue} from '@/features/legal/consent';
+import type {MailFilter,Mailbox} from './types';
+import {parseMailbox} from './mailbox-model';
 async function call<T>(command:string,args?:Record<string,unknown>):Promise<T>{await initDatabase();return invoke<T>(command,args);}
 function isRecord(value:unknown):value is Record<string,unknown>{return Boolean(value)&&typeof value==='object'&&!Array.isArray(value);}
 function text(value:unknown):string|null{return typeof value==='string'&&value?value:null;}
@@ -26,6 +28,9 @@ function coverStatus(value:unknown):CoverStatus|null{
   return{gameId:value.gameId,title:text(value.title)??`作品 ${value.gameId}`,nsfw:value.nsfw===true,customCover:value.customCover===true,verified:reviewStatus==='approved'&&value.verified===true,reviewStatus};
 }
 export const friendsStatus=()=>call<FriendsStatus>('friends_status');
+export async function friendsMailbox(action:'list'|'read'|'read_all'='list',id:string|null=null,offset=0,filter:MailFilter='all'):Promise<Mailbox>{
+  return parseMailbox(await call<unknown>('friends_mailbox',{action,id,offset,filter}));
+}
 export const friendsLibraryGames=()=>call<HideableGame[]>('friends_library_games');
 export const friendsProfile=({target,query,status,offset}:ProfileFilters)=>call<FriendProfile>('friends_profile',{target,query,status,offset});
 export const friendsHistoryCovers=(target:string)=>call<SharedLibraryGame[]>('friends_history_covers',{target});

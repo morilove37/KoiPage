@@ -99,6 +99,7 @@ import { AnnouncementContact } from '@/features/announcements/AnnouncementContac
 import { AccentSettings } from './AccentSettings';
 import { GlassAppearanceSettings } from './GlassAppearanceSettings';
 import { LogSettings } from './LogSettings';
+import { ResourceStorageSettings } from './ResourceStorageSettings';
 import { AiSettings } from '@/features/ai/AiSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
 import {
@@ -905,6 +906,7 @@ function DataSection() {
       title="数据管理"
     >
       <div className="space-y-4">
+        <ResourceStorageSettings />
         <BackupPanel />
         <div>
           <h3 className="mb-2 text-sm font-medium">备份数据库</h3>

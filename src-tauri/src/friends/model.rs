@@ -154,6 +154,46 @@ pub fn select_game(config: &Config, games: &[RunningCandidate]) -> Option<Public
     })
 }
 
+/// Local presentation for the signed-in account only. This clone is never
+/// persisted or passed to the presence publisher; public `game` stays intact.
+pub(super) fn project_self_profile(
+    mut profile: serde_json::Value,
+    target: &str,
+    owner: Option<&str>,
+    config: &Config,
+    games: &[RunningCandidate],
+    at: i64,
+) -> serde_json::Value {
+    if !owner.is_some_and(|id| id.eq_ignore_ascii_case(target)) {
+        return profile;
+    }
+    let mut local = config.clone();
+    local.share_game = true;
+    local.invisible = false;
+    local.hidden_game_ids.clear();
+    // The profile UI measures elapsed time against this remote snapshot clock.
+    // Keep its fractional epoch precision and use the same clock for local play.
+    let server_now = profile.get("serverNow").and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let game = select_game(&local, games).map(|game| {
+        let started_at = server_now
+            .map(|clock| serde_json::json!(clock - game.duration as f64))
+            .unwrap_or_else(|| serde_json::json!(at.saturating_sub(game.duration)));
+        serde_json::json!({
+            "title": game.title,
+            "vndbId": game.vndb_id,
+            "bangumiId": game.bangumi_id,
+            "startedAt": started_at,
+        })
+    });
+    if let Some(object) = profile.as_object_mut() {
+        // Present null is authoritative: a stale public presence must not make
+        // the owner's page show a game after the local launcher stopped it.
+        object.insert("selfGame".into(), game.unwrap_or(serde_json::Value::Null));
+    }
+    profile
+}
+
 pub fn validate_project(address: &str, key: &str) -> CmdResult<String> {
     let url = reqwest::Url::parse(address.trim())
         .map_err(|_| CmdError("FRIENDS_CONFIG: 项目地址格式无效".into()))?;
@@ -319,6 +359,89 @@ mod tests {
         assert_eq!(value["duration"], 42);
         assert_eq!(value["vndbId"], "v123");
         assert_ne!(value["key"], "10");
+    }
+
+    #[test]
+    fn self_game_stays_visible_for_private_invisible_and_hidden_preferences() {
+        let games = vec![candidate(1, 10), candidate(2, 20)];
+        for config in [
+            Config::default(),
+            Config { share_game: true, invisible: true, ..Config::default() },
+            Config { share_game: true, hidden_game_ids: vec![2], ..Config::default() },
+        ] {
+            let before = serde_json::to_value(&config).unwrap();
+            let profile = project_self_profile(
+                serde_json::json!({"game": null}), "own", Some("own"), &config, &games, 1_000,
+            );
+            assert_eq!(profile["selfGame"], serde_json::json!({
+                "title":"game 2", "vndbId":"v123", "bangumiId":null, "startedAt":958,
+            }));
+            assert!(profile["game"].is_null());
+            assert!(select_game(&config, &games).is_none());
+            assert_eq!(serde_json::to_value(&config).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn self_game_empty_runtime_is_authoritative_without_replacing_public_presence() {
+        let public = serde_json::json!({"title":"previous public game", "startedAt":50});
+        let profile = project_self_profile(
+            serde_json::json!({"game":public}), "own", Some("own"), &Config::default(), &[], 1_000,
+        );
+        assert!(profile.as_object().unwrap().contains_key("selfGame"));
+        assert!(profile["selfGame"].is_null());
+        assert_eq!(profile["game"], public);
+    }
+
+    #[test]
+    fn self_game_never_augments_a_foreign_or_unclaimed_profile() {
+        let original = serde_json::json!({"game":{"title":"friend public game"}});
+        for (target, owner) in [("friend", Some("own")), ("own", None)] {
+            let profile = project_self_profile(
+                original.clone(), target, owner, &Config::default(), &[candidate(2, 20)], 1_000,
+            );
+            assert_eq!(profile, original);
+            assert!(profile.get("selfGame").is_none());
+        }
+    }
+
+    #[test]
+    fn self_game_elapsed_uses_runtime_duration_and_reuses_public_metadata_validation() {
+        let mut game = candidate(1, 10);
+        game.started_at = "2026-11-09T00:00:10Z".into();
+        game.duration = 125;
+        game.title = "  Current game  ".into();
+        game.vndb_id = Some("file:///private".into());
+        let profile = project_self_profile(
+            serde_json::json!({}), "own", Some("own"), &Config::default(), &[game], 1_000,
+        );
+        assert_eq!(profile["selfGame"]["startedAt"], 875);
+        assert_eq!(profile["selfGame"]["title"], "Current game");
+        assert!(profile["selfGame"]["vndbId"].is_null());
+        assert_eq!(profile["selfGame"].as_object().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn self_game_uses_server_clock_without_changing_remote_profile_timestamps() {
+        let mut game = candidate(1, 10);
+        game.duration = 100;
+        for (server_now, expected) in [(1_000.0, 900.0), (1_000.25, 900.25)] {
+            let original = serde_json::json!({"serverNow":server_now,"game":null});
+            let profile = project_self_profile(
+                original.clone(), "own", Some("own"), &Config::default(), &[game.clone()], 5_000,
+            );
+            assert_eq!(profile["selfGame"]["startedAt"].as_f64(), Some(expected));
+            assert_eq!(profile["serverNow"], original["serverNow"]);
+            assert_eq!(project_self_profile(
+                original.clone(), "friend", Some("own"), &Config::default(), &[game.clone()], 5_000,
+            ), original);
+        }
+        for invalid in [serde_json::Value::Null, serde_json::json!("1000"), serde_json::json!(-1)] {
+            let profile = project_self_profile(
+                serde_json::json!({"serverNow":invalid}), "own", Some("own"), &Config::default(), &[game.clone()], 5_000,
+            );
+            assert_eq!(profile["selfGame"]["startedAt"].as_f64(), Some(4_900.0));
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[path = "society_logo_sources.rs"]
 mod sources;
@@ -286,6 +286,7 @@ async fn candidates(db: &SqlitePool, name: &str) -> CmdResult<(Vec<(String, &'st
 /// Return cached artwork immediately; unresolved societies share a bounded background queue.
 #[tauri::command]
 pub async fn society_logo_get(app: AppHandle, name: String) -> CmdResult<LogoRecord> {
+    let _resources = super::resource_storage::operation_guard()?;
     let name = name.trim();
     if name.is_empty() {
         return Ok(LogoRecord::default());
@@ -332,7 +333,7 @@ pub async fn society_logo_get(app: AppHandle, name: String) -> CmdResult<LogoRec
         ..Default::default()
     };
     for (url, source) in urls {
-        match super::covers::retain(&app.path().app_data_dir()?.join("society-logos"), &url).await {
+        match super::covers::retain(&super::resource_storage::root(&app)?.join("society-logos"), &url).await {
             Ok(path) => {
                 record.path = Some(path);
                 record.source = Some(source.into());
@@ -347,7 +348,7 @@ pub async fn society_logo_get(app: AppHandle, name: String) -> CmdResult<LogoRec
         failed |= context.failed;
         match sources::bangumi_search(&client, &context).await {
             Ok(Some(url)) => {
-                match super::covers::retain(&app.path().app_data_dir()?.join("society-logos"), &url)
+                match super::covers::retain(&super::resource_storage::root(&app)?.join("society-logos"), &url)
                     .await
                 {
                     Ok(path) => {
@@ -363,7 +364,7 @@ pub async fn society_logo_get(app: AppHandle, name: String) -> CmdResult<LogoRec
         if record.path.is_none() {
             match sources::wikidata(&client, &context).await {
                 Ok(Some(url)) => match super::covers::retain(
-                    &app.path().app_data_dir()?.join("society-logos"),
+                    &super::resource_storage::root(&app)?.join("society-logos"),
                     &url,
                 )
                 .await
@@ -397,6 +398,7 @@ pub async fn society_logo_set(
     name: String,
     path: Option<String>,
 ) -> CmdResult<LogoRecord> {
+    let _resources = super::resource_storage::operation_guard()?;
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 300 {
         return Err(CmdError("无效的社团名称".into()));
@@ -407,7 +409,7 @@ pub async fn society_logo_set(
             return Err(CmdError("找不到 Logo 图片".into()));
         }
         let path =
-            super::covers::retain(&app.path().app_data_dir()?.join("society-logos"), &path).await?;
+            super::covers::retain(&super::resource_storage::root(&app)?.join("society-logos"), &path).await?;
         LogoRecord {
             path: Some(path),
             custom: true,

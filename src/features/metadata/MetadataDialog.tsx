@@ -76,6 +76,7 @@ import { currentMetadataValues, protectExistingFields } from './protection';
 import { defaultDescriptionChoice, descriptionChoices, selectDescription } from './description-choice';
 import { ImportWaitDialog } from "./ImportWaitDialog";
 import { SourceSearchPanel } from './SourceSearchPanel';
+import { TwoDfanVerification } from './TwoDfanVerification';
 import { createSourceSearchSession } from './source-search-session';
 import type { SourceSearchSnapshot } from './source-search-session';
 import { createGameFromMetadata } from "./create-game";
@@ -625,6 +626,10 @@ export default function MetadataDialog({
 
           <SourceSearchPanel sources={sourceSnapshot.sources} query={sourceSnapshot.query} disabled={applying || manualSaving}
             onRetry={provider => { if (enabledSources.includes(provider)) void sourceSearch.retry(provider); }} />
+          {sourceSnapshot.sources.some(source => source.provider === '2dfan' && source.phase === 'error') && enabledSources.includes('2dfan') ? (
+            <TwoDfanVerification disabled={applying || manualSaving}
+              onRetry={async () => { if (enabledSources.includes('2dfan')) await sourceSearch.retry('2dfan'); }} />
+          ) : null}
 
           {/* Whole-command failure (empty query, bad source list, …) ------- */}
           {searchError ? (
@@ -804,6 +809,8 @@ export default function MetadataDialog({
           {detailError ? (
             <div role="alert" className="flex flex-col items-start gap-2 rounded-xl border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               <p>读取详情失败：{detailError}</p>
+              {selected?.provider === '2dfan' ? <TwoDfanVerification disabled={busy}
+                onRetry={async () => { if (selected) await choose(selected); }} /> : null}
               {selected?.provider === '2dfan' && /^\d+$/.test(selected.externalId) ? (
                 <Button size="sm" variant="outline" onClick={() => void openUrl(`https://2dfan.com/subjects/${selected.externalId}`)
                   .catch(cause => setDetailError(`打开浏览器失败：${errorMessage(cause)}`))}>在浏览器查看原条目 ↗</Button>

@@ -17,10 +17,14 @@ use super::DB_URL;
 /// returned by value rather than held under the `RwLock` read guard.
 /// A `None` here means the database has not been connected yet.
 pub async fn pool(app: &AppHandle) -> CmdResult<Pool<Sqlite>> {
+    super::data_storage::ensure_available()?;
     let instances = app.state::<DbInstances>();
     let instances = instances.0.read().await;
     match instances.get(DB_URL) {
-        Some(DbPool::Sqlite(pool)) => Ok(pool.clone()),
+        Some(DbPool::Sqlite(pool)) => {
+            super::resource_storage::initialize(pool).await?;
+            Ok(pool.clone())
+        },
         // Only reachable if the mysql/postgres features are ever enabled.
         #[allow(unreachable_patterns)]
         Some(_) => Err(CmdError(format!("{DB_URL} is not a sqlite database"))),
@@ -120,6 +124,7 @@ pub async fn game_get(app: AppHandle, id: i64) -> CmdResult<GameDetail> {
 /// `game_create` — insert a game and optionally attach tags.
 #[tauri::command]
 pub async fn game_create(app: AppHandle, input: GameInput) -> CmdResult<Game> {
+    let _resources = super::resource_storage::operation_guard()?;
     let mut input = input;
     let pool = pool(&app).await?;
     if let Some(path) = input.cover_path.take() {
@@ -235,6 +240,7 @@ async fn attach_tag_names(
 /// `game_update` — partial update; omitted fields are left untouched.
 #[tauri::command]
 pub async fn game_update(app: AppHandle, id: i64, patch: GamePatch) -> CmdResult<Game> {
+    let _resources = super::resource_storage::operation_guard()?;
     let affects_sync=patch.status.is_some()||patch.bangumi_id.is_some();
     let mut patch = patch;
     let pool = pool(&app).await?;

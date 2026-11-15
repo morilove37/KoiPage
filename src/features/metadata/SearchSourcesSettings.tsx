@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { settingsGet, settingsSet, type MetadataProvider } from '@/lib/db';
 import { ALL_PROVIDERS, PROVIDER_LABELS, errorMessage } from './fields';
 import { ENABLED_SOURCES_KEY, normalizeEnabledSources } from './preferences';
+import { TwoDfanVerification } from './TwoDfanVerification';
 
 export function SearchSourcesSettings({ onChange }: { onChange?: (sources: MetadataProvider[]) => void }) {
   const [enabled, setEnabled] = useState<MetadataProvider[]>([]);
@@ -44,5 +45,6 @@ export function SearchSourcesSettings({ onChange }: { onChange?: (sources: Metad
     </div>
     {loaded && !enabled.length && <p role="alert" className="text-xs text-destructive">数据源设置无效，请勾选至少一个数据源以恢复搜索。</p>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    {loaded && enabled.includes('2dfan') ? <TwoDfanVerification disabled={saving} /> : null}
   </fieldset>;
 }

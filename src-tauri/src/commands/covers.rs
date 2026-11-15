@@ -2,7 +2,6 @@ use super::error::{CmdError, CmdResult};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 
 const MAX_COVER: usize = 20 * 1024 * 1024;
 
@@ -16,7 +15,7 @@ pub struct MigrationReport {
 }
 
 pub(crate) fn directory(app: &tauri::AppHandle) -> CmdResult<PathBuf> {
-    Ok(app.path().app_data_dir()?.join("covers"))
+    Ok(super::resource_storage::root(app)?.join("covers"))
 }
 
 fn is_managed(path: &str, directory: &Path) -> bool {
@@ -236,6 +235,7 @@ pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResul
 /// Retrying is safe: managed images are skipped and failed originals are kept.
 #[tauri::command]
 pub async fn covers_migrate(app: tauri::AppHandle) -> CmdResult<MigrationReport> {
+    let _resources = super::resource_storage::operation_guard()?;
     let db = super::games::pool(&app).await?;
     let report = migrate(&db, &directory(&app)?).await?;
     super::scan_roots::sync_asset_scope(app).await?;
@@ -291,6 +291,7 @@ pub async fn game_cover_import(
     game_id: i64,
     source_path: String,
 ) -> CmdResult<String> {
+    let _resources = super::resource_storage::operation_guard()?;
     let db = super::games::pool(&app).await?;
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM games WHERE id=?")
         .bind(game_id)

@@ -64,6 +64,7 @@ pub async fn birthdays_list(app: AppHandle) -> CmdResult<Snapshot> {
 
 #[tauri::command]
 pub async fn birthdays_update(app: AppHandle, id: String, input: CharacterEdit) -> CmdResult<()> {
+    let _resources = crate::commands::resource_storage::operation_guard()?;
     let db = pool(&app).await?;
     if !valid_date(input.month, input.day) {
         return Err(CmdError("请输入有效的生日月日，或同时留空".into()));
@@ -87,6 +88,7 @@ pub async fn birthdays_update(app: AppHandle, id: String, input: CharacterEdit) 
 
 #[tauri::command]
 pub async fn birthdays_sync_start(app: AppHandle, force: bool) -> CmdResult<Progress> {
+    let resources = crate::commands::resource_storage::operation_guard()?;
     if progress().running {
         return Ok(progress());
     }
@@ -121,6 +123,7 @@ pub async fn birthdays_sync_start(app: AppHandle, force: bool) -> CmdResult<Prog
         return Ok(progress());
     }
     tauri::async_runtime::spawn(async move {
+        let _resources = resources;
         let result = run_sync(&app, &db, work, cancel).await;
         change(|p| {
             p.running = false;
@@ -227,6 +230,7 @@ pub async fn birthdays_export(app: AppHandle, path: String) -> CmdResult<usize> 
 
 #[tauri::command]
 pub async fn birthdays_import(app: AppHandle, path: String) -> CmdResult<usize> {
+    let _resources = crate::commands::resource_storage::operation_guard()?;
     if progress().running {
         return Err(CmdError("请先取消生日同步，再导入资料".into()));
     }

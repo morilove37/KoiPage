@@ -4,6 +4,7 @@ use super::{CmdError, CmdResult, MetadataCandidate, MetadataDetail, Provider, So
 use scraper::{ElementRef, Html, Selector};
 
 const BASE: &str = "https://2dfan.com";
+const VERIFY_HINT: &str = "请点击「2DFan 登录 / 验证」，在恋页打开的站点窗口中完成登录或验证后，返回并点击「已完成，重试」。如仍受限，可使用其他数据源。";
 
 fn selector(css: &str) -> Selector { Selector::parse(css).expect("static 2DFan selector") }
 fn text(element: ElementRef<'_>) -> String {
@@ -47,7 +48,7 @@ fn search_aliases(card: ElementRef<'_>, query: &str) -> Vec<String> {
 fn parse_search(html: &str, query: &str, limit: usize) -> CmdResult<Vec<MetadataCandidate>> {
     let document = Html::parse_document(html);
     if document.select(&selector("#subject-list")).next().is_none() {
-        return Err(CmdError("2DFan 搜索页面无法识别，可能需要登录、遇到访问验证或网站结构已变化".into()));
+        return Err(CmdError(format!("2DFan 搜索页面无法识别，可能需要登录、遇到访问验证或网站结构已变化。{VERIFY_HINT}")));
     }
     let mut result = Vec::new();
     for card in document.select(&selector("#subject-list .subject-card")).take(limit) {
@@ -74,7 +75,7 @@ fn parse_search(html: &str, query: &str, limit: usize) -> CmdResult<Vec<Metadata
 fn parse_detail(html: &str, id: &str) -> CmdResult<MetadataDetail> {
     let document = Html::parse_document(html);
     let root = document.root_element();
-    let title = first_text(root, "h1.subject-title").ok_or_else(|| CmdError("2DFan 详情页面无法识别，可能需要登录、遇到访问验证或网站结构已变化".into()))?;
+    let title = first_text(root, "h1.subject-title").ok_or_else(|| CmdError(format!("2DFan 详情页面无法识别，可能需要登录、遇到访问验证或网站结构已变化。{VERIFY_HINT}")))?;
     let mut developer = None;
     let mut release_date = None;
     let mut title_zh = None;
@@ -123,19 +124,53 @@ fn parse_detail(html: &str, id: &str) -> CmdResult<MetadataDetail> {
 }
 
 async fn fetch(url: reqwest::Url) -> CmdResult<String> {
-    let mut response = super::http_client()?.get(url).header(reqwest::header::REFERER, BASE).send().await
-        .map_err(|e| CmdError(if e.is_timeout() { "2DFan 请求超时，请稍后重试".into() } else { format!("2DFan 请求失败：{e}") }))?;
+    tokio::time::timeout(std::time::Duration::from_secs(20), fetch_page(url)).await
+        .map_err(|_| CmdError("2DFan 请求超时，请稍后重试".into()))?
+}
+
+async fn fetch_page(mut url: reqwest::Url) -> CmdResult<String> {
+    let client = reqwest::Client::builder().user_agent(super::verification::user_agent())
+        .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .build().map_err(|_| CmdError("无法创建 2DFan 网络客户端".into()))?;
+    let mut followed = 0;
+    let mut response = loop {
+        // Native cookies are scoped afresh on every hop. reqwest deliberately
+        // strips a precomputed Cookie header on 2dfan.com -> www.2dfan.com.
+        let session = super::verification::session_cookie(&url).await?;
+        let mut request = client.get(url.clone()).header(reqwest::header::REFERER, BASE);
+        if let Some(cookie) = session { request = request.header(reqwest::header::COOKIE, cookie); }
+        let response = request.send().await
+            .map_err(|e| CmdError(if e.is_timeout() { "2DFan 请求超时，请稍后重试".into() } else { format!("2DFan 请求失败：{e}") }))?;
+        if response.status().is_redirection() {
+            let location = response.headers().get(reqwest::header::LOCATION)
+                .ok_or_else(|| CmdError(format!("2DFan 返回无效重定向。{VERIFY_HINT}")))?;
+            url = redirect_target(&url, location, followed)?;
+            followed += 1;
+        } else { break response; }
+    };
     let status = response.status();
     if response.headers().get("cf-mitigated").is_some_and(|value| value == "challenge") {
-        return Err(CmdError("2DFan 触发了 Cloudflare 访问验证，暂时无法读取资料；请使用其他数据源，或稍后重试。浏览器验证状态不会自动同步到应用。".into()));
+        return Err(CmdError(format!("2DFan 触发了 Cloudflare 访问验证。{VERIFY_HINT}")));
     }
-    if !status.is_success() { return Err(CmdError(format!("2DFan 返回 HTTP {status}，请稍后重试或在浏览器检查访问状态"))); }
+    if matches!(status.as_u16(), 401 | 403) {
+        return Err(CmdError(format!("2DFan 返回 HTTP {status}，可能需要登录或访问验证。{VERIFY_HINT}")));
+    }
+    if !status.is_success() { return Err(CmdError(format!("2DFan 返回 HTTP {status}，请稍后重试或使用其他数据源"))); }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| CmdError(format!("2DFan 页面读取失败：{e}")))? {
         if bytes.len() + chunk.len() > 4 * 1024 * 1024 { return Err(CmdError("2DFan 页面过大，无法解析".into())); }
         bytes.extend_from_slice(&chunk);
     }
     String::from_utf8(bytes).map_err(|_| CmdError("2DFan 页面编码无法识别".into()))
+}
+
+fn redirect_target(current: &reqwest::Url, location: &reqwest::header::HeaderValue, followed: usize) -> CmdResult<reqwest::Url> {
+    let target = location.to_str().ok().and_then(|value| current.join(value).ok());
+    match target {
+        Some(target) if followed < 6 && super::verification::allowed_navigation(&target) => Ok(target),
+        _ => Err(CmdError(format!("2DFan 重定向超出本站范围或次数过多。{VERIFY_HINT}"))),
+    }
 }
 
 pub async fn search(query: &str, limit: u32) -> CmdResult<Vec<MetadataCandidate>> {
@@ -152,6 +187,23 @@ pub async fn detail(id: &str) -> CmdResult<MetadataDetail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_redirects_can_change_between_the_two_trusted_origins() {
+        let start = reqwest::Url::parse("https://2dfan.com/search?keyword=test").unwrap();
+        for (location, expected) in [("/subjects/21", "https://2dfan.com/subjects/21"), ("https://www.2dfan.com/search", "https://www.2dfan.com/search")] {
+            assert_eq!(redirect_target(&start, &location.parse().unwrap(), 0).unwrap().as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn redirects_reject_other_origins_credentials_and_excessive_hops() {
+        let start = reqwest::Url::parse("https://2dfan.com/search").unwrap();
+        for location in ["https://evil.test/", "http://2dfan.com/", "https://2dfan.com:8443/", "https://2dfan.com@evil.test/", "https://user@2dfan.com/"] {
+            assert!(redirect_target(&start, &location.parse().unwrap(), 0).is_err());
+        }
+        assert!(redirect_target(&start, &"/login".parse().unwrap(), 6).is_err());
+    }
 
     const SEARCH: &str = r#"<div id="subject-list"><div class="subject-card" id="subject_card_21">
       <h3 class="subject-card-title"><a href="/subjects/21">Test &amp; Story</a></h3>
@@ -235,7 +287,8 @@ mod tests {
         let error = fetch(reqwest::Url::parse(&format!("http://{address}/search")).unwrap()).await.unwrap_err();
         server.join().unwrap();
         assert!(error.0.contains("访问验证"), "{}", error.0);
-        assert!(error.0.contains("其他数据源"));
+        assert!(error.0.contains("登录 / 验证"));
+        assert!(error.0.contains("重试"));
     }
 
     #[tokio::test]

@@ -1,0 +1,81 @@
+.mailroom { display:flex; min-height:0; flex-direction:column; gap:16px; container-type:inline-size; }
+.mailroom-topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.mailroom-topbar h2 { font-size:20px; font-weight:600; }
+.mailroom-topbar p { margin-top:4px; font-size:12px; color:hsl(var(--muted-foreground)); }
+.mailroom-topbar > span { flex:none; color:hsl(var(--muted-foreground)); font-size:11px; }
+.mailroom-workspace { display:grid; grid-template-columns:78px minmax(210px,.8fr) minmax(0,1.5fr); gap:16px; height:clamp(310px,calc(100dvh - 260px),900px); min-height:0; }
+.mailroom-error { border:1px solid hsl(var(--destructive) / .25); border-radius:8px; padding:12px 16px; color:hsl(var(--destructive)); background:hsl(var(--background)); font-size:12px; }
+.mailroom-error span { display:block; margin-top:4px; }
+.mailroom-categories { display:flex; min-width:0; min-height:0; flex-direction:column; gap:10px; overflow-y:auto; }
+.mailroom-category { position:relative; display:flex; min-height:82px; flex-direction:column; align-items:center; justify-content:center; gap:8px; border:1px solid hsl(var(--border)); border-bottom-width:3px; border-radius:6px; padding:12px 3px; background:hsl(var(--background)); color:hsl(var(--muted-foreground)); font-size:11px; font-weight:500; transition:background-color 150ms,border-color 150ms,color 150ms; }
+.mailroom-category:hover { background:hsl(var(--muted)); color:hsl(var(--foreground)); }
+.mailroom-category[aria-pressed="true"] { border-color:hsl(var(--primary) / .35); border-bottom-color:hsl(var(--primary)); background:hsl(var(--primary) / .08); color:hsl(var(--primary-text,var(--primary))); }
+.mailroom-category-count { position:absolute; top:-1px; right:-1px; min-width:18px; border-radius:0 5px 0 4px; padding:1px 4px; background:hsl(var(--primary)); color:hsl(var(--primary-foreground)); font-size:10px; line-height:16px; }
+.mailroom-list-pane { display:flex; min-width:0; min-height:0; flex-direction:column; }
+.mailroom-list-heading { display:flex; flex:none; align-items:center; justify-content:space-between; min-height:30px; padding:0 2px 10px; font-size:11px; color:hsl(var(--muted-foreground)); }
+.mailroom-list-heading h2 { font-size:11px; font-weight:500; }
+.mailroom-list { display:flex; min-height:0; flex:1; flex-direction:column; gap:6px; overflow-y:auto; scrollbar-gutter:stable; padding:2px 6px 2px 1px; }
+.mailroom-list-item { position:relative; display:block; flex:none; width:100%; min-height:78px; border:1px solid transparent; border-radius:4px; padding:15px 13px; background:hsl(var(--muted)); text-align:left; transition:border-color 150ms,background-color 150ms; }
+.mailroom-list-item:hover { background:hsl(var(--accent)); }
+.mailroom-list-item[aria-current="true"] { border-color:hsl(var(--foreground) / .7); background:hsl(var(--primary) / .07); box-shadow:inset 3px 0 0 hsl(var(--primary)); }
+.mailroom-item-title { display:flex; align-items:center; gap:12px; color:hsl(var(--foreground)); font-size:15px; line-height:22px; }
+.mailroom-item-title > span:first-child { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mailroom-unread { display:block; width:6px; height:6px; flex:none; border-radius:50%; background:hsl(var(--primary)); }
+.mailroom-item-sender { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:5px; color:hsl(var(--muted-foreground)); font-size:11px; }
+.mailroom-item-sender > span { display:flex; min-width:0; align-items:center; gap:4px; }
+.mailroom-item-sender > span > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mailroom-item-sender time { flex:none; font-variant-numeric:tabular-nums; }
+.mailroom-list-footer { flex:none; padding-top:12px; }
+.mailroom-pagination { display:flex; min-height:26px; align-items:center; justify-content:space-between; padding:0 2px; color:hsl(var(--muted-foreground)); font-size:11px; font-variant-numeric:tabular-nums; }
+.mailroom-pagination > div { display:flex; align-items:center; gap:8px; }
+.mailroom-pagination button { display:flex; width:25px; height:25px; align-items:center; justify-content:center; border-radius:4px; }
+.mailroom-pagination button:hover { background:hsl(var(--muted)); color:hsl(var(--foreground)); }
+.mailroom-bulk-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.mailroom-bulk-actions > button { height:37px; border-radius:5px; padding:0 8px; }
+.mailroom-reader { display:flex; min-width:0; min-height:0; flex-direction:column; border-left:1px solid hsl(var(--border)); padding-left:24px; background:hsl(var(--background)); }
+.mailroom-reader-heading { display:grid; flex:none; grid-template-columns:52px minmax(0,1fr) auto; align-items:start; gap:16px; border-bottom:1px solid hsl(var(--border)); padding:8px 0 22px; }
+.mailroom-sender-mark { display:flex; width:52px; height:56px; align-items:center; justify-content:center; border:1px solid hsl(var(--border)); border-radius:4px; background:hsl(var(--muted)); color:hsl(var(--foreground)); }
+.mailroom-reader-title h2 { overflow-wrap:anywhere; color:hsl(var(--foreground)); font-size:21px; font-weight:500; line-height:1.45; }
+.mailroom-reader-title p { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:8px; color:hsl(var(--muted-foreground)); font-size:11px; }
+.mailroom-reader-date { padding-top:3px; color:hsl(var(--muted-foreground)); text-align:right; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mailroom-reader-date span { display:block; margin-top:5px; font-size:10px; }
+.mailroom-reader-body { min-height:0; flex:1; overflow-y:auto; padding:24px 10px 30px 0; overflow-wrap:anywhere; white-space:pre-wrap; color:hsl(var(--foreground)); font-size:14px; line-height:1.95; user-select:text; }
+.mailroom-reader-footer { display:flex; flex:none; align-items:center; justify-content:space-between; gap:12px; min-height:58px; border-top:1px solid hsl(var(--border)); color:hsl(var(--muted-foreground)); font-size:11px; }
+.mailroom-read-status { display:flex; align-items:center; gap:6px; }
+.mailroom-reader-empty { display:flex; min-height:0; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:24px; color:hsl(var(--muted-foreground)); text-align:center; }
+.mailroom-reader-empty > svg { opacity:.35; }
+.mailroom-reader-empty h2 { color:hsl(var(--foreground)); font-size:16px; font-weight:500; }
+.mailroom-reader-empty p { font-size:12px; }
+.mailroom-list-empty { display:flex; min-height:220px; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:20px; color:hsl(var(--muted-foreground)); text-align:center; font-size:12px; }
+.mailroom-list-empty span { font-size:11px; }
+.mailroom-reader-back { display:none; }
+.mailroom button:focus-visible { outline:2px solid hsl(var(--ring)); outline-offset:2px; }
+.mailroom button:disabled { cursor:default; opacity:.45; }
+@media (max-width:1150px) {
+  .mailroom-workspace { grid-template-columns:72px minmax(210px,.8fr) minmax(0,1.4fr); gap:14px; }
+  .mailroom-reader { padding-left:18px; }
+  .mailroom-reader-heading { grid-template-columns:42px minmax(0,1fr); gap:12px; }
+  .mailroom-sender-mark { width:42px; height:46px; }
+  .mailroom-reader-title h2 { font-size:18px; }
+  .mailroom-reader-date { grid-column:2; padding-top:0; text-align:left; }
+  .mailroom-reader-date span { display:inline; margin-left:8px; }
+}
+@container (max-width:680px) {
+  .mailroom-workspace { grid-template-columns:66px minmax(0,1fr); gap:12px; }
+  .mailroom-category { min-height:73px; font-size:10px; }
+  .mailroom-category > svg { width:20px; height:20px; }
+  .mailroom-reader { display:none; }
+  .mailroom-has-selection .mailroom-reader { display:flex; }
+  .mailroom-has-selection .mailroom-list-pane { display:none; }
+  .mailroom-reader-back { display:block; margin-bottom:12px; }
+  .mailroom-reader-back > button { margin-left:-10px; }
+  .mailroom-reader-body { font-size:13px; }
+}
+@media (max-height:650px) {
+  .mailroom-category { min-height:58px; gap:4px; padding:8px 3px; }
+  .mailroom-category > svg { width:20px; height:20px; }
+  .mailroom-categories { gap:7px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .mailroom-category,.mailroom-list-item { transition:none; }
+}

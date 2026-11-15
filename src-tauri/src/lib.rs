@@ -76,6 +76,27 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    // WebView2's environment override otherwise replaces every window's
+    // requested profile, including the separate 2DFan session. Consume it
+    // before app-created threads start and apply it only to the main window.
+    #[cfg(windows)]
+    {
+        let inherited = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER");
+        if inherited.is_some() {
+            unsafe { std::env::remove_var("WEBVIEW2_USER_DATA_FOLDER"); }
+        }
+        let main_profile = inherited.filter(|value| !value.is_empty()).or_else(||
+            std::env::var_os("KOIPAGE_MAIN_WEBVIEW_DATA_DIRECTORY").filter(|value| !value.is_empty()));
+        if let Some(path) = main_profile {
+            // Preserve the main profile across app.restart without applying a
+            // WebView2-wide override to the independent site window.
+            unsafe { std::env::set_var("KOIPAGE_MAIN_WEBVIEW_DATA_DIRECTORY", &path); }
+            if let Some(main) = context.config_mut().app.windows.iter_mut().find(|window| window.label == "main") {
+                main.data_directory = Some(std::path::PathBuf::from(path));
+            }
+        }
+    }
     // A second launch shows a notice and activates the existing window, then
     // exits before another manager, tray icon or database connection is created.
     if instance::acquire() == instance::Role::Duplicate {
@@ -95,6 +116,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             commands::window::remember_app(app.handle().clone());
+            metadata::verification::remember_app(app.handle().clone());
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -109,6 +131,7 @@ pub fn run() {
         // exits (`app.exit`, used by the tray menu and the updater) bypass this.
         .on_window_event(|window, event| {
             use tauri::{Emitter, WindowEvent};
+            if window.label() != "main" { return; }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if let Err(error) = window.emit("close-requested", ()) {
@@ -141,6 +164,7 @@ pub fn run() {
             friends::friends_authenticate,
             friends::friends_logout,
             friends::friends_snapshot,
+            friends::friends_mailbox,
             friends::friends_action,
             friends::friends_preferences,
             friends::friends_change_password,
@@ -187,6 +211,10 @@ pub fn run() {
             commands::settings::settings_set,
             commands::settings::settings_get_all,
             commands::settings::settings_delete,
+            commands::resource_storage::resource_storage_info,
+            commands::data_storage::initialize_database,
+            commands::resource_storage::resource_storage_restart,
+            commands::resource_storage::resource_storage_change,
             bangumi_sync::bangumi_sync_status,
             bangumi_sync::bangumi_sync_connect,
             bangumi_sync::bangumi_sync_disconnect,
@@ -219,6 +247,8 @@ pub fn run() {
             commands::scan_roots::sync_asset_scope,
             // external metadata (NextMoe / VNDB / Bangumi)
             commands::metadata::metadata_search,
+            metadata::verification::twodfan_verification_open,
+            metadata::verification::twodfan_verification_sync,
             commands::metadata::metadata_search_stream,
             commands::metadata::metadata_search_reconcile,
             commands::metadata::metadata_detail,
@@ -281,6 +311,6 @@ pub fn run() {
             commands::window::manager_running_count,
             commands::window::app_set_fullscreen,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

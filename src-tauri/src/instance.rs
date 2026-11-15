@@ -35,6 +35,13 @@ pub fn acquire() -> Role {
     }
 }
 
+/// The data migration has closed the live database before restart. Release the
+/// instance claim because Tauri starts the replacement before exiting this process.
+pub fn release_for_restart() {
+    #[cfg(windows)]
+    windows_guard::release_for_restart();
+}
+
 /// Start listening for wake-ups sent by later launches of *this* executable.
 ///
 /// Must be called once the app is ready; the listener runs on its own thread and
@@ -102,6 +109,13 @@ mod windows_guard {
     /// which happens when this process exits (or crashes), so ownership never
     /// outlives the manager.
     static OWNERSHIP: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+    pub(super) fn release_for_restart() {
+        let mut slot = OWNERSHIP.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(handle) = slot.take() {
+            unsafe { CloseHandle(handle as HANDLE); }
+        }
+    }
 
     /// Own the manager, or wake the process that already does.
     pub fn acquire() -> Role {

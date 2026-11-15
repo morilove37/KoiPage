@@ -616,7 +616,7 @@ pub(crate) async fn storage_root(app: &AppHandle) -> CmdResult<PathBuf> {
     let stored = super::settings::settings_get_impl(&db, "save_backup_storage_root").await?;
     if let Some(stored) = stored {
         let root = PathBuf::from(stored);
-        let allowed = app.path().app_data_dir()?.join("restored-assets");
+        let allowed = super::resource_storage::root(app)?.join("restored-assets");
         return verified_storage_root(&root, &allowed);
     }
     Ok(app.path().app_local_data_dir()?.join("save-backups"))
@@ -703,8 +703,10 @@ async fn game_paths(app: &AppHandle, game_id: i64, missing: bool) -> CmdResult<(
     }
     for root in [
         app.path().app_data_dir()?,
+        super::resource_storage::root(app)?,
         app.path().app_local_data_dir()?,
         app.path().app_config_dir()?,
+        super::data_storage::database_directory(app)?,
     ] {
         let root = future_path(&root)?;
         if overlaps(&source, &root) {

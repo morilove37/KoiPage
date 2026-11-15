@@ -223,7 +223,7 @@ pub async fn ensure(app: &AppHandle) {
         })
         .await;
 }
-async fn candidates(app: &AppHandle) -> CmdResult<Vec<RunningCandidate>> {
+pub(super) async fn candidates(app: &AppHandle) -> CmdResult<Vec<RunningCandidate>> {
     let running = app
         .state::<crate::launcher::RunningGames>()
         .presence_snapshot()?;

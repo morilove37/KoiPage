@@ -42,6 +42,12 @@ try {
         }
     }
 
+    # A dev WebView may use different browser flags from the installed copy.
+    # Separate its browser cache so both environments can initialize correctly.
+    if (-not $env:WEBVIEW2_USER_DATA_FOLDER) {
+        $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:LOCALAPPDATA 'KoiPage\webview2-development'
+    }
+
     # Let the app's atomic single-instance guard handle both first launch and
     # re-launch. It owns the notice, tray restore and foreground handoff.
     Start-Process -FilePath $appPath -WorkingDirectory $projectRoot -WindowStyle Normal | Out-Null

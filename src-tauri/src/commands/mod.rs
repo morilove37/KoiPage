@@ -1,10 +1,8 @@
 //! SQLite data layer: schema migrations plus the Tauri command surface.
 //!
-//! Migrations live in `src-tauri/migrations/` and are registered with
-//! `tauri_plugin_sql` from [`migrations`]. The plugin only runs them
-//! *lazily*, when a database is actually connected — either because it is
-//! listed in the plugin's `preload` config or because the frontend calls
-//! `Database.load("sqlite:galgame.db")`. See [`crate::DB_URL`].
+//! Migrations live in `src-tauri/migrations/`. Database bootstrap opens the
+//! selected physical file, applies [`migrations`] with plugin-compatible
+//! checksums, and registers its pool under the stable [`DB_URL`] logical key.
 
 pub mod error;
 pub mod backup;
@@ -14,6 +12,8 @@ pub mod launch_profiles;
 pub mod relocation;
 pub mod library_batch;
 pub mod covers;
+pub mod resource_storage;
+pub mod data_storage;
 pub mod games;
 pub mod metadata;
 pub mod metadata_refresh;
@@ -32,8 +32,9 @@ pub mod window;
 
 /// Connection string shared by the Rust plugin registration and the frontend.
 ///
-/// tauri-plugin-sql stores sqlite files relative to `BaseDirectory::App`, so
-/// this is `<app_config_dir>/galgame.db` on disk.
+/// This key stays constant while `data_storage` selects the actual file. The
+/// default is `<app_config_dir>/galgame.db`; a custom directory is located from
+/// the small boot marker retained in the original app config directory.
 pub const DB_URL: &str = "sqlite:galgame.db";
 
 /// Migrations applied to [`DB_URL`].

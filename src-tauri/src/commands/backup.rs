@@ -581,14 +581,14 @@ pub async fn backup_create(app: AppHandle, path: String, include_save_snapshots:
     create_archive_with_saves(
         &pool(&app).await?,
         Path::new(&path),
-        &app.path().app_config_dir()?,
+        &super::data_storage::database_directory(&app)?,
         root.as_deref(),
     )
     .await
 }
 #[tauri::command]
 pub async fn backup_preview(app: AppHandle, path: String) -> CmdResult<Manifest> {
-    Ok(inspect(Path::new(&path), &app.path().app_config_dir()?)
+    Ok(inspect(Path::new(&path), &super::data_storage::database_directory(&app)?)
         .await?
         .0)
 }
@@ -652,7 +652,7 @@ pub async fn backup_restore_prepare(
     let running = app.state::<crate::launcher::RunningGames>();
     let _guard = running.1.lock().await;
     ensure_idle(&app)?;
-    let config = app.path().app_config_dir()?;
+    let config = super::data_storage::database_directory(&app)?;
     let stage = config.join(STAGE);
     if stage.exists() {
         return Err(error("已有待恢复数据，请先完全退出并重新打开恋页"));
@@ -675,7 +675,7 @@ pub async fn backup_restore_prepare(
     let (_, current) = unpack(&read_limited(&safety, MAX_ARCHIVE)?)?;
     stage_restore(
         &config,
-        &app.path().app_data_dir()?.join("restored-assets"),
+        &super::resource_storage::root(&app)?.join("restored-assets"),
         &m,
         &p,
         &current[0],
@@ -713,6 +713,12 @@ async fn stage_restore(
     let mut staged_saves = vec![];
     let result = async {
         let mut tx = db.begin().await?;
+        // The backup's resource preference may refer to another computer. Keep
+        // this installation's selected destination for the restored database.
+        sqlx::query("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(super::resource_storage::ROOT_KEY)
+            .bind(asset_base.parent().ok_or_else(||error("资源目录无效"))?.to_string_lossy().as_ref())
+            .execute(&mut *tx).await?;
         // A restored database must never silently resume remote account writes.
         sqlx::query("UPDATE settings SET value=json_set(value,'$.enabled',json('false'),'$.shareGame',json('false'),'$.shareLibrary',json('false'),'$.shareHistory',json('false')) WHERE key='friends_config' AND json_valid(value)")
             .execute(&mut *tx).await?;
@@ -1034,7 +1040,7 @@ fn recover_failed_restore(config: &Path) -> CmdResult<()> {
 pub fn restore_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("backup-restore")
         .setup(|app, _| {
-            let config=app.path().app_config_dir()?;
+            let config=super::data_storage::database_directory(&app)?;
             let had_pending=config.join(STAGE).join("ready").is_file();
             if let Err(failure)=apply_pending(&config) {
                 recover_failed_restore(&config)?;
@@ -1050,7 +1056,7 @@ pub fn restore_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 }
 #[tauri::command]
 pub fn backup_restore_notice(app: AppHandle) -> CmdResult<Option<String>> {
-    let path = app.path().app_config_dir()?.join("restore-failure.txt");
+    let path = super::data_storage::database_directory(&app)?.join("restore-failure.txt");
     if !path.is_file() {
         return Ok(None);
     }

@@ -666,6 +666,7 @@ pub async fn metadata_cover_cache(
     cover_url: String,
     install_path: String,
 ) -> CmdResult<String> {
+    let _resources = super::resource_storage::operation_guard()?;
     let url = required_string(&cover_url, "coverUrl")?;
     let _ = (game_id, install_path); // Retain the existing IPC argument contract.
     let path = cache_cover(&url, &super::covers::directory(&app)?).await?;
@@ -825,6 +826,7 @@ pub async fn metadata_autofetch(
     apply: Option<bool>,
     delay_ms: Option<u64>,
 ) -> CmdResult<AutofetchSummary> {
+    let _resources = super::resource_storage::operation_guard()?;
     if game_ids.is_empty() {
         return Ok(AutofetchSummary::default());
     }

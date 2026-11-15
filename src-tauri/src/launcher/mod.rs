@@ -274,7 +274,7 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     // cannot both pass the registry check before either inserts its child.
     let running_state = app.state::<RunningGames>();
     let _launch_guard = running_state.1.lock().await;
-    if app.path().app_config_dir()?.join(".koipage-restore/ready").is_file() {
+    if crate::commands::data_storage::database_directory(&app)?.join(".koipage-restore/ready").is_file() {
         return Err(CmdError("恢复已准备完成，请完全退出恋页后重新打开，再启动游戏。".into()));
     }
     let db = pool(&app).await?;
@@ -948,6 +948,7 @@ fn parse_import_file(path: &Path, contents: &str) -> CmdResult<Vec<ExportGame>> 
 /// as skipped, as is a row missing `title` or `installPath`.
 #[tauri::command]
 pub async fn import_games(app: AppHandle, path: String) -> CmdResult<ImportResult> {
+    let _resources = crate::commands::resource_storage::operation_guard()?;
     let db = pool(&app).await?;
     let src = PathBuf::from(path.trim());
     if !src.is_file() {

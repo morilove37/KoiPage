@@ -9,7 +9,8 @@ import {formatRating} from '@/lib/rating';
 import type {GameStatus} from '@/types/game';
 import {errorMessage} from '@/features/io/io';
 import {FriendAvatar} from './FriendAvatar';
-import {createProfileController,elapsedSeconds,libraryCoverSource,loadHistoryLibrary} from './model';
+import {createProfileController,elapsedSeconds,libraryCoverSource,loadHistoryLibrary,profilePlaying} from './model';
+import {useAppStore} from '@/store/app';
 import {ProfilePlayHistory} from './ProfilePlayHistory';
 import {friendsHistory,friendsHistoryCovers,friendsProfile,friendsReport,friendsStatus} from './api';
 import type {ReportReason} from './api';
@@ -59,6 +60,8 @@ export default function FriendProfilePage(){
   const {id}=useParams<{id?:string}>();
   const status=useFriendsStore(state=>state.status),epoch=useFriendsStore(state=>state.epoch);
   const account=status?.account;
+  const runningKey=useAppStore(state=>Object.entries(state.gameProcesses).filter(([,process])=>process.status==='running').map(([gameId,process])=>`${gameId}:${process.sessionId}`).sort().join(','));
+  const previousRunningKey=useRef(runningKey);
   // `/friends/me` is a static route, so `id` is undefined there; also accept a literal "me".
   const mine=id===undefined||id==='me';
   const target=mine?account?.id??'':id;
@@ -148,13 +151,18 @@ export default function FriendProfilePage(){
   useEffect(()=>{if(view&&view.libraryShared&&filter.offset>0&&filter.offset>=view.total)setFilter(current=>({...current,offset:0}));},[view?.total,view?.libraryShared,filter.offset]);
 
   const refresh=()=>{void controller.current?.refresh({target,...filter});setHistoryAttempt(value=>value+1);};
-  const playing=view?.profile.online?view.profile.game:null;
+  const playing=profilePlaying(view);
+  useEffect(()=>{
+    if(previousRunningKey.current===runningKey)return;
+    previousRunningKey.current=runningKey;
+    if(isSelf&&account)void controller.current?.refresh({target,...filter});
+  },[runningKey,isSelf,account?.id,target,filter]);
   const pageSize=view?.pageSize??24;
   const submitReport=(input:{reason:ReportReason;detail:string})=>{
     if(!reportTarget||reporting)return;
     const source=reportTarget;setReporting(true);setReportError('');
     void friendsReport({target:source.id,gameKey:source.gameKey,reason:input.reason,detail:input.detail||null}).then(result=>{
-      setNotice(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，管理员会尽快处理。');
+      setNotice(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，处理结果会通过站内邮件通知你。');
       setReportTarget(null);
     }).catch(cause=>setReportError(errorMessage(cause))).finally(()=>setReporting(false));
   };
@@ -174,8 +182,8 @@ export default function FriendProfilePage(){
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2"><h1 className="break-words text-xl font-semibold">{view.profile.nickname}</h1><Badge variant="secondary">{isSelf?'我的主页':'好友主页'}</Badge></div>
             <p className="mt-1 truncate text-xs text-muted-foreground">@{view.profile.username}</p>
-            <div className="mt-3 flex items-center gap-2 text-sm"><span aria-hidden="true" className={`size-2 rounded-full ${view.profile.online?'bg-primary':'bg-muted-foreground/50'}`}/><span>{view.profile.online?playing?'正在游玩':'在线':'离线'}</span></div>
-            {playing?<div className="mt-2 space-y-1"><p className="break-words text-sm font-medium text-primary">{playing.title}</p><p className="text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(playing,view,clock))}</p></div>:null}
+            <div className="mt-3 flex items-center gap-2 text-sm"><span aria-hidden="true" className={`size-2 rounded-full ${playing||view.profile.online?'bg-emerald-500':'bg-muted-foreground/50'}`}/><span>{playing?'正在游玩':view.profile.online?'在线':'离线'}</span>{isSelf&&status.config.invisible?<Badge variant="secondary">隐身中</Badge>:null}</div>
+            {playing?<div className="mt-3 rounded-xl border border-primary/15 bg-primary/5 p-4"><p className="break-words text-sm font-medium text-primary">{playing.title}</p><p className="mt-2 text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(playing,view,clock))}</p>{isSelf?<p className="mt-2 text-xs text-muted-foreground">{!status.config.shareGame||status.config.invisible||!view.profile.game?'当前作品仅自己可见，分享仍遵循你的隐私设置。':'好友可见你的游玩状态。'}</p>:null}</div>:isSelf?<p className="mt-2 text-xs text-muted-foreground">当前没有正在运行的作品。</p>:null}
           </div>
         </div>
       </Card>
@@ -194,7 +202,7 @@ export default function FriendProfilePage(){
           <Input aria-label="搜索好友的游戏库" placeholder="搜索作品名称或原名" maxLength={100} value={search} onChange={event=>setSearch(event.target.value)}/>
           <div className="flex flex-wrap gap-2" role="group" aria-label="按游玩状态筛选">{[null,...GAME_STATUSES].map(item=><Button key={item??'all'} size="sm" variant={filter.status===item?'default':'outline'} aria-pressed={filter.status===item} onClick={()=>setFilter(current=>({...current,status:item,offset:0}))}>{item===null?'全部':GAME_STATUS_LABELS[item]}</Button>)}</div>
         </div>
-        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/friends" className="text-sm text-primary hover:underline">前往好友页开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「游玩状态与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
+        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/friends?tab=settings" className="text-sm text-primary hover:underline">前往好友页开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「资料与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
           <p className="text-xs text-muted-foreground" role="status">{filter.query||filter.status?'符合条件的作品':'公开作品'}共 {view.total} 部{loading?' · 正在更新…':''}</p>
           {view.games.length?<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{view.games.map(game=><LibraryCard key={game.key} game={game} onReport={isSelf?undefined:()=>setReportTarget({id:view.profile.id,username:view.profile.username,nickname:view.profile.nickname,gameKey:game.key,defaultReason:'cover'})}/>)}</div>:<EmptyState title={filter.query||filter.status?'没有找到符合条件的作品':'公开游戏库暂时为空'} description={filter.query||filter.status?'试试其他关键词或游玩状态。':'对方同步收藏后，作品会显示在这里。'}/>}
           {view.total>pageSize?<nav aria-label="好友游戏库分页" className="flex flex-wrap items-center justify-center gap-4 pt-2"><Button size="sm" variant="outline" disabled={loading||filter.offset===0} onClick={()=>setFilter(current=>({...current,offset:Math.max(0,current.offset-pageSize)}))}>上一页</Button><span className="text-xs tabular-nums text-muted-foreground">第 {Math.floor(filter.offset/pageSize)+1} / {Math.ceil(view.total/pageSize)} 页</span><Button size="sm" variant="outline" disabled={loading||filter.offset+pageSize>=view.total} onClick={()=>setFilter(current=>({...current,offset:current.offset+pageSize}))}>下一页</Button></nav>:null}

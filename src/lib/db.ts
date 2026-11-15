@@ -1,10 +1,9 @@
 /**
  * Thin typed wrapper around the Tauri `invoke` bridge.
  *
- * The Rust commands talk to the pool that `tauri-plugin-sql` owns, so the
- * database must be *connected* (and therefore migrated) before any command
- * runs. `Database.load()` is what does that: it creates the sqlite file if
- * needed and applies every migration registered for this URL on the Rust side.
+ * Rust bootstrap opens and migrates the selected physical database, registering
+ * its pool under the SQL plugin's stable logical key. Constructing Database
+ * reuses that pool; plugin load is reserved for older executables only.
  *
  * Every helper below awaits {@link ready} first, so callers cannot accidentally
  * issue a command against a database that has not been opened yet.
@@ -13,6 +12,7 @@
 import { invoke, recordLog } from './logging';
 import Database from '@tauri-apps/plugin-sql';
 import { Channel } from '@tauri-apps/api/core';
+import { bootstrapDatabase } from './database-bootstrap';
 
 import type {
   Game,
@@ -49,7 +49,11 @@ let loadPromise: Promise<Database> | null = null;
  */
 export function initDatabase(): Promise<Database> {
   if (!loadPromise) {
-    loadPromise = Database.load(DB_URL).then(async db => {
+    loadPromise = bootstrapDatabase(
+      () => invoke<void>('initialize_database'),
+      () => new Database(DB_URL),
+      () => Database.load(DB_URL),
+    ).then(async db => {
       // Runs once per connection lifetime before launch controls can become available.
       await invoke<number>('recover_play_sessions');
       return db;

@@ -30,6 +30,7 @@ pub async fn settings_get(app: AppHandle, key: String) -> CmdResult<Option<Strin
 /// `settings_set` — upsert a key. Passing `null` stores SQL NULL.
 #[tauri::command]
 pub async fn settings_set(app: AppHandle, key: String, value: Option<String>) -> CmdResult<()> {
+    let _resources = super::resource_storage::operation_guard()?;
     let pool = pool(&app).await?;
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES (?, ?) \

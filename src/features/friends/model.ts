@@ -1,5 +1,12 @@
 import type {CurrentGame,Friend,HistorySession,Privacy,Snapshot,ViewSnapshot,FriendProfile,FriendProfileView,ProfileFilters,SharedLibraryGame} from './types';
 
+/** A self-only local projection remains useful while public sharing is off. */
+export function profilePlaying(view:FriendProfile|null):CurrentGame|null{
+  if(!view)return null;
+  if(view.self&&Object.prototype.hasOwnProperty.call(view,'selfGame'))return view.selfGame??null;
+  return view.profile.online?view.profile.game:null;
+}
+
 export function normalizePrivacy(value:unknown):Privacy{
   const v=value&&typeof value==='object'?value as Record<string,unknown>:{};
   return{shareGame:v.shareGame===true,shareLibrary:v.shareLibrary===true,shareHistory:v.shareHistory===true,invisible:v.invisible===true,hiddenGameIds:Array.isArray(v.hiddenGameIds)?[...new Set(v.hiddenGameIds.filter((n):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>0))]:[]};

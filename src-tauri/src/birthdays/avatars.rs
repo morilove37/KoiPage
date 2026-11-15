@@ -48,6 +48,5 @@ pub fn read_image(path: &Path) -> CmdResult<Vec<u8>> {
     Ok(bytes)
 }
 pub fn cache_dir(app: &tauri::AppHandle) -> CmdResult<PathBuf> {
-    use tauri::Manager;
-    Ok(app.path().app_data_dir()?.join("birthday-avatars"))
+    Ok(crate::commands::resource_storage::root(app)?.join("birthday-avatars"))
 }

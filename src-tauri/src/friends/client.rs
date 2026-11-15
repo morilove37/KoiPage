@@ -183,6 +183,8 @@ fn response_error(status: u16, value: &Value) -> CmdError {
         ("LIBRARY_CLOSED", "该账号的公开游戏库已被管理员强制关闭，请联系管理员处理")
     } else if message.contains("FRIENDS_UPGRADE_REQUIRED") {
         ("UPGRADE_REQUIRED", "请更新客户端后使用账号注销服务")
+    } else if auth_code == "FRIENDS_UPDATE_REQUIRED" {
+        ("UPDATE_REQUIRED", "客户端与服务端版本尚未同步，请重新编译开发版；已安装版请更新后重试")
     } else if auth_code == "FRIENDS_CONSENT_REQUIRED" {
         ("CONSENT_REQUIRED", "请先阅读并同意当前版本的服务协议、隐私政策和出境告知；旧版客户端请更新后注册")
     } else if auth_code == "FRIENDS_IP_REGISTERED" {
@@ -210,6 +212,13 @@ fn response_error(status: u16, value: &Value) -> CmdError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn policy_version_rejection_does_not_look_like_an_invalid_password() {
+        let error = response_error(426, &json!({"code":"FRIENDS_UPDATE_REQUIRED","message":"untrusted-provider-body"}));
+        assert!(error.0.starts_with("FRIENDS_UPDATE_REQUIRED:"));
+        assert!(error.0.contains("开发版"));
+        assert!(!error.0.contains("untrusted-provider-body"));
+    }
     #[test]
     fn consent_rejection_is_actionable_and_does_not_echo_provider_content() {
         let error = response_error(400, &json!({"code":"FRIENDS_CONSENT_REQUIRED","message":"untrusted-provider-body"}));

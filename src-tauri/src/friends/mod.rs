@@ -319,13 +319,49 @@ pub async fn friends_profile(
     } else {
         return Err(CmdError("FRIENDS_INPUT: 好友或筛选条件无效".into()));
     };
-    runtime::rpc(
+    let profile = runtime::rpc(
         &mut inner,
         "koipage_friend_profile",
-        json!({"p_target":target,"p_query":query,"p_status":status,"p_offset":offset}),
+        json!({"p_target":&target,"p_query":query,"p_status":status,"p_offset":offset}),
+    )
+    .await?;
+    let owner = inner.account.as_ref().map(|account| account.id.as_str());
+    let games = if owner.is_some_and(|id| id.eq_ignore_ascii_case(&target)) {
+        runtime::candidates(&app).await?
+    } else {
+        Vec::new()
+    };
+    Ok(project_self_profile(profile, &target, owner, &inner.config, &games, now()))
+}
+#[tauri::command]
+pub async fn friends_mailbox(
+    app: AppHandle,
+    action: String,
+    id: Option<String>,
+    offset: Option<i64>,
+    filter: Option<String>,
+) -> CmdResult<Value> {
+    let offset = offset.unwrap_or(0);
+    let filter = filter.unwrap_or_else(|| "all".into());
+    if !["list", "read", "read_all"].contains(&action.as_str())
+        || !(0..=i32::MAX as i64).contains(&offset)
+        || !["all", "unread", "announcement", "library", "report"].contains(&filter.as_str())
+        || id.as_ref().is_some_and(|value| !valid_uuid(value))
+        || (action == "read" && id.is_none())
+    {
+        return Err(CmdError("FRIENDS_INPUT: 邮件操作无效".into()));
+    }
+    runtime::ensure(&app).await;
+    let state = app.state::<FriendsState>();
+    let mut inner = state.inner.lock().await;
+    runtime::rpc(
+        &mut inner,
+        "koipage_mailbox",
+        json!({"p_action":action,"p_id":id,"p_offset":offset,"p_filter":filter}),
     )
     .await
 }
+
 #[tauri::command]
 pub async fn friends_snapshot(app: AppHandle, revision: Option<String>) -> CmdResult<Value> {
     runtime::ensure(&app).await;

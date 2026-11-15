@@ -1,12 +1,14 @@
 import type { SVGProps } from "react";
 import { cn } from "@/lib/utils";
 
-export type GeometryIconName = "assistant" | "home" | "library" | "folder" | "tools" | "tags" | "friends" | "settings" | "clock" | "play" | "check" | "bookmark" | "calendar" | "chart" | "stop" | "history" | "cake" | "arrow-left" | "close";
+export type GeometryIconName = "mail" | "search" | "assistant" | "home" | "library" | "folder" | "tools" | "tags" | "friends" | "settings" | "clock" | "play" | "check" | "bookmark" | "calendar" | "chart" | "stop" | "history" | "cake" | "arrow-left" | "close";
 
 /** Small geometric glyphs share the text color and a consistent 24px grid. */
 export function GeometryIcon({ name, className, ...props }: SVGProps<SVGSVGElement> & { name: GeometryIconName }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" className={cn("size-[18px] shrink-0", className)} {...props}>
+      {name === "mail" ? <><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></> : null}
+      {name === "search" ? <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></> : null}
       {name === "arrow-left" ? <path d="m10 5-7 7 7 7M3 12h18" /> : null}
       {name === "close" ? <path d="m6 6 12 12M6 18 18 6" /> : null}
       {name === "assistant" ? <><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z" /><path d="M20 3v4M18 5h4" /></> : null}

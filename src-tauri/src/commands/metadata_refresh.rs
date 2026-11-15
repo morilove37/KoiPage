@@ -108,6 +108,7 @@ pub fn metadata_refresh_cancel(app: AppHandle) -> RefreshState {
 
 #[tauri::command]
 pub async fn metadata_refresh_start(app: AppHandle, confirmed: bool) -> CmdResult<RefreshState> {
+    let resources = super::resource_storage::operation_guard()?;
     if !confirmed {
         return Err(CmdError("请先确认资料覆盖警告".into()));
     }
@@ -146,6 +147,7 @@ pub async fn metadata_refresh_start(app: AppHandle, confirmed: bool) -> CmdResul
     };
     let _ = app.emit("metadata-refresh-progress", &initial);
     tauri::async_runtime::spawn(async move {
+        let _resources = resources;
         // A refresh may bind new subjects; synchronize only after the batch has
         // finished. An existing sync finishes before the backup is captured.
         let sync = app.state::<crate::bangumi_sync::SyncState>();
@@ -193,10 +195,7 @@ async fn run(
     if cancelled(app) {
         return Ok(());
     }
-    let directory = app
-        .path()
-        .app_config_dir()?
-        .join("metadata-refresh-backups");
+    let directory = super::data_storage::database_directory(app)?.join("metadata-refresh-backups");
     std::fs::create_dir_all(&directory)
         .map_err(|e| CmdError(format!("无法创建焕新备份目录：{e}")))?;
     let stamp = std::time::SystemTime::now()

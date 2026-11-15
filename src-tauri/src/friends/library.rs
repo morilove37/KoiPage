@@ -423,7 +423,7 @@ async fn synchronize(
     }
     let db = crate::commands::games::pool(app).await?;
     let sources = load_sources(&db).await?;
-    let directory = app.path().app_data_dir()?;
+    let directory = crate::commands::resource_storage::root(app)?;
     let roots = vec![directory.join("covers"), directory.join("custom-covers")];
     let config_for_images = config.clone();
     let previous = cache.entries.clone();
