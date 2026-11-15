@@ -6,7 +6,8 @@ import ts from 'typescript';
 async function apiWithReply(reply){
   const source=(await readFile(new URL('../src/features/friends/api.ts',import.meta.url),'utf8'))
     .replace(/import \{invoke\} from [^;]+;/,`const invoke=async()=>(${JSON.stringify(reply)??'undefined'});`)
-    .replace(/import \{initDatabase\} from [^;]+;/,'const initDatabase=async()=>{};');
+    .replace(/import \{initDatabase\} from [^;]+;/,'const initDatabase=async()=>{};')
+    .replace("from './mailbox-model'",'from '+JSON.stringify(new URL('../src/features/friends/mailbox-model.ts',import.meta.url).href));
   const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
   return import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
 }

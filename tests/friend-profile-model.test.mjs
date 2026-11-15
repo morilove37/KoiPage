@@ -5,6 +5,15 @@ import * as model from '../src/features/friends/model.ts';
 const profile={id:'friend-a',username:'alice',nickname:'Alice',avatar:0,friendCode:'CODE',online:false,game:null};
 const first={profile,serverNow:1000,libraryShared:true,syncedAt:990,total:1,games:[{key:'one',title:'星空',rating:0,playTimeSeconds:3600}],pageSize:24,stats:{total:1,completed:0,playTimeSeconds:3600}};
 const input={target:'friend-a',query:'',status:null,offset:0};
+test('own profile uses private local play state while friends retain the public projection',()=>{
+  const local={title:'本机作品',vndbId:null,bangumiId:null,startedAt:900};
+  const publicGame={...local,title:'已停止的公开状态'};
+  assert.deepEqual(model.profilePlaying({...first,self:true,selfGame:local}),local);
+  assert.equal(model.profilePlaying({...first,self:true,selfGame:null,profile:{...profile,online:true,game:publicGame}}),null);
+  assert.equal(model.profilePlaying({...first,self:false,selfGame:local}),null);
+  assert.deepEqual(model.profilePlaying({...first,self:false,profile:{...profile,online:true,game:publicGame}}),publicGame);
+  assert.deepEqual(model.profilePlaying({...first,self:true,profile:{...profile,online:true,game:publicGame}}),publicGame);
+});
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 
 test('history covers include later library pages without inheriting search or status filters',async()=>{
