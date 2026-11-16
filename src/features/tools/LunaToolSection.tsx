@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,7 @@ export function LunaToolSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const alive = useRef(true);
   const operation = useRef(false);
   const reading = useRef(false);
@@ -53,10 +54,10 @@ export function LunaToolSection() {
 
   async function act(task: () => Promise<string | null>) {
     if (operation.current || loading) return;
-    operation.current = true; setBusy(true); setError(null); setNotice(null);
+    operation.current = true; setBusy(true); setError(null); void 0;
     try {
       const result = await task();
-      if (alive.current) setNotice(result);
+      if (alive.current && result) toast(result);
     } catch (e) { if (alive.current) setError(errorMessage(e)); }
     finally { operation.current = false; if (alive.current) setBusy(false); }
   }
@@ -114,7 +115,6 @@ export function LunaToolSection() {
       <button type="button" disabled={!status?.licensePath} className="text-primary hover:underline disabled:opacity-50" onClick={() => { if (status) void openPath(status.licensePath).catch(e => setError(errorMessage(e))); }}>查看许可</button>
       <button type="button" disabled={!status?.sourcePath} className="text-primary hover:underline disabled:opacity-50" onClick={() => { if (status) void revealItemInDir(status.sourcePath).catch(e => setError(errorMessage(e))); }}>对应版本源码</button>
     </div>
-    {notice ? <p role="status" className="text-xs text-emerald-600 dark:text-emerald-400">{notice}</p> : null}
     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
   </div>;
 }

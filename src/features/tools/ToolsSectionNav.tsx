@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 
 const SECTIONS = [
   { id: 'tools-archive', label: '游戏解压' },
+  { id: 'tools-downloader', label: '多线程下载' },
   { id: 'tools-locale', label: '转区启动' },
   { id: 'tools-luna', label: '游戏翻译' },
   { id: 'tools-magpie', label: '窗口缩放' },

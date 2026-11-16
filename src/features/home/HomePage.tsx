@@ -340,7 +340,6 @@ export default function HomePage() {
 
       {error ? <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">首页载入失败：{error}。请点击刷新重试。</div> : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
-      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
 
       {loading && games.length === 0 ? (
         <div role="status" aria-label="正在载入首页" className="home-hero shimmer rounded-xl border border-border" />

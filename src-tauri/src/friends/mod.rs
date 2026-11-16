@@ -132,10 +132,25 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
     credentials::save(&inner.config.server_url, &tokens)?;
     let mut config = inner.config.clone();
     config.enabled = true;
-    config.share_game = false;
-    config.share_library = false;
-    config.share_history = false;
-    config.invisible = false;
+    let saved = runtime::load_preferences(&app, &account.id).await;
+    let (share_game, share_library, share_history, invisible, hidden_game_ids) = saved
+        .map(|prefs| {
+            (
+                prefs.share_game,
+                prefs.share_library,
+                prefs.share_history,
+                prefs.invisible,
+                prefs.hidden_game_ids,
+            )
+        })
+        .unwrap_or((false, false, false, false, Vec::new()));
+    // Same account: keep the previous privacy choices. Different account:
+    // start private so another user's library is never published by default.
+    config.share_game = share_game;
+    config.share_library = share_library;
+    config.share_history = share_history;
+    config.invisible = invisible;
+    config.hidden_game_ids = hidden_game_ids;
     runtime::save(&app, &config).await?;
     runtime::save_account(&app, &account).await;
     inner.config = config;
@@ -156,8 +171,12 @@ pub async fn friends_authenticate(app: AppHandle, input: AuthInput) -> CmdResult
         .stopping
         .store(false, std::sync::atomic::Ordering::SeqCst);
     drop(inner);
-    // A fresh login starts private even if this account shared a previous snapshot.
-    let _ = library::sync(&app, true).await;
+    // A fresh login starts private unless the same account shared before; the
+    // first sync runs in the background so the UI is usable immediately.
+    let library_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = library::sync(&library_handle, true).await;
+    });
     Ok(state.inner.lock().await.status())
 }
 #[tauri::command]
@@ -254,6 +273,19 @@ pub async fn friends_preferences(app: AppHandle, input: Preferences) -> CmdResul
     next.hidden_game_ids.sort_unstable();
     next.hidden_game_ids.dedup();
     runtime::save(&app, &next).await?;
+    if let Some(account) = inner.account.as_ref() {
+        let saved = runtime::SavedPreferences {
+            account_id: account.id.clone(),
+            share_game: next.share_game,
+            share_library: next.share_library,
+            share_history: next.share_history,
+            invisible: next.invisible,
+            hidden_game_ids: next.hidden_game_ids.clone(),
+        };
+        if let Err(error) = runtime::save_preferences(&app, &saved).await {
+            crate::app_warn!("[friends] {error:?}");
+        }
+    }
     inner.config = next;
     inner.generation += 1;
     inner.library_pending = true;
@@ -266,7 +298,12 @@ pub async fn friends_preferences(app: AppHandle, input: Preferences) -> CmdResul
     tauri::async_runtime::spawn(async move {
         let _ = history::sync(&history_handle, true).await;
     });
-    let _ = library::sync(&app, true).await;
+    // The library sync can take a while; run it in the background so the UI
+    // stays interactive instead of disabling every control until it finishes.
+    let library_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = library::sync(&library_handle, true).await;
+    });
     Ok(state.inner.lock().await.status())
 }
 

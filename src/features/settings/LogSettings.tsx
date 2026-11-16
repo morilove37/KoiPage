@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useState } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
@@ -10,14 +11,14 @@ export function LogSettings() {
   const [info, setInfo] = useState<LogInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   async function refresh() {
     try { setInfo(await invoke<LogInfo>('logs_info')); setError(null); }
     catch (cause) { setError(String(cause)); }
   }
   useEffect(() => { void refresh(); }, []);
   async function exportLogs() {
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const stamp = new Date().toLocaleDateString('sv-SE');
       const path = await save({ title: '导出诊断日志', defaultPath: `KoiPage-日志-${stamp}.txt`, filters: [{ name: '文本日志', extensions: ['txt'] }] });
@@ -25,7 +26,7 @@ export function LogSettings() {
       recordLog('INFO', 'logs', '用户导出诊断日志');
       await flushLogs();
       await invoke<void>('logs_export', { path });
-      setNotice('日志已导出，可用于反馈问题。');
+      toast('日志已导出，可用于反馈问题。');
       await refresh();
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
@@ -45,6 +46,5 @@ export function LogSettings() {
       <div><dt className="inline">保留规则：</dt><dd className="inline">每个文件最多 {size(info.maxFileBytes)}，保留最近 {info.maxFiles} 个，自动轮换。</dd></div>
     </dl> : null}
     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
-    {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
   </div>;
 }

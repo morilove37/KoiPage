@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -30,7 +31,7 @@ export function MagpieToolSection() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const [scaling, setScaling] = useState<MagpieScalingConfig | null>(null);
   const [scalingLoading, setScalingLoading] = useState(true);
   const [scalingError, setScalingError] = useState<string | null>(null);
@@ -128,29 +129,29 @@ export function MagpieToolSection() {
 
   async function chooseSource(value: MagpieMode) {
     if (loading || busy || value === mode) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       await settingsSet("magpie_source", value);
       setMode(value);
       await refreshStatus();
-      setNotice(value === "bundled" ? "已切换为内置 Magpie。" : "已切换为其他 Magpie 程序。");
+      toast(value === "bundled" ? "已切换为内置 Magpie。" : "已切换为其他 Magpie 程序。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function checkBundled() {
     if (loading || busy) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       await refreshStatus();
-      setNotice("已重新检查内置 Magpie。");
+      toast("已重新检查内置 Magpie。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function chooseProgram() {
     if (loading || busy) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const picked = await open({
         multiple: false,
@@ -161,19 +162,19 @@ export function MagpieToolSection() {
       if (typeof picked !== "string") return;
       await settingsSet("magpie_path", picked);
       await refreshStatus();
-      setNotice("已保存 Magpie 程序路径。");
+      toast("已保存 Magpie 程序路径。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function detectProgram() {
     if (loading || busy) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       // 清空自定义路径，让后端重新做自动检测。
       await settingsSet("magpie_path", null);
       await refreshStatus();
-      setNotice("已改为自动检测 Magpie。");
+      toast("已改为自动检测 Magpie。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
@@ -181,18 +182,18 @@ export function MagpieToolSection() {
   async function toggleAutostart() {
     if (loading || busy || !programPath) return;
     const next = !autostart;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       await settingsSet("magpie_autostart", next ? "1" : "0");
       setAutostart(next);
-      setNotice(next ? "已开启随游戏启动。" : "已关闭随游戏启动。");
+      toast(next ? "已开启随游戏启动。" : "已关闭随游戏启动。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function launchMagpie() {
     if (loading || busy || !programPath) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const started = await magpieLaunch();
       // Magpie 启动到托盘需要一点时间（开启管理员权限时还要等 UAC 确认），
@@ -202,7 +203,7 @@ export function MagpieToolSection() {
         await new Promise(resolve => setTimeout(resolve, 400));
         next = await refreshStatus();
       }
-      setNotice(started
+      toast(started
         ? next.running ? "已启动 Magpie。" : "已请求启动 Magpie，请稍候它出现在托盘。"
         : "Magpie 已在运行。");
     } catch (cause) { setError(errorMessage(cause)); }
@@ -211,21 +212,21 @@ export function MagpieToolSection() {
 
   async function quitMagpie() {
     if (loading || busy || !running) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const stopped = await magpieQuit();
       await refreshStatus();
-      setNotice(stopped ? "已退出 Magpie。" : "没有找到正在运行的 Magpie 进程。");
+      toast(stopped ? "已退出 Magpie。" : "没有找到正在运行的 Magpie 进程。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function changeScalingMode(value: string) {
-    setScalingBusy(true); setScalingError(null); setError(null); setNotice(null);
+    setScalingBusy(true); setScalingError(null); setError(null); void 0;
     try {
       const result = await magpieScalingSet(value);
       setSelectedMode(value);
-      setNotice(result.applied ? "已写入本机 Magpie 配置，下次启动 Magpie 生效。"
+      toast(result.applied ? "已写入本机 Magpie 配置，下次启动 Magpie 生效。"
         : result.reason === "running" ? "已保存；Magpie 正在运行，将在下次启动时应用。"
         : result.reason === "no-config" ? "已保存；本机还没有 Magpie 配置，启动一次 Magpie 后会自动应用。"
         : "已保存默认缩放模式。");
@@ -237,10 +238,10 @@ export function MagpieToolSection() {
   /** 把本机 Magpie 配置恢复为随应用分发的默认配置。 */
   async function resetScalingDefaults() {
     setConfirmReset(false);
-    setScalingBusy(true); setScalingError(null); setError(null); setNotice(null);
+    setScalingBusy(true); setScalingError(null); setError(null); void 0;
     try {
       const result = await magpieScalingReset();
-      setNotice(result.backupPath
+      toast(result.backupPath
         ? "已恢复应用内置的默认配置，原配置已备份为 config.koipage-before-reset.json；下次启动 Magpie 生效。"
         : "已写入应用内置的默认配置；下次启动 Magpie 生效。");
       const config = await magpieScalingConfig();
@@ -256,13 +257,13 @@ export function MagpieToolSection() {
 
   async function reveal(path: string | null) {
     if (!path) return;
-    setError(null); setNotice(null);
+    setError(null); void 0;
     try { await revealItemInDir(path); }
     catch (cause) { setError(errorMessage(cause)); }
   }
 
   async function openDownloadPage() {
-    setError(null); setNotice(null);
+    setError(null); void 0;
     try { await openUrl(DOWNLOAD_URL); }
     catch (cause) { setError(errorMessage(cause)); }
   }
@@ -395,7 +396,6 @@ export function MagpieToolSection() {
       {configPath ? <Button variant="outline" size="sm" onClick={() => void reveal(configPath)}>打开配置文件夹</Button> : null}
     </div> : null}
 
-    {notice ? <p role="status" className="text-sm text-emerald-500">{notice}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
 
     <ConfirmDialog

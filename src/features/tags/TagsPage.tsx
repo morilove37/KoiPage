@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
@@ -46,7 +47,7 @@ export default function TagsPage() {
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -172,7 +173,7 @@ export default function TagsPage() {
         setGames(next.gameList);
 
         if (cleaned.length > 0) {
-          setNotice(`已自动清理 ${cleaned.length} 个未使用标签：${summariseNames(cleaned)}`);
+          toast(`已自动清理 ${cleaned.length} 个未使用标签：${summariseNames(cleaned)}`);
         }
         if (failed.length > 0) {
           setError(`有 ${failed.length} 个未使用标签清理失败：${summariseNames(failed)}`);
@@ -258,12 +259,12 @@ export default function TagsPage() {
     }
     setCreating(true);
     setError(null);
-    setNotice(null);
+    void 0;
     try {
       // Colours are no longer part of the tag feature; new tags stay plain.
       await tagCreate(name, null);
       setNewName("");
-      setNotice(
+      toast(
         `已创建标签「${name}」。它还没有被任何游戏使用，下次进入本页时会被自动清理。`,
       );
       await reload();
@@ -278,7 +279,7 @@ export default function TagsPage() {
     setEditingId(tag.id);
     setEditName(tag.name);
     setError(null);
-    setNotice(null);
+    void 0;
   };
 
   const saveEdit = async () => {
@@ -298,7 +299,7 @@ export default function TagsPage() {
       // Rename only: the colour column is left untouched (it is unmanaged now).
       await tagUpdate(editingId, name);
       setEditingId(null);
-      setNotice("标签已更新。");
+      toast("标签已更新。");
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -320,7 +321,7 @@ export default function TagsPage() {
       setLinks(current => current.filter(([, tagId]) => !removed.has(tagId)));
       setSelectedIds(current => new Set([...current].filter(id => !removed.has(id))));
       setExpandedTagIds(current => new Set([...current].filter(id => !removed.has(id))));
-      if (removed.size) setNotice(`已删除 ${removed.size} 个标签，游戏和游玩记录保留。`);
+      if (removed.size) toast(`已删除 ${removed.size} 个标签，游戏和游玩记录保留。`);
       if (failed.length) {
         setPendingDelete(failed);
         setDeleteError(`${failed.length} 个标签删除失败，可重试：${summariseNames(failed.map(tag => t(tag.name)))}`);
@@ -363,11 +364,6 @@ export default function TagsPage() {
       {error ? (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded-md border border-border bg-accent px-3 py-2 text-xs">
-          {notice}
         </div>
       ) : null}
       {!loading && !error && targetTagId !== null && !tags.some(tag => tag.id === targetTagId) ? (

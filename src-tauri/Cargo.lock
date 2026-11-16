@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "galgame-manager"
-version = "0.7.4000"
+version = "0.7.5000"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -3780,6 +3780,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

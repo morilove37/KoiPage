@@ -1,6 +1,8 @@
+import { useToast } from '@/components/Toast';
 import {useEffect,useRef,useState} from 'react';
 import {Link,useParams} from 'react-router-dom';
-import {Button} from '@/components/ui/button';
+import {BackLink} from '@/components/ui/back-button';
+import {Button,buttonClassName} from '@/components/ui/button';
 import {Card,EmptyState} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
 import {Badge} from '@/components/ui/badge';
@@ -48,7 +50,7 @@ function LibraryCard({game,onReport}:{game:SharedLibraryGame;onReport?:(game:Sha
       <div className="mt-auto space-y-1 pt-1 text-xs text-muted-foreground">
         <p>个人评分 <span className={game.rating===null?'':'font-medium tabular-nums text-foreground'}>{game.rating===null?'未评分':`${formatRating(game.rating)} / 10`}</span></p>
         <p>累计游玩 <span className="tabular-nums text-foreground">{formatPlayTime(game.playTimeSeconds)}</span></p>
-        {onReport?<p className="pt-1"><button type="button" className="rounded text-xs text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={()=>onReport(game)}>举报封面</button></p>:null}
+        {onReport?<p className="pt-1"><button type="button" className={buttonClassName({variant:'ghost',size:'sm',className:'h-8 px-2 text-xs text-muted-foreground hover:text-destructive'})} onClick={()=>onReport(game)}>举报封面</button></p>:null}
       </div>
     </div>
   </Card>;
@@ -78,7 +80,8 @@ export default function FriendProfilePage(){
   const [historyAccess,setHistoryAccess]=useState<{key:string;allowed:boolean;self:boolean}>({key:'',allowed:false,self:false});
   const [reportTarget,setReportTarget]=useState<ReportTarget|null>(null);
   const [reporting,setReporting]=useState(false);
-  const [notice,setNotice]=useState(''),[reportError,setReportError]=useState('');
+  const toast=useToast();
+  const [reportError,setReportError]=useState('');
   const [clock,setClock]=useState(Date.now());
   const controller=useRef<ReturnType<typeof createProfileController>|null>(null);
   const fallbackCovers=useRef<{key:string;games:SharedLibraryGame[]}|null>(null);
@@ -162,18 +165,23 @@ export default function FriendProfilePage(){
     if(!reportTarget||reporting)return;
     const source=reportTarget;setReporting(true);setReportError('');
     void friendsReport({target:source.id,gameKey:source.gameKey,reason:input.reason,detail:input.detail||null}).then(result=>{
-      setNotice(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，处理结果会通过站内邮件通知你。');
+      toast(result.duplicate?'已存在相同举报，管理员会一并处理。':'举报已提交，处理结果会通过站内邮件通知你。');
       setReportTarget(null);
     }).catch(cause=>setReportError(errorMessage(cause))).finally(()=>setReporting(false));
   };
   return <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <Link to="/friends" className="rounded-md text-sm text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">← 返回好友列表</Link>
-      <Button size="sm" variant="outline" disabled={!account||loading} onClick={refresh}>{loading?'更新中…':'刷新主页'}</Button>
+    {/*
+      Sticky toolbar: the way back must not scroll away. `main` (src/App.tsx:236)
+      is the only scroll container, so `sticky top-0` pins this bar to the top of
+      the viewport while the profile scrolls underneath it. The negative margins
+      cancel the page padding so the bar starts flush and spans the full column.
+    */}
+    <div className="sticky top-0 z-20 -mx-6 -mt-6 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-background/95 px-6 py-3 shadow-sm backdrop-blur-md [.glass_&]:border-[hsl(var(--glass-border))] [.glass_&]:bg-[hsl(var(--glass))] [.glass_&]:backdrop-blur-glass [.glass_&]:backdrop-saturate-150 [.glass_&]:shadow-[inset_0_1px_0_0_hsl(var(--glass-highlight)),0_12px_36px_-14px_var(--glass-shadow)]">
+      <BackLink to="/friends" className="h-10 gap-2.5 pl-2 pr-4 text-sm">返回好友列表</BackLink>
+      <Button size="md" variant="outline" className="h-10" disabled={!account||loading} onClick={refresh}>{loading?'更新中…':'刷新主页'}</Button>
     </div>
-    {notice?<p role="status" className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{notice}</p>:null}
     {reportError?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{reportError}</p>:null}
-    {!status?<p role="status" className="py-12 text-center text-sm text-muted-foreground">正在读取登录状态…</p>:!account?<EmptyState title="登录后查看好友主页" description="返回好友列表登录，即可浏览好友公开的收藏。" action={<Link to="/friends" className="text-sm text-primary hover:underline">前往登录</Link>}/>:error?<div role="alert"><EmptyState title="好友主页暂时不可用" description={error} action={<Button size="sm" variant="outline" disabled={loading} onClick={refresh}>重新读取</Button>}/></div>:null}
+    {!status?<p role="status" className="py-12 text-center text-sm text-muted-foreground">正在读取登录状态…</p>:!account?<EmptyState title="登录后查看好友主页" description="返回好友列表登录，即可浏览好友公开的收藏。" action={<Link to="/friends" className={buttonClassName({variant:'default',size:'sm'})}>前往登录</Link>}/>:error?<div role="alert"><EmptyState title="好友主页暂时不可用" description={error} action={<Button size="sm" variant="outline" disabled={loading} onClick={refresh}>重新读取</Button>}/></div>:null}
     {account&&!error&&view?<>
       <Card className="overflow-hidden">
         <div className="h-12 border-b border-primary/10 bg-primary/5 sm:h-16" aria-hidden="true"/>
@@ -182,7 +190,7 @@ export default function FriendProfilePage(){
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2"><h1 className="break-words text-xl font-semibold">{view.profile.nickname}</h1><Badge variant="secondary">{isSelf?'我的主页':'好友主页'}</Badge></div>
             <p className="mt-1 truncate text-xs text-muted-foreground">@{view.profile.username}</p>
-            <div className="mt-3 flex items-center gap-2 text-sm"><span aria-hidden="true" className={`size-2 rounded-full ${playing||view.profile.online?'bg-emerald-500':'bg-muted-foreground/50'}`}/><span>{playing?'正在游玩':view.profile.online?'在线':'离线'}</span>{isSelf&&status.config.invisible?<Badge variant="secondary">隐身中</Badge>:null}</div>
+            <div className="mt-3 flex items-center gap-2 text-sm"><span aria-hidden="true" className={`size-2 rounded-full ring-2 ring-background ${playing||view.profile.online?'bg-emerald-500':'bg-muted-foreground/50'}`}/><span>{playing?'正在游玩':view.profile.online?'在线':'离线'}</span>{isSelf&&status.config.invisible?<Badge variant="secondary">隐身中</Badge>:null}</div>
             {playing?<div className="mt-3 rounded-xl border border-primary/15 bg-primary/5 p-4"><p className="break-words text-sm font-medium text-primary">{playing.title}</p><p className="mt-2 text-xs text-muted-foreground">本次已玩 {formatPlayTime(elapsedSeconds(playing,view,clock))}</p>{isSelf?<p className="mt-2 text-xs text-muted-foreground">{!status.config.shareGame||status.config.invisible||!view.profile.game?'当前作品仅自己可见，分享仍遵循你的隐私设置。':'好友可见你的游玩状态。'}</p>:null}</div>:isSelf?<p className="mt-2 text-xs text-muted-foreground">当前没有正在运行的作品。</p>:null}
           </div>
         </div>
@@ -202,7 +210,7 @@ export default function FriendProfilePage(){
           <Input aria-label="搜索好友的游戏库" placeholder="搜索作品名称或原名" maxLength={100} value={search} onChange={event=>setSearch(event.target.value)}/>
           <div className="flex flex-wrap gap-2" role="group" aria-label="按游玩状态筛选">{[null,...GAME_STATUSES].map(item=><Button key={item??'all'} size="sm" variant={filter.status===item?'default':'outline'} aria-pressed={filter.status===item} onClick={()=>setFilter(current=>({...current,status:item,offset:0}))}>{item===null?'全部':GAME_STATUS_LABELS[item]}</Button>)}</div>
         </div>
-        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/friends?tab=settings" className="text-sm text-primary hover:underline">前往好友页开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「资料与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
+        {!view?<p role="status" className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">正在读取好友主页…</p>:gated?<EmptyState title="需先开启自己的公开游戏库后才能查看他人游戏库" description="为保护双方隐私，只有先开启自己的公开游戏库后，才能查看他人的游戏库。你仍然可以查看对方的在线状态和最近游玩记录。" action={<Link to="/friends?tab=settings" className={buttonClassName({variant:'default',size:'sm'})}>前往好友页开启公开游戏库</Link>}/>:!view.libraryShared?<EmptyState title={isSelf?'你尚未公开游戏库':'对方尚未公开游戏库'} description={isSelf?'在好友页的「资料与隐私」中开启公开游戏库后，好友才能在这里看到你的收藏。':'对方开启分享后，可以在这里查看作品、个人评分和累计游玩时长。'}/>:<>
           <p className="text-xs text-muted-foreground" role="status">{filter.query||filter.status?'符合条件的作品':'公开作品'}共 {view.total} 部{loading?' · 正在更新…':''}</p>
           {view.games.length?<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{view.games.map(game=><LibraryCard key={game.key} game={game} onReport={isSelf?undefined:()=>setReportTarget({id:view.profile.id,username:view.profile.username,nickname:view.profile.nickname,gameKey:game.key,defaultReason:'cover'})}/>)}</div>:<EmptyState title={filter.query||filter.status?'没有找到符合条件的作品':'公开游戏库暂时为空'} description={filter.query||filter.status?'试试其他关键词或游玩状态。':'对方同步收藏后，作品会显示在这里。'}/>}
           {view.total>pageSize?<nav aria-label="好友游戏库分页" className="flex flex-wrap items-center justify-center gap-4 pt-2"><Button size="sm" variant="outline" disabled={loading||filter.offset===0} onClick={()=>setFilter(current=>({...current,offset:Math.max(0,current.offset-pageSize)}))}>上一页</Button><span className="text-xs tabular-nums text-muted-foreground">第 {Math.floor(filter.offset/pageSize)+1} / {Math.ceil(view.total/pageSize)} 页</span><Button size="sm" variant="outline" disabled={loading||filter.offset+pageSize>=view.total} onClick={()=>setFilter(current=>({...current,offset:current.offset+pageSize}))}>下一页</Button></nav>:null}

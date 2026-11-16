@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import { ToastProvider } from "./components/Toast";
 import { initGlassAppearance } from "./features/settings/GlassAppearanceSettings";
 import { initBackdrop } from "./lib/backdrop";
 import { initTheme } from "./lib/theme";
@@ -44,9 +45,11 @@ async function bootstrap(): Promise<void> {
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </ToastProvider>
     </React.StrictMode>,
   );
 }

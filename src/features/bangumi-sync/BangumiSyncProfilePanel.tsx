@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -15,7 +16,7 @@ export function BangumiSyncProfilePanel({ gameId }: { gameId: number }) {
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const dirty = useRef(false);
   const alive = useRef(true);
   const request = useRef(0);
@@ -32,13 +33,13 @@ export function BangumiSyncProfilePanel({ gameId }: { gameId: number }) {
     return () => { alive.current = false; request.current++; };
   }, [refresh]);
   useSyncEvents(refresh);
-  function edit(patch: Partial<ProfileDraft>) { dirty.current = true; setDraft(current => current ? { ...current, ...patch } : current); setNotice(null); }
+  function edit(patch: Partial<ProfileDraft>) { dirty.current = true; setDraft(current => current ? { ...current, ...patch } : current); void 0; }
   async function act(action: () => Promise<SyncItem>, message: string) {
     if (busy) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const next = await action();
-      if (alive.current) { request.current++; setItem(next); dirty.current = false; setDraft(profileDraft(next)); setNotice(message); }
+      if (alive.current) { request.current++; setItem(next); dirty.current = false; setDraft(profileDraft(next)); toast(message); }
     } catch (cause) { if (alive.current) { setError(errorMessage(cause)); refresh(); } }
     finally { if (alive.current) setBusy(false); }
   }
@@ -61,6 +62,5 @@ export function BangumiSyncProfilePanel({ gameId }: { gameId: number }) {
       }, '冲突选择已保存，并已尝试同步。')} pause={() => void act(() => syncPause(gameId), '本款作品已暂停同步。')} />
     </>}
     {error && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error}</p><Button type="button" size="sm" variant="outline" disabled={busy} onClick={refresh}>重新读取</Button></div>}
-    {notice && <p role="status" className="text-sm text-emerald-500">{notice}</p>}
   </CardContent></Card>;
 }

@@ -1,8 +1,8 @@
 {
   "name": "galgame-manager",
   "private": true,
-  "version": "0.7.4000",
-  "releaseVersion": "0.7.4",
+  "version": "0.7.5000",
+  "releaseVersion": "0.7.5",
   "license": "GPL-3.0-only",
   "packageManager": "pnpm@12.11.2",
   "type": "module",
@@ -22,6 +22,12 @@
     "test:logs": "node --test tests/log-model.test.mjs tests/logging-runtime.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
+    "admin:build": "tsc -p server/koipage-admin/web/tsconfig.json --noEmit && vite build --config server/koipage-admin/web/vite.config.ts",
+    "admin:start": "node server/koipage-admin/admin.mjs",
+    "admin:stop": "node server/koipage-admin/admin.mjs --stop",
+    "admin:status": "node server/koipage-admin/admin.mjs --status",
+    "admin:reset-password": "node server/koipage-admin/admin.mjs --reset-password",
+    "test:admin": "node --test tests/koipage-admin-*.test.mjs",
     "check:public": "node scripts/check-public-source.mjs"
   },
   "dependencies": {

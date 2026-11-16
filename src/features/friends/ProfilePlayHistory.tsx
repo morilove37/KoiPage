@@ -46,7 +46,7 @@ export function ProfilePlayHistory({history,error,games,isSelf,onRetry}:{history
             <div className="ml-12 mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <p className="text-[11px] text-muted-foreground">最近 <time dateTime={group.sessions[0].startedAt}>{dateTime(group.sessions[0].startedAt)}</time></p>
               <button type="button" aria-expanded={open} aria-controls={timelineId} aria-label={`${open?'收起':'展开'}${group.title}的游玩明细`} onClick={()=>setExpandedGroups(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}
-                className="flex shrink-0 items-center gap-1 rounded px-1 py-1 text-[11px] text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-border px-2 text-xs text-primary transition-colors hover:border-primary/35 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 {open?'收起明细':'游玩明细'}<svg aria-hidden="true" viewBox="0 0 20 20" className={cn('size-3 transition-transform motion-reduce:transition-none',open&&'rotate-180')}><path d="M5.5 8l4.5 4.5L14.5 8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             </div>

@@ -17,6 +17,19 @@ pub const CONFIG_KEY: &str = "friends_config";
 /// visibly logged in without needing a successful claim first.
 pub const ACCOUNT_KEY: &str = "friends_account";
 pub const DELETE_RECEIPT_KEY: &str = "friends_delete_receipt";
+/// Per-account privacy preferences (share flags and hidden games), restored on
+/// the next login so a policy refresh no longer looks like a settings reset.
+pub const PREFS_KEY: &str = "friends_last_preferences";
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedPreferences {
+    pub account_id: String,
+    pub share_game: bool,
+    pub share_library: bool,
+    pub share_history: bool,
+    pub invisible: bool,
+    pub hidden_game_ids: Vec<i64>,
+}
 #[derive(Default)]
 pub struct Inner {
     pub config: Config,
@@ -112,6 +125,25 @@ pub async fn save_account(app: &AppHandle, account: &Account) {
 pub async fn clear_account(app: &AppHandle) {
     let _ = settings_set(app.clone(), ACCOUNT_KEY.into(), None).await;
 }
+/// Preferences are keyed by account so switching users never replays another
+/// account's sharing choices.
+pub async fn load_preferences(app: &AppHandle, account_id: &str) -> Option<SavedPreferences> {
+    let db = pool(app).await.ok()?;
+    let stored = settings_get_impl(&db, PREFS_KEY).await.ok().flatten()?;
+    let prefs: SavedPreferences = serde_json::from_str(&stored).ok()?;
+    (prefs.account_id == account_id).then_some(prefs)
+}
+pub async fn save_preferences(app: &AppHandle, prefs: &SavedPreferences) -> CmdResult<()> {
+    settings_set(
+        app.clone(),
+        PREFS_KEY.into(),
+        Some(
+            serde_json::to_string(prefs)
+                .map_err(|_| CmdError("FRIENDS_CONFIG: 无法保存设置".into()))?,
+        ),
+    )
+    .await
+}
 pub async fn rpc(inner: &mut Inner, name: &str, body: Value) -> CmdResult<Value> {
     if inner.deletion_pending {
         return Err(CmdError("FRIENDS_DELETION_PENDING: 账号注销结果待确认，请在设置中重试注销。".into()));
@@ -163,11 +195,9 @@ pub async fn ensure(app: &AppHandle) {
             // Keep an outstanding deletion bound to its original service only.
             // Normal sessions always use the built-in official endpoint.
             let official = Config::default();
-            if !inner.deletion_pending
-                && (inner.config.server_url != official.server_url
-                    || inner.config.public_key != official.public_key
-                    || inner.config.policy_version != official.policy_version)
-            {
+            let endpoint_changed = inner.config.server_url != official.server_url
+                || inner.config.public_key != official.public_key;
+            if !inner.deletion_pending && endpoint_changed {
                 inner.config.server_url = official.server_url;
                 inner.config.public_key = official.public_key;
                 inner.config.policy_version = official.policy_version;
@@ -181,6 +211,18 @@ pub async fn ensure(app: &AppHandle) {
                     crate::app_warn!("[friends] {error}");
                 }
                 clear_account(app).await;
+            } else if !inner.deletion_pending
+                && inner.config.policy_version != official.policy_version
+            {
+                // A policy refresh keeps the existing session: tokens live in
+                // the Windows vault and the gateway accepts both the current
+                // and the previous policy version. Only the consent header and
+                // the stored version need updating, so users stay signed in
+                // across app updates.
+                inner.config.policy_version = official.policy_version;
+                if let Err(error) = save(app, &inner.config).await {
+                    crate::app_warn!("[friends] {error}");
+                }
             }
             if inner.config.enabled {
                 let resume = async {

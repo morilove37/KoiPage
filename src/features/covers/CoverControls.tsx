@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -31,10 +32,10 @@ export function CoverControls({ gameId, sourcePath, title, cropControls }: { gam
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   async function run(action: () => Promise<void>, message: string) {
-    setBusy(true); setError(null); setNotice(null);
-    try { await action(); setNotice(message); }
+    setBusy(true); setError(null); void 0;
+    try { await action(); toast(message); }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
@@ -56,7 +57,6 @@ export function CoverControls({ gameId, sourcePath, title, cropControls }: { gam
     <p className="text-[11px] text-muted-foreground">{preferences.customPath ? '使用自定义封面' : '使用原封面'}{preferences.censored ? ' · 已打码' : ''}</p>
     {error || loadError ? <p role="alert" className="text-xs text-destructive">{error ?? loadError}</p> : null}
     {!loaded && loadError ? <Button size="sm" variant="outline" onClick={() => void run(loadCoverPreferences, '已重新读取封面设置。')}>重试读取</Button> : null}
-    {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
     <Dialog open={selected !== null} title="预览自定义封面" description="保存后用于此游戏的封面展示，原封面保留，可随时恢复。"
       onClose={() => { if (!busy) setSelected(null); }}
       footer={<><Button variant="outline" disabled={busy} onClick={() => setSelected(null)}>取消</Button>

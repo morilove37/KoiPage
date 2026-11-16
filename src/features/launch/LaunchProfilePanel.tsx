@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/input';
@@ -17,7 +18,7 @@ export function LaunchProfilePanel({ gameId, onSaved }: { gameId: number; onSave
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const [modes, setModes] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
@@ -27,12 +28,12 @@ export function LaunchProfilePanel({ gameId, onSaved }: { gameId: number; onSave
     return () => { alive = false; };
   }, [gameId]);
   async function save(reset = false) {
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const value = await launchProfileSave(gameId, reset ? normalizeLaunchProfile(null) : profile);
       setProfile(normalizeLaunchProfile(value.profile)); setEffective(value); setLoaded(true); onSaved?.(value);
       window.dispatchEvent(new CustomEvent('launch-profile-changed', { detail: gameId }));
-      setNotice(reset ? '已恢复为跟随全局设置。' : '已保存本款游戏的启动配置。');
+      toast(reset ? '已恢复为跟随全局设置。' : '已保存本款游戏的启动配置。');
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
@@ -50,7 +51,6 @@ export function LaunchProfilePanel({ gameId, onSaved }: { gameId: number; onSave
     {profile.localeSource === 'custom' ? <PathInput label="本款转区工具路径" kind="file" value={profile.localePath} disabled={!loaded || busy} onChange={value => setProfile(p => ({ ...p, localePath: value }))} /> : null}
     {effective ? <p className="text-xs text-muted-foreground">当前生效：转区{effective.locale ? '开启' : '关闭'} · Magpie {effective.magpie ? '开启' : '关闭'} · Luna {effective.luna ? '开启' : '关闭'}</p> : null}
     <div className="flex flex-wrap gap-2"><Button size="sm" loading={busy} disabled={!loaded} onClick={() => void save()}>保存启动配置</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void save(true)}>全部跟随全局</Button></div>
-    {notice ? <p role="status" className="text-xs text-primary">{notice}</p> : null}
     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
   </section>;
 }

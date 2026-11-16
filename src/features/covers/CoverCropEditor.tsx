@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
 import { CoverImage } from '@/components/ui/cover-image';
@@ -19,17 +20,17 @@ export function useCoverCropEditor({ gameId, sourcePath, title, dimensions }: {
   const size = dimensions?.path === path ? dimensions : null;
   const [draft, setDraft] = useState<(CropRect & { path: string }) | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const active = draft?.path === path ? draft : null;
   const crop = effectiveCoverCrop(sourcePath, preferences);
-  useEffect(() => { setDraft(null); setError(null); setNotice(null); }, [gameId, path]);
+  useEffect(() => { setDraft(null); setError(null); void 0; }, [gameId, path]);
 
   async function save(reset = false) {
     if (!reset && !active) return;
-    setError(null); setNotice(null);
+    setError(null); void 0;
     try {
       await updateCoverPreferences(gameId, { crop: reset ? null : active });
-      setDraft(null); setNotice(reset ? '已恢复游戏库默认展示范围。' : '游戏库封面展示范围已保存。');
+      setDraft(null); toast(reset ? '已恢复游戏库默认展示范围。' : '游戏库封面展示范围已保存。');
     } catch (cause) { setError(String(cause)); }
   }
 
@@ -40,7 +41,7 @@ export function useCoverCropEditor({ gameId, sourcePath, title, dimensions }: {
       {!active ? <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={!loaded || !path || !size || saving || Boolean(loadError)} onClick={() => {
           if (!path || !size) return;
-          setError(null); setNotice(null); setDraft({ ...(crop ?? centeredCoverCrop(size)), path });
+          setError(null); void 0; setDraft({ ...(crop ?? centeredCoverCrop(size)), path });
         }}>框选游戏库封面</Button>
         {crop ? <Button size="sm" variant="outline" disabled={saving} onClick={() => void save(true)}>恢复默认范围</Button> : null}
       </div> : <>
@@ -62,7 +63,6 @@ export function useCoverCropEditor({ gameId, sourcePath, title, dimensions }: {
         <p className="text-[11px] text-muted-foreground">选区获得焦点后可用方向键移动，按住 Shift 加快；Esc 取消。仅改变游戏库卡片，保留原图。</p>
       </>}
       {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
-      {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
     </div>,
   };
 }

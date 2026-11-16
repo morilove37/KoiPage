@@ -18,6 +18,7 @@ import { LocaleToolSection } from "./LocaleToolSection";
 import { MagpieFeatureIntro } from "./MagpieFeatureIntro";
 import { MagpieToolSection } from "./MagpieToolSection";
 import { LunaToolSection } from "./LunaToolSection";
+import { DownloaderToolSection } from "./DownloaderToolSection";
 import { ToolsSectionNav } from "./ToolsSectionNav";
 
 /** Settings key remembering whether the Magpie feature intro is expanded. */
@@ -200,6 +201,14 @@ export default function ToolsPage() {
               </Button>
             </div>
           ) : null}
+        </ToolCard>
+
+        <ToolCard
+          id="tools-downloader"
+          title="多线程下载"
+          description="输入直连下载网址，选择保存位置并发起分段下载。"
+        >
+          <DownloaderToolSection />
         </ToolCard>
 
         <ToolCard

@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -15,7 +16,7 @@ export function BangumiSyncSettings() {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const alive = useRef(true);
   const refresh = useCallback(() => {
     void Promise.all([syncStatus(), syncItems()]).then(([next, list]) => {
@@ -26,8 +27,8 @@ export function BangumiSyncSettings() {
   useSyncEvents(refresh);
   async function act(action: () => Promise<unknown>, message: string) {
     if (busy) return;
-    setBusy(true); setError(null); setNotice(null);
-    try { await action(); if (alive.current) { setNotice(message); refresh(); } }
+    setBusy(true); setError(null); void 0;
+    try { await action(); if (alive.current) { toast(message); refresh(); } }
     catch (cause) { if (alive.current) setError(errorMessage(cause)); }
     finally { if (alive.current) setBusy(false); }
   }
@@ -57,7 +58,6 @@ export function BangumiSyncSettings() {
       <p>上次运行：{status?.lastRunAt ?? '尚未运行'}</p>
       {status?.lastReport && <p className="mt-1">已同步 {status.lastReport.synced} · 上传 {status.lastReport.uploaded} · 下载 {status.lastReport.downloaded} · 冲突 {status.lastReport.conflicts} · 跳过 {status.lastReport.skipped} · 错误 {status.lastReport.errors}</p>}
     </div>
-    {notice && <p role="status" className="text-sm text-emerald-500">{notice}</p>}
     {(error || status?.lastError) && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error || status?.lastError}</p><Button type="button" size="sm" variant="outline" disabled={busy} onClick={refresh}>重新读取状态</Button></div>}
     {problems.length > 0 && <div className="space-y-3"><h3 className="text-sm font-medium">待处理作品（{problems.length}）</h3>{problems.map(item => <div key={item.gameId} className="space-y-2 rounded-md border border-border p-3">
       <Link to={`/library/${item.gameId}`} className="text-sm font-medium text-primary underline">{item.title}</Link>

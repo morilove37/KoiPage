@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ export function LocaleToolSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toolError, setToolError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -33,19 +34,19 @@ export function LocaleToolSection() {
 
   async function saveSetting(key: string, value: string, apply: () => void, message: string) {
     if (loading || busy) return;
-    setBusy(true); setError(null); setNotice(null);
-    try { await settingsSet(key, value); apply(); setNotice(message); }
+    setBusy(true); setError(null); void 0;
+    try { await settingsSet(key, value); apply(); toast(message); }
     catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
 
   async function chooseTool() {
     if (loading || busy) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try {
       const path = await open({ multiple: false, directory: false, title: "选择其他转区工具", filters: [{ name: "可执行文件", extensions: ["exe", "bat", "cmd"] }] });
       if (typeof path !== "string") return;
-      await settingsSet("locale_tool_path", path); setToolPath(path); setNotice("已保存其他转区工具路径。");
+      await settingsSet("locale_tool_path", path); setToolPath(path); toast("已保存其他转区工具路径。");
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   }
@@ -87,7 +88,6 @@ export function LocaleToolSection() {
       <div className="flex items-center gap-2"><input readOnly aria-label="其他转区工具路径" value={toolPath} placeholder="选择其他转区工具的可执行文件" className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-xs text-muted-foreground" /><Button variant="outline" disabled={loading || busy} onClick={() => void chooseTool()}>选择工具</Button></div>
       <p className="text-xs text-muted-foreground">LEProc 会识别其自有配置；其他工具沿用「工具 + 游戏程序 + 游戏参数」的调用方式。</p>
     </div>}
-    {notice ? <p role="status" className="text-sm text-emerald-500">{notice}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
   </div>;
 }

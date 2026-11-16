@@ -35,20 +35,29 @@ export function sortFriends(friends:readonly Friend[]):Friend[]{
   const rank=(f:Friend)=>f.online?(f.game?2:1):0;
   return [...friends].sort((a,b)=>rank(b)-rank(a)||a.nickname.localeCompare(b.nickname,'zh-CN')||a.id.localeCompare(b.id));
 }
-export function createSnapshotController(deps:{load:(revision:string|null)=>Promise<Snapshot>;onChange:(value:ViewSnapshot|null)=>void;onError:(error:unknown)=>void;now?:()=>number}){
-  let view:ViewSnapshot|null=null,epoch=0,pending:Promise<void>|undefined;
+const snapshotCache=new Map<string,ViewSnapshot>();
+
+export function createSnapshotController(deps:{accountId:string;load:(revision:string|null)=>Promise<Snapshot>;onChange:(value:ViewSnapshot|null)=>void;onError:(error:unknown)=>void;now?:()=>number}){
+  let view=snapshotCache.get(deps.accountId)??null,epoch=0,pending:Promise<void>|undefined;
   const now=deps.now??Date.now;
-  function reset(){epoch++;view=null;pending=undefined;deps.onChange(null);}
+  if(view)deps.onChange(view);
+  function publish(){if(view)snapshotCache.set(deps.accountId,view);else snapshotCache.delete(deps.accountId);deps.onChange(view);}
+  function reset(){epoch++;view=null;pending=undefined;snapshotCache.delete(deps.accountId);deps.onChange(null);}
+  function dispose(){epoch++;pending=undefined;}
   function refresh():Promise<void>{
     if(pending)return pending;
     const generation=epoch;
     const request=(async()=>{
-      try{const next=await deps.load(view?.revision??null);if(generation!==epoch)return;view=mergeSnapshot(view,next,now());deps.onChange(view);}
-      catch(error){if(generation!==epoch)return;if(String(error).includes('FRIENDS_SESSION')){view=null;}else if(view){view={...view,stale:true};}deps.onChange(view);deps.onError(error);}
+      try{const next=await deps.load(view?.revision??null);if(generation!==epoch)return;view=mergeSnapshot(view,next,now());publish();}
+      catch(error){if(generation!==epoch)return;if(String(error).includes('FRIENDS_SESSION')){view=null;}else if(view){view={...view,stale:true};}publish();deps.onError(error);}
     })().finally(()=>{if(pending===request)pending=undefined;});
     pending=request;return request;
   }
-  return{refresh,reset};
+  return{refresh,reset,dispose};
+}
+
+export function clearSnapshotCache(accountId?:string){
+  if(accountId)snapshotCache.delete(accountId);else snapshotCache.clear();
 }
 
 /** Each page/filter request owns its result; stale requests cannot restore a revoked library. */

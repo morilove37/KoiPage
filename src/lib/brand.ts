@@ -1,5 +1,5 @@
 /** Public identity. Keep storage identifiers stable when changing branding. */
-import { version } from "../../package.json";
+import { releaseVersion, version } from "../../package.json";
 
 const GITHUB_USERNAME = "morilove37";
 const REPOSITORY_URL = `https://github.com/${GITHUB_USERNAME}/KoiPage`;
@@ -20,6 +20,6 @@ export const BRAND = {
   douyinUrl: 'https://www.douyin.com/user/MS4wLjABAAAAcKXZbXNLc87TzVG6SzTXl4hUtoA0QbGgt57arDh-HxvVRSovn5fPvJvcD2mbrX8f?from_tab_name=main',
   license: 'GPL-3.0-only',
   communityGroup: '1055772679',
-  version: "0.7.4",
+  version: releaseVersion,
   updateVersion: version,
 } as const;

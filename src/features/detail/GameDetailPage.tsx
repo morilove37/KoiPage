@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -192,7 +193,7 @@ export default function GameDetailPage() {
   const process = useGameProcess(gameId);
   const launching = process.status === "starting";
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   // Header shortcuts write only this game's overrides.
   const [launchProfile, setLaunchProfile] = useState<LaunchProfile>(normalizeLaunchProfile(null));
@@ -221,11 +222,11 @@ export default function GameDetailPage() {
     if (optionBusy) return;
     setOptionBusy(kind);
     setError(null);
-    setNotice(null);
+    void 0;
     try {
       await launchProfileSave(gameId, { ...launchProfile, [kind]: next ? 'on' : 'off' });
       setProfileRevision(value => value + 1);
-      setNotice('已保存本款游戏的启动设置。');
+      toast('已保存本款游戏的启动设置。');
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -456,16 +457,16 @@ export default function GameDetailPage() {
 
     const patch = buildPatch();
     if (!patch || Object.keys(patch).length === 0) {
-      setNotice("没有需要保存的修改。");
+      toast("没有需要保存的修改。");
       return;
     }
 
     setSaving(true);
     setError(null);
-    setNotice(null);
+    void 0;
     try {
       await gameUpdate(gameId, patch);
-      setNotice("已保存。");
+      toast("已保存。");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -491,13 +492,13 @@ export default function GameDetailPage() {
     statusPending.current = true;
     setStatusSaving(true);
     setError(null);
-    setNotice(null);
+    void 0;
     try {
       const updated = await gameUpdate(gameId, { status });
       setGame(current => current?.id === gameId
         ? { ...current, status: updated.status, updatedAt: updated.updatedAt }
         : current);
-      setNotice(`状态已更新为「${GAME_STATUS_LABELS[updated.status]}」。`);
+      toast(`状态已更新为「${GAME_STATUS_LABELS[updated.status]}」。`);
     } catch (cause) {
       setError(`状态保存失败：${cause instanceof Error ? cause.message : String(cause)}`);
     } finally {
@@ -543,7 +544,7 @@ export default function GameDetailPage() {
     setMetadataOpen(false);
     if (!metadataDirty) return;
     setMetadataDirty(false);
-    setNotice("已更新资料。");
+    toast("已更新资料。");
     void load();
   };
 
@@ -698,15 +699,9 @@ export default function GameDetailPage() {
         <Button size="sm" variant="outline" onClick={() => { setTab('files'); contentRef.current?.scrollTo({ top: 0 }); }}>重新指定路径与安装状态</Button>
       </div> : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
-      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
       {error ? (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded-md border border-border bg-accent px-3 py-2 text-xs">
-          {notice}
         </div>
       ) : null}
 

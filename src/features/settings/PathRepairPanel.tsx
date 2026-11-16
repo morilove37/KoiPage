@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { PathInput } from '@/components/ui/path-input';
@@ -21,10 +22,10 @@ export function PathRepairPanel() {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
   const bump = useAppStore(state => state.bumpPlayTimeRevision);
   async function operation(action: () => Promise<void>) {
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); void 0;
     try { await ready; await action(); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
   async function check() { await operation(async () => { setChecks(await invoke<PathCheck[]>('game_paths_check')); }); }
@@ -36,7 +37,7 @@ export function PathRepairPanel() {
     const expected = (preview ?? []).filter(row => selected.has(row.id)).map(row => ({ id: row.id, fingerprint: row.fingerprint }));
     const count = await invoke<number>('game_paths_apply', { oldRoot, newRoot, ids: [...selected], expected });
     setPreview(null); setSelected(new Set()); setChecks(await invoke<PathCheck[]>('game_paths_check')); bump();
-    setNotice(`已修复 ${count} 部游戏的路径，游玩历史和标签已保留。`);
+    toast(`已修复 ${count} 部游戏的路径，游玩历史和标签已保留。`);
   }); }
   const updateRoot = (kind: 'old' | 'new', value: string) => { if (kind === 'old') setOldRoot(value); else setNewRoot(value); setPreview(null); setSelected(new Set()); };
   return <div className="space-y-4">
@@ -48,7 +49,7 @@ export function PathRepairPanel() {
       <Button size="sm" variant="outline" disabled={busy || !oldRoot.trim() || !newRoot.trim()} onClick={() => void inspect()}>预览路径变更</Button>
     </div>
     {preview ? <div className="space-y-3"><ul className="max-h-80 divide-y divide-border overflow-y-auto rounded-md border border-border">{preview.map(row => <li key={row.id} className="space-y-1 p-3 text-xs"><label className="flex gap-2"><input type="checkbox" aria-label={`修复${row.title}`} disabled={!row.ready || busy} checked={selected.has(row.id)} onChange={event => { setSelected(current => { const next = new Set(current); if (event.target.checked) next.add(row.id); else next.delete(row.id); return next; }); }} /><span className="font-medium">{row.title}</span></label><p className="break-all text-muted-foreground">原目录：{row.oldInstallPath}</p><p className="break-all">新目录：{row.newInstallPath}</p><p className="break-all text-muted-foreground">启动：{row.newExePath || '未设置'}{row.newWorkdir ? ` · 工作目录：${row.newWorkdir}` : ''}</p>{row.newSavePath ? <p className="break-all text-muted-foreground">存档：{row.newSavePath}</p> : null}<p className={row.ready ? 'text-primary' : 'text-destructive'}>{row.message}</p></li>)}</ul><Button size="sm" disabled={busy || selected.size === 0} onClick={() => setConfirm(true)}>更新选中的 {selected.size} 部游戏</Button></div> : null}
-    {notice ? <p role="status" className="text-xs text-primary">{notice}</p> : null}{error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+    {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
     <ConfirmDialog open={confirm} title="确认更新游戏路径？" description={`将更新选中的 ${selected.size} 部游戏。启动程序与工作目录会再次检查，记录 ID、标签和游玩历史保留。`} confirmText="确认修复" onCancel={() => setConfirm(false)} onConfirm={() => void apply()} />
   </div>;
 }

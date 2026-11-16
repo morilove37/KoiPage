@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +17,7 @@ export function AccentSettings() {
   const [hexDraft, setHexDraft] = useState(DEFAULT_ACCENT.customHex);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const toast = useToast();
   const request = useRef(0);
   const choiceRef = useRef(choice);
 
@@ -38,10 +39,10 @@ export function AccentSettings() {
     setChoice(next);
     setHexDraft(next.customHex);
     setError(null);
-    setStatus(null);
+    void 0;
     try {
       await setAccent(next);
-      if (version === request.current) setStatus('主题色已保存');
+      if (version === request.current) toast('主题色已保存');
     } catch (cause) {
       if (version === request.current) {
         const message = cause instanceof Error ? cause.message : String(cause);
@@ -134,7 +135,6 @@ export function AccentSettings() {
       </div>
       <p id="accent-color-hint" className="text-xs text-muted-foreground">支持 3 位或 6 位十六进制颜色。</p>
       {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
-      {status ? <p role="status" className="text-xs text-muted-foreground">{status}</p> : null}
     </div>
   );
 }

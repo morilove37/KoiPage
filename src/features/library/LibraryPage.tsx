@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
 import { matchesInstallation } from "@/features/installation/model";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { EmptyState } from "@/components/ui/card";
@@ -213,16 +214,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const [batchDrafts, setBatchDrafts] = useState<GameInput[] | null>(null);
   const [customImportPaths, setCustomImportPaths] = useState<Set<string>>(() => new Set());
   const [importTotal, setImportTotal] = useState(0);
-  const [notice, setNotice] = useState<{ message: string } | null>(null);
-  const importNotice = notice?.message ?? null;
-  // A new object also restarts the timeout for consecutive identical messages.
-  const setImportNotice = useCallback((message: string | null) => setNotice(message === null ? null : {message}), []);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => { setNotice(null); }, [activeFolder, folderTab, activeStatus, activeSociety]);
+  const toast = useToast();
+  // A new call restarts the toast even when the message is identical.
+  const setImportNotice = useCallback((message: string | null) => { if (message) toast(message); }, [toast]);
   const [shareOpen, setShareOpen] = useState(false);
 
   /**
@@ -969,13 +963,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           操作失败：{error}
         </div>
       ) : null}
-      {importNotice ? (
-        <div role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-sm">
-          {importNotice}
-        </div>
-      ) : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{launcher.error}</p> : null}
-      {launcher.notice ? <p role="status" className="rounded-md border border-border bg-accent px-3 py-2 text-xs">{launcher.notice}</p> : null}
 
       {/* Results --------------------------------------------------------- */}
       {folderOverview ? null : !loading && games.length === 0 ? (

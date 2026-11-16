@@ -14,6 +14,7 @@ pub mod library_batch;
 pub mod covers;
 pub mod resource_storage;
 pub mod data_storage;
+pub mod downloader;
 pub mod games;
 pub mod metadata;
 pub mod metadata_refresh;

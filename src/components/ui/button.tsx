@@ -56,6 +56,42 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 /**
+ * The class list a {@link Button} renders.
+ *
+ * Router `<Link>`s cannot be a `Button`, but they still have to look like one —
+ * a plain underlined text link next to real buttons reads as an afterthought.
+ * Exporting the treatment (instead of duplicating the utility soup at each call
+ * site) keeps both paths in sync when the visual language changes.
+ */
+export function buttonClassName({
+  variant = "default",
+  size = "md",
+  className,
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  className?: string;
+} = {}) {
+  return cn(
+    "inline-flex shrink-0 items-center justify-center gap-2 rounded-xl font-medium",
+    "whitespace-nowrap outline-none",
+    // `tap` (src/index.css) supplies the 120–180 ms colour/shadow
+    // transition *and* the `scale(.97)` press feedback, all of which is
+    // neutralised under `prefers-reduced-motion: reduce`.
+    "tap",
+    "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+    "disabled:pointer-events-none disabled:opacity-50",
+    VARIANTS[variant],
+    SIZES[size],
+    // A subtle inner highlight so primary buttons read as raised on the
+    // glass theme without every caller having to opt in.
+    "shadow-[inset_0_1px_0_0_hsl(0_0%_100%_/_0.12)]",
+    GLASS_VARIANTS[variant],
+    className,
+  );
+}
+
+/**
  * Themed button. Forwards every native `<button>` prop, so `title`, `type`,
  * `disabled` and event handlers behave as usual.
  */
@@ -68,23 +104,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         disabled={disabled || loading}
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center gap-2 rounded-xl font-medium",
-          "whitespace-nowrap outline-none",
-          // `tap` (src/index.css) supplies the 120–180 ms colour/shadow
-          // transition *and* the `scale(.97)` press feedback, all of which is
-          // neutralised under `prefers-reduced-motion: reduce`.
-          "tap",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-          "disabled:pointer-events-none disabled:opacity-50",
-          VARIANTS[variant],
-          SIZES[size],
-          // A subtle inner highlight so primary buttons read as raised on the
-          // glass theme without every caller having to opt in.
-          "shadow-[inset_0_1px_0_0_hsl(0_0%_100%_/_0.12)]",
-          GLASS_VARIANTS[variant],
-          className,
-        )}
+        className={buttonClassName({ variant, size, className })}
         {...props}
       >
         {loading ? (

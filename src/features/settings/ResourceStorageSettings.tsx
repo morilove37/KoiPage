@@ -1,3 +1,4 @@
+import { useToast } from '@/components/Toast';
 import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
@@ -25,7 +26,7 @@ export function ResourceStorageSettings() {
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     let active = true;
@@ -36,7 +37,7 @@ export function ResourceStorageSettings() {
   }, []);
 
   async function choose() {
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null);
     try {
       const path = await open({ directory: true, multiple: false, title: '选择数据存储位置（将在其中创建恋页专用子目录）' });
       if (typeof path === 'string') setSelected(path);
@@ -46,11 +47,11 @@ export function ResourceStorageSettings() {
 
   async function migrate() {
     if (!selected) return;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null);
     try {
       const result = await invoke<StorageInfo>('resource_storage_change', { parentPath: selected });
       setInfo(result); setSelected(null);
-      setNotice(`已复制并校验 ${result.copiedFiles} 个资源文件及完整数据库。新目录将在重启后生效，当前已暂停数据读写。原数据库和文件均已保留。`);
+      toast(`已复制并校验 ${result.copiedFiles} 个资源文件及完整数据库。新目录将在重启后生效，当前已暂停数据读写。原数据库和文件均已保留。`);
     } catch (cause) { setError(storageError(cause)); }
     finally { setBusy(false); }
   }
@@ -81,7 +82,6 @@ export function ResourceStorageSettings() {
         <Button variant="ghost" disabled={busy} onClick={() => setSelected(null)}>取消</Button>
       </div>
     </div> : null}
-    {notice ? <p role="status" className="text-xs text-muted-foreground">{notice}</p> : null}
     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
     <Dialog open={Boolean(info?.restartRequired)} onClose={() => {}} title="数据迁移已准备完成"
       description="重启恋页后使用新的数据库和资源目录。"

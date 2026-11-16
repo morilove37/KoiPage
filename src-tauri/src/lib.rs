@@ -226,6 +226,7 @@ pub fn run() {
             bangumi_sync::bangumi_sync_pause,
             bangumi_sync::bangumi_sync_resolve,
             commands::installation::game_archive_set,
+            commands::downloader::download_file,
             commands::save_backups::save_backup_settings_get,
             commands::save_backups::save_backup_settings_set,
             commands::save_backups::save_backup_create,

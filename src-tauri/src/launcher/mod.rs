@@ -438,6 +438,12 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
         );
     }
 
+    // Keep the manager from covering a fullscreen game. Do not restore it when
+    // the game exits; the user can bring it back from the taskbar when needed.
+    if let Err(error) = crate::commands::window::minimize_main_window(&app) {
+        crate::app_warn!("[launcher] minimize manager after launch: {error}");
+    }
+
     // Poll with `try_wait` while the child stays in the registry. Moving the
     // child out and calling `wait()` here would make `stop_game` and duplicate
     // launch checks lose sight of a process for its entire lifetime.
