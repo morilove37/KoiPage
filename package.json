@@ -1,8 +1,8 @@
 {
   "name": "galgame-manager",
   "private": true,
-  "version": "0.7.5000",
-  "releaseVersion": "0.7.5",
+  "version": "0.7.6000",
+  "releaseVersion": "0.7.6",
   "license": "GPL-3.0-only",
   "packageManager": "pnpm@12.11.2",
   "type": "module",

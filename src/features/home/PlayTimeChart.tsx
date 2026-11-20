@@ -4,12 +4,13 @@ import { Button } from "@/components/ui/button";
 import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
 import { Tabs } from "@/components/ui/tabs";
-import { playSessionsForPeriod } from "@/lib/db";
 import { cn } from "@/lib/utils";
-import type { Game, PlaySession } from "@/types/game";
-import { buildPlayTimeSummary, movePlayTimePeriod, playTimePeriodWindow, playTimeWindow } from "./play-time";
+import type { Game } from "@/types/game";
+import { buildPlayTimeSummary, formatPlayDuration as duration, movePlayTimePeriod, playTimePeriodWindow, playTimeWindow } from "./play-time";
 import type { PlayTimePeriod } from "./play-time";
 import { PlayTimeCalendar } from "./PlayTimeCalendar";
+import { MonthlyReview } from "./MonthlyReview";
+import { usePeriodSessions } from "./use-period-sessions";
 
 const PERIODS = [
   { value: "day", label: "本日" },
@@ -17,31 +18,6 @@ const PERIODS = [
   { value: "month", label: "本月" },
 ] as const;
 const UNITS = { day: "日", week: "周", month: "月" } as const;
-
-/** The result belongs to an exact request, so a changed range never flashes old data. */
-function usePeriodSessions(bounds: { start: string; end: string }, refreshKey: string, attempt: number, setNow: (date: Date) => void) {
-  const key = JSON.stringify([bounds.start, bounds.end, refreshKey, attempt]);
-  const [result, setResult] = useState<{ key: string; sessions: PlaySession[]; error: string | null } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void playSessionsForPeriod(bounds.start, bounds.end).then(sessions => {
-      if (!cancelled) { setResult({ key, sessions, error: null }); setNow(new Date()); }
-    }).catch(cause => {
-      if (!cancelled) setResult({ key, sessions: [], error: cause instanceof Error ? cause.message : String(cause) });
-    });
-    return () => { cancelled = true; };
-  }, [bounds.start, bounds.end, key, setNow]);
-  return { sessions: result?.key === key ? result.sessions : [], loading: result?.key !== key, error: result?.key === key ? result.error : null };
-}
-
-function duration(value: number): string {
-  const seconds = Math.max(0, Math.round(value));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor(seconds % 3600 / 60);
-  if (!seconds) return "0 分钟";
-  if (!hours && !minutes) return `${seconds} 秒`;
-  return [hours ? `${hours} 小时` : "", minutes ? `${minutes} 分钟` : "", !hours && seconds % 60 ? `${seconds % 60} 秒` : ""].filter(Boolean).join(" ");
-}
 
 function chartMaximum(value: number): number {
   return [60, 300, 900, 1800, 3600].find(step => step >= value) ?? Math.ceil(value / 3600) * 3600;
@@ -54,6 +30,7 @@ export function PlayTimeChart({ games, refreshKey }: { games: Game[]; refreshKey
   const [attempt, setAttempt] = useState(0);
   const [selectedStart, setSelectedStart] = useState<number | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [monthlyOpen, setMonthlyOpen] = useState(false);
   const calendarButton = useRef<HTMLButtonElement>(null);
   const window = playTimeWindow(now);
   const selectedAnchor = anchor ?? now;
@@ -98,6 +75,7 @@ export function PlayTimeChart({ games, refreshKey }: { games: Game[]; refreshKey
     <header className="flex flex-wrap items-center justify-between gap-3">
       <h2 id="home-play-time-heading" className="flex items-center gap-2 text-sm font-semibold"><GeometryIcon name="chart" className="text-primary" />游玩时长</h2>
       <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" aria-haspopup="dialog" onClick={() => setMonthlyOpen(true)}>本月回顾</Button>
         <Button ref={calendarButton} size="sm" variant="outline" aria-haspopup="dialog" onClick={() => setCalendarOpen(true)}><GeometryIcon name="calendar" className="size-3.5" />日历回顾</Button>
         <Tabs label="游玩时长统计范围" className="w-40 max-w-full" value={period} onValueChange={value => { setPeriod(value as PlayTimePeriod); setSelectedStart(null); }} items={PERIODS.map(item => ({ value: item.value, label: UNITS[item.value] }))} />
       </div>
@@ -160,5 +138,8 @@ export function PlayTimeChart({ games, refreshKey }: { games: Game[]; refreshKey
       </div>}
     <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">按本机时间统计已结束的记录，跨日时长拆分到对应日期；游戏退出后自动刷新。点击柱子查看具体时长。</p>
     {calendarOpen ? <PlayTimeCalendar games={games} refreshKey={refreshKey} onClose={() => { setCalendarOpen(false); calendarButton.current?.focus({ preventScroll: true }); }} /> : null}
+    {monthlyOpen ? <MonthlyReview now={now} setNow={setNow} gamesById={gamesById} refreshKey={refreshKey}
+      currentMonth={summary.month} currentLoading={overview.loading} currentError={overview.error}
+      retryCurrent={() => setAttempt(value => value + 1)} onClose={() => setMonthlyOpen(false)} /> : null}
   </section>;
 }

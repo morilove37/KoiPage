@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 fn root(value: &str) -> CmdResult<String> {
     let value = value.trim().replace('/', "\\");
@@ -189,9 +190,16 @@ fn plan(all: &[Paths], ids: &[i64], old: &str, new: &str) -> CmdResult<Vec<Reloc
     Ok(result)
 }
 #[tauri::command]
-pub async fn game_paths_check(app: AppHandle) -> CmdResult<Vec<PathCheck>> {
+pub async fn game_paths_check(app: AppHandle, game_id: Option<i64>) -> CmdResult<Vec<PathCheck>> {
     let db = pool(&app).await?;
-    let all = rows(&db).await?;
+    let all = if let Some(id) = game_id {
+        sqlx::query_as::<_, Paths>("SELECT id,title,install_path,exe_path,workdir,save_path FROM games WHERE id=?")
+            .bind(id)
+            .fetch_all(&db)
+            .await?
+    } else {
+        rows(&db).await?
+    };
     let archived = archived_ids(&db).await?;
     tauri::async_runtime::spawn_blocking(move || {
         all.into_iter()
@@ -227,6 +235,23 @@ pub async fn game_paths_check(app: AppHandle) -> CmdResult<Vec<PathCheck>> {
     })
     .await
     .map_err(|e| CmdError(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn game_open_install_directory(app: AppHandle, game_id: i64) -> CmdResult<()> {
+    let db = pool(&app).await?;
+    let directory: String = sqlx::query_scalar("SELECT install_path FROM games WHERE id=?")
+        .bind(game_id)
+        .fetch_optional(&db)
+        .await?
+        .ok_or_else(|| CmdError("未找到这部游戏。".into()))?;
+    let path = Path::new(&directory);
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(CmdError("安装目录不存在或磁盘未连接。".into()));
+    }
+    app.opener()
+        .open_path(directory, None::<&str>)
+        .map_err(|error| CmdError(format!("无法打开安装目录：{error}")))
 }
 #[tauri::command]
 pub async fn game_paths_preview(

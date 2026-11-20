@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
 import { GeometryIcon } from "@/components/ui/geometry-icon";
 import LaunchDialog from "@/features/launch/LaunchDialog";
@@ -20,6 +23,9 @@ import type { Game, GameStatus, Tag } from "@/types/game";
 import { PlayTimeChart } from "./PlayTimeChart";
 import { RecentPlayHistory } from "./RecentPlayHistory";
 import { BirthdayCard } from "@/features/birthdays/BirthdayCard";
+import { FriendPicksCard } from "./FriendPicksCard";
+import { homeCards, homeCardPreferencesKey, readHiddenHomeCards } from "./card-preferences";
+import type { HomeCardId } from "./card-preferences";
 
 const STATUS_COLORS: Record<GameStatus, string> = {
   unplayed: "bg-primary/50", wishlist: "bg-sky-500", playing: "bg-primary",
@@ -224,14 +230,49 @@ function HeroGame({ game, tags, lastPlayedId, active, onLaunch }: {
 export default function HomePage() {
   const navigate = useNavigate();
   const playTimeRevision = useAppStore(state => state.playTimeRevision);
+  const presets = useAppStore(state => state.library.presets);
   const [games, setGames] = useState<Game[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [links, setLinks] = useState<Array<[number, number]>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [friendRefresh, setFriendRefresh] = useState(0);
   const [selection, setSelection] = useState<Selection>(INITIAL_SELECTION);
+  const [dragging, setDragging] = useState(false);
+  const [customizing, setCustomizing] = useState(false);
+  const [hiddenCards, setHiddenCards] = useState<HomeCardId[]>(() => {
+    try { return readHiddenHomeCards(localStorage.getItem(homeCardPreferencesKey)); }
+    catch { return []; }
+  });
+  const [preferenceError, setPreferenceError] = useState(false);
+  const visible = (id: HomeCardId) => !hiddenCards.includes(id);
+  const changeCards = (next: HomeCardId[]) => {
+    setHiddenCards(next);
+    try {
+      localStorage.setItem(homeCardPreferencesKey, JSON.stringify(next));
+      setPreferenceError(false);
+    } catch {
+      setPreferenceError(true);
+    }
+  };
   const launcher = useGameLauncher();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (disposed) return;
+      const blocked = Boolean(document.querySelector('[aria-modal="true"]'));
+      setDragging(!blocked && (payload.type === 'enter' || payload.type === 'over'));
+      if (!blocked && payload.type === 'drop' && payload.paths.length) {
+        navigate('/library', { state: { scanPaths: payload.paths } });
+      }
+    }).then(remove => { if (disposed) remove(); else unlisten = remove; })
+      .catch(cause => console.warn('[home] import drag-drop listener:', cause));
+    return () => { disposed = true; unlisten?.(); };
+  }, [navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,6 +365,8 @@ export default function HomePage() {
   const statusCounts = useMemo(() => GAME_STATUSES.map(status => ({ status, count: games.filter(game => game.status === status).length })), [games]);
   const completedCount = games.filter(game => game.status === "completed").length;
   const completionRate = games.length > 0 ? Math.round(completedCount / games.length * 100) : 0;
+  const leftCards = visible("recent") || visible("statistics");
+  const rightCards = visible("friends") || visible("birthdays") || visible("waiting") || visible("progress");
 
   return (
     <div className="flex flex-col gap-4 px-4 py-3" data-home-page>
@@ -332,16 +375,39 @@ export default function HomePage() {
           <h1 className="text-lg font-semibold tracking-tight">首页</h1>
           <p className="text-xs text-muted-foreground">{loading ? "正在读取游戏库…" : `共 ${games.length} 部游戏 · 收藏 ${games.filter(isFavorite).length} 部 · 累计 ${formatPlayTime(games.reduce((sum, game) => sum + game.playTimeSeconds, 0))}`}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" loading={loading} onClick={() => setReloadKey(key => key + 1)}>刷新</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" title="也可把游戏文件夹或启动程序直接拖到首页" onClick={() => navigate('/library', { state: { scanPaths: [] } })}>
+            <GeometryIcon name="folder" />快速入库
+          </Button>
+          <Button variant="outline" aria-haspopup="dialog" onClick={() => setCustomizing(true)}><GeometryIcon name="settings" />自定义首页</Button>
+          <Button variant="outline" loading={loading} onClick={() => {
+            setReloadKey(key => key + 1);
+            setFriendRefresh(key => key + 1);
+          }}>刷新</Button>
           <Button disabled={loading || games.length === 0} onClick={randomGame}>随机选一款 <span aria-hidden="true">↗</span></Button>
         </div>
       </header>
 
+      {visible("filters") && presets.length ? <section aria-label="常用筛选" className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+        <h2 className="mr-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><GeometryIcon name="search" className="size-4" />常用筛选</h2>
+        {presets.map(preset => <Button key={preset.name} variant="outline" size="sm" className="h-7 max-w-full text-xs" title={preset.name} onClick={() => {
+          useAppStore.getState().setLibraryFilters(preset.filters);
+          navigate('/library');
+        }}><span className="truncate">{preset.name}</span></Button>)}
+      </section> : null}
+
+      {dragging ? <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-background/75 p-8 backdrop-blur-sm">
+        <div className="grid h-full w-full place-content-center justify-items-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary/5">
+          <GeometryIcon name="folder" className="size-10 text-primary" />
+          <p className="text-lg font-semibold">松开以快速入库</p>
+          <p className="text-sm text-muted-foreground">支持游戏文件夹和启动程序</p>
+        </div>
+      </div> : null}
+
       {error ? <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">首页载入失败：{error}。请点击刷新重试。</div> : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
 
-      {loading && games.length === 0 ? (
+      {!visible("hero") ? null : loading && games.length === 0 ? (
         <div role="status" aria-label="正在载入首页" className="home-hero shimmer rounded-xl border border-border" />
       ) : current ? (
         <section
@@ -380,14 +446,14 @@ export default function HomePage() {
         <EmptyState title="从第一部游戏开始" description="添加游戏后，这里会展示上次游玩的作品、大封面和游玩记录。" action={<Link to="/library" className="text-sm font-medium text-primary underline-offset-4 hover:underline">前往游戏库添加游戏 →</Link>} />
       ) : null}
 
-      {games.length > 0 ? (
+      {games.length > 0 && (["total", "playing", "completed", "upNext"] as const).some(visible) ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="游玩概览">
           {([
-            { icon: "clock", label: "累计游玩", value: formatPlayTime(games.reduce((sum, game) => sum + game.playTimeSeconds, 0)), hint: "所有游戏的累计时长", status:null },
-            { icon: "play", label: "游玩中", value: `${games.filter(game => game.status === "playing").length} 部`, hint: "正在追的故事", status:'playing' },
-            { icon: "check", label: "已通关", value: `${completedCount} 部`, hint: `占游戏库的 ${completionRate}%`, status:'completed' },
-            { icon: "bookmark", label: "待开始", value: `${waitingGames.length} 部`, hint: "想玩与尚未游玩的作品", status:'waiting' },
-          ] as const).map(stat => (
+            { id: "total", icon: "clock", label: "累计游玩", value: formatPlayTime(games.reduce((sum, game) => sum + game.playTimeSeconds, 0)), hint: "所有游戏的累计时长", status:null },
+            { id: "playing", icon: "play", label: "游玩中", value: `${games.filter(game => game.status === "playing").length} 部`, hint: "正在追的故事", status:'playing' },
+            { id: "completed", icon: "check", label: "已通关", value: `${completedCount} 部`, hint: `占游戏库的 ${completionRate}%`, status:'completed' },
+            { id: "upNext", icon: "bookmark", label: "待开始", value: `${waitingGames.length} 部`, hint: "想玩与尚未游玩的作品", status:'waiting' },
+          ] as const).filter(stat => visible(stat.id)).map(stat => (
             <div key={stat.label} className="relative flex min-w-0 items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 text-card-foreground">
               {stat.status ? <Link to={`/folders?tab=status&status=${stat.status}`} aria-label={`查看${stat.label}游戏`} onClick={() => useAppStore.getState().setLibraryFilters(normalizeFilters({}))} className="absolute inset-0 rounded-lg transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /> : null}
               <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><GeometryIcon name={stat.icon} className="size-5" /></span>
@@ -401,16 +467,17 @@ export default function HomePage() {
         </div>
       ) : null}
 
-      {games.length > 0 ? (
-        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(250px,1fr)]">
-          <div className="flex min-w-0 flex-col gap-4">
-          <RecentPlayHistory games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} />
-          <PlayTimeChart games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} />
-          </div>
+      {games.length > 0 && (leftCards || rightCards) ? (
+        <div className={`grid items-start gap-4${leftCards && rightCards ? " xl:grid-cols-[minmax(0,1.5fr)_minmax(250px,1fr)]" : ""}`}>
+          {leftCards ? <div className="flex min-w-0 flex-col gap-4">
+            {visible("recent") ? <RecentPlayHistory games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} /> : null}
+            {visible("statistics") ? <PlayTimeChart games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} /> : null}
+          </div> : null}
 
-          <div className="flex flex-col gap-4">
-            <BirthdayCard games={games} />
-            <section aria-labelledby="home-waiting-heading" className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
+          {rightCards ? <div className="flex min-w-0 flex-col gap-4">
+            {visible("friends") ? <FriendPicksCard games={games} refreshKey={friendRefresh} /> : null}
+            {visible("birthdays") ? <BirthdayCard games={games} /> : null}
+            {visible("waiting") ? <section aria-labelledby="home-waiting-heading" className="overflow-hidden rounded-lg border border-border bg-card text-card-foreground">
               <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
                 <h2 id="home-waiting-heading" className="flex items-center gap-2 text-sm font-semibold"><GeometryIcon name="bookmark" className="text-primary" />等待开启的故事</h2>
                 <span className="text-xs text-muted-foreground">{waitingGames.length} 部</span>
@@ -429,9 +496,9 @@ export default function HomePage() {
                   ))}
                 </div>
               ) : <p className="px-4 py-5 text-xs text-muted-foreground">待玩清单已清空，继续享受正在游玩的故事吧。</p>}
-            </section>
+            </section> : null}
 
-            <section aria-labelledby="home-progress-heading" className="rounded-lg border border-border bg-card p-4 text-card-foreground">
+            {visible("progress") ? <section aria-labelledby="home-progress-heading" className="rounded-lg border border-border bg-card p-4 text-card-foreground">
               <div className="flex items-center justify-between gap-2">
                 <h2 id="home-progress-heading" className="flex items-center gap-2 text-sm font-semibold"><GeometryIcon name="check" className="text-primary" />游戏库进度</h2>
                 <span className="text-lg font-semibold tabular-nums text-primary">{completionRate}%</span>
@@ -450,10 +517,26 @@ export default function HomePage() {
                   </div>
                 ))}
               </dl>
-            </section>
-          </div>
+            </section> : null}
+          </div> : null}
         </div>
       ) : null}
+      {hiddenCards.length === homeCards.length ? <EmptyState title="首页卡片已全部隐藏"
+        action={<Button variant="outline" onClick={() => setCustomizing(true)}>选择要显示的卡片</Button>} /> : null}
+      {customizing ? <Dialog open title="自定义首页" description="勾选要显示的卡片，改动会立即生效。" onClose={() => setCustomizing(false)}
+        footer={<>
+          <Button variant="outline" disabled={!hiddenCards.length} onClick={() => changeCards([])}>恢复默认</Button>
+          <Button onClick={() => setCustomizing(false)}>完成</Button>
+        </>}>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {homeCards.map(card => <label key={card.id} className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2.5 text-sm hover:bg-muted/40">
+            <input type="checkbox" className="size-4 shrink-0 accent-primary" checked={visible(card.id)}
+              onChange={event => changeCards(event.target.checked ? hiddenCards.filter(id => id !== card.id) : [...hiddenCards, card.id])} />
+            <span>{card.label}</span>
+          </label>)}
+        </div>
+        {preferenceError ? <p role="alert" className="mt-3 text-xs text-destructive">无法保存本机偏好，这次打开期间仍会应用。</p> : null}
+      </Dialog> : null}
       {launcher.dialogGame ? <LaunchDialog open game={launcher.dialogGame} onClose={launcher.closeDialog} /> : null}
     </div>
   );

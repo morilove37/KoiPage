@@ -324,12 +324,16 @@ pub async fn launch_game(app: AppHandle, game_id: i64) -> CmdResult<LaunchResult
     // by the time the game window appears. Best effort only — a missing or
     // broken Magpie install must never stop the game from launching.
     let launch_profile = crate::commands::launch_profiles::resolve(&db, game_id).await?;
-    if launch_profile.magpie && !launch_profile.profile.scaling_mode.trim().is_empty() && magpie::is_running() {
-        return Err(CmdError("Magpie 正在运行。请在启动面板中确认退出并重新启动 Magpie，以应用本款缩放模式。".into()));
-    }
     if launch_profile.magpie {
+        // Read the identity settings first: "Magpie is running" must mean this
+        // app's own Magpie, not any process that happens to share the exe name.
         let source = setting(&db, magpie::SOURCE_KEY).await?;
         let custom = setting(&db, magpie::PATH_KEY).await?;
+        if !launch_profile.profile.scaling_mode.trim().is_empty()
+            && magpie::is_running(&app, custom.as_deref())
+        {
+            return Err(CmdError("Magpie 正在运行。请在启动面板中确认退出并重新启动 Magpie，以应用本款缩放模式。".into()));
+        }
         let scaling = launch_profile.scaling_mode.clone();
         magpie::autostart(&app, source.as_deref(), custom.as_deref(), scaling.as_deref());
     }

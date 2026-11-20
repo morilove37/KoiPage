@@ -1,6 +1,15 @@
 import type { PlaySession } from "@/types/game";
 
 export type PlayTimePeriod = "day" | "week" | "month";
+
+export function formatPlayDuration(value: number): string {
+  const seconds = Math.max(0, Math.round(value));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  if (!seconds) return "0 分钟";
+  if (!hours && !minutes) return `${seconds} 秒`;
+  return [hours ? `${hours} 小时` : "", minutes ? `${minutes} 分钟` : "", !hours && seconds % 60 ? `${seconds % 60} 秒` : ""].filter(Boolean).join(" ");
+}
 export interface PlayTimeBucket {
   start: number;
   end: number;

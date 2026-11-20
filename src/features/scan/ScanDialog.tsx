@@ -46,11 +46,8 @@ export interface ScanDialogProps {
   onConfirmed: (games: GameInput[], mode: "manual" | "automatic") => void;
   /** Pre-filled root directory. */
   defaultPath?: string;
-  /**
-   * Folders to scan automatically when the dialog opens. Used by the tools
-   * page after extraction so the user lands on the review list directly.
-   */
-  initialRoots?: string[];
+  /** Folders or launch files to inspect when the dialog opens. */
+  initialPaths?: string[];
 }
 
 /** A row plus its derived imports, resolved before the import loop. */
@@ -107,7 +104,7 @@ export default function ScanDialog({
   onClose,
   onConfirmed,
   defaultPath,
-  initialRoots,
+  initialPaths,
 }: ScanDialogProps) {
   const [rootPath, setRootPath] = useState(defaultPath ?? "");
   const [maxDepth, setMaxDepth] = useState(3);
@@ -173,33 +170,44 @@ export default function ScanDialog({
     }
   }, []);
 
-  // Folders handed over by 实用工具 → 游戏解压 are scanned as soon as the dialog
-  // opens, so the user lands directly on the review list.
   useEffect(() => {
-    if (!isOpen || !initialRoots || initialRoots.length === 0) return;
+    if (!isOpen || !initialPaths?.length) return;
     let cancelled = false;
     void (async () => {
       setScanning(true);
       setError(null);
       setNotice(null);
-      const found: ScanCandidate[] = [];
+      const explicit: ScanCandidate[] = [];
+      const scanned: ScanCandidate[] = [];
       const failures: string[] = [];
+      let firstRoot: string | undefined;
       try {
-        for (const root of initialRoots) {
+        for (const path of new Set(initialPaths)) {
+          if (cancelled) return;
           try {
-            found.push(...(await scanDirectory(root, 5)));
+            if (/\.(exe|bat|cmd)$/i.test(path)) {
+              try {
+                explicit.push(await inspectExeFile(path));
+                continue;
+              } catch (fileError) {
+                if (cancelled) return;
+                // A directory name may also end in a launch-file extension.
+                scanned.push(...await scanDirectory(path, 5).catch(() => { throw fileError; }));
+              }
+            } else {
+              scanned.push(...await scanDirectory(path, 5));
+            }
+            firstRoot ??= path;
           } catch (cause) {
-            failures.push(`${baseName(root)}：${String(cause)}`);
+            failures.push(`${baseName(path)}：${String(cause)}`);
           }
         }
         if (cancelled || !aliveRef.current) return;
-        setRootPath(initialRoots[0] ?? "");
-        applyScan(found);
-        if (found.length === 0) {
-          setNotice("解压出的文件夹里没有发现可导入的启动文件。");
-        }
+        setRootPath(firstRoot ?? explicit[0]?.folderPath ?? "");
+        // Keep the dropped executable selected when its folder was also dropped.
+        applyScan([...explicit, ...scanned]);
         if (failures.length > 0) {
-          setError(`部分解压目录扫描失败：${failures.join("；")}`);
+          setError(`有 ${failures.length} 项无法读取：${failures.join("；")}`);
         }
       } finally {
         if (!cancelled && aliveRef.current) setScanning(false);
@@ -208,7 +216,7 @@ export default function ScanDialog({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, initialRoots, applyScan]);
+  }, [isOpen, initialPaths, applyScan]);
 
   const pickExecutables = useCallback(async () => {
     setScanning(true);

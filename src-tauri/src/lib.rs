@@ -187,6 +187,7 @@ pub fn run() {
             commands::launch_profiles::launch_profile_get,
             commands::launch_profiles::launch_profile_save,
             commands::relocation::game_paths_check,
+            commands::relocation::game_open_install_directory,
             commands::relocation::game_paths_preview,
             commands::relocation::game_paths_apply,
             commands::games::game_get,

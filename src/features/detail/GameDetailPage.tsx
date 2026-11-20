@@ -5,10 +5,12 @@ import type { CSSProperties } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@/lib/logging";
 
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/Toast";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { CoverImage } from "@/components/ui/cover-image";
@@ -28,9 +30,6 @@ import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import { useGameProcess } from "@/features/launch/useGameProcess";
 import { LaunchProfilePanel } from '@/features/launch/LaunchProfilePanel';
-import { launchProfileGet, launchProfileSave } from '@/features/launch/profile-api';
-import { normalizeLaunchProfile } from '@/features/launch/profile-model';
-import type { LaunchProfile } from '@/features/launch/profile-model';
 import MetadataDialog from "@/features/metadata/MetadataDialog";
 import { errorMessage } from "@/features/io/io";
 import type { GameExitedPayload } from "@/features/io/io";
@@ -56,6 +55,8 @@ import type { GameDetail, GamePatch, GameStatus, PlaySession, Tag } from "@/type
 
 import { TagSelector } from "./TagSelector";
 import PlayHistoryPanel from "./PlayHistoryPanel";
+import { detailFields, detailPatchFor, launchPathUnavailable } from "./detail-edits";
+import type { DetailSection, GamePathState } from "./detail-edits";
 
 /** Form state: every field is a string so inputs stay controlled and empty-able. */
 interface FormState {
@@ -112,45 +113,6 @@ function isScriptPath(value: string): boolean {
   return /\.(bat|cmd)$/i.test(value.trim());
 }
 
-/** Compact switch for the toolbar's launch options. */
-function MiniSwitch({
-  checked,
-  disabled,
-  label,
-  title,
-  onChange,
-}: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  title?: string;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      title={title}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        checked ? "bg-primary" : "bg-muted-foreground/40",
-      )}
-    >
-      <span
-        className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
-          checked ? "translate-x-[18px]" : "translate-x-1",
-        )}
-      />
-    </button>
-  );
-}
-
 export default function GameDetailPage() {
   const sharedOpening = useRef<boolean | null>(null);
   const { id } = useParams<{ id: string }>();
@@ -167,12 +129,25 @@ export default function GameDetailPage() {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [sessions, setSessions] = useState<PlaySession[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
+  const formBaseline = useRef<FormState | null>(null);
+  const tagBaseline = useRef<number[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
   const [newTagName, setNewTagName] = useState("");
   const [pendingTagNames, setPendingTagNames] = useState<string[]>([]);
   const [tagError, setTagError] = useState<string | null>(null);
   const [tab, setTab] = useState("info");
   const contentRef = useRef<HTMLDivElement>(null);
+  const moreActions = useRef<HTMLDetailsElement>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const [editingInfo, setEditingInfo] = useState(false);
+  const [expandedDescription, setExpandedDescription] = useState(false);
+  const [pathCheck, setPathCheck] = useState<{ key: string; state?: GamePathState } | null>(null);
+  const [choosingLauncher, setChoosingLauncher] = useState(false);
+
+  useEffect(() => {
+    setEditingInfo(false);
+    setExpandedDescription(false);
+  }, [gameId]);
 
   useEffect(() => {
     const requested = searchParams.get("tab");
@@ -195,44 +170,23 @@ export default function GameDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
 
-  // Header shortcuts write only this game's overrides.
-  const [launchProfile, setLaunchProfile] = useState<LaunchProfile>(normalizeLaunchProfile(null));
-  const [profileRevision, setProfileRevision] = useState(0);
-  const [localeUse, setLocaleUse] = useState(false);
-  const [magpieAutostart, setMagpieAutostart] = useState(false);
-  const [optionBusy, setOptionBusy] = useState<"locale" | "magpie" | null>(null);
-
+  const checkedPathKey = JSON.stringify([game?.id, game?.exePath, game?.installPath]);
+  const savedGameId = game?.id;
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const effective = await launchProfileGet(gameId);
-        if (!alive) return;
-        setLaunchProfile(normalizeLaunchProfile(effective.profile));
-        setLocaleUse(effective.locale);
-        setMagpieAutostart(effective.magpie);
-      } catch (cause) {
-        if (alive) setError(errorMessage(cause));
-      }
-    })();
-    return () => { alive = false; };
-  }, [gameId, profileRevision]);
+    if (!savedGameId || savedGameId !== gameId) return;
+    let live = true;
+    let request = 0;
+    const check = () => {
+      const current = ++request;
+      void invoke<Array<{ state: GamePathState }>>("game_paths_check", { gameId }).then(rows => {
+        if (live && current === request) setPathCheck({ key: checkedPathKey, state: rows[0]?.state });
+      }).catch(() => {});
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => { live = false; window.removeEventListener("focus", check); };
+  }, [checkedPathKey, gameId, savedGameId]);
 
-  async function toggleLaunchOption(kind: "locale" | "magpie", next: boolean) {
-    if (optionBusy) return;
-    setOptionBusy(kind);
-    setError(null);
-    void 0;
-    try {
-      await launchProfileSave(gameId, { ...launchProfile, [kind]: next ? 'on' : 'off' });
-      setProfileRevision(value => value + 1);
-      toast('已保存本款游戏的启动设置。');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setOptionBusy(null);
-    }
-  }
   /**
    * Whether this detail view can pop the history stack. A game opened from the
    * library list gets `history.state.idx > 0`, so `navigate(-1)` returns to the
@@ -264,7 +218,10 @@ export default function GameDetailPage() {
       setGame(detail);
       setAllTags(tagList);
       setSessions(sessionList);
-      setForm(toForm(detail));
+      const draft = toForm(detail);
+      formBaseline.current = draft;
+      tagBaseline.current = detail.tags;
+      setForm(draft);
       setSelectedTagIds(detail.tags);
       setNewTagName("");
       setPendingTagNames([]);
@@ -278,7 +235,7 @@ export default function GameDetailPage() {
 
   useEffect(() => {
     void load();
-  }, [load, playTimeRevision]);
+  }, [load]);
 
   /** Back out of the detail view, preferring the real previous page. */
   const goBack = useCallback(() => {
@@ -314,6 +271,13 @@ export default function GameDetailPage() {
       // explicit action will retry.
     }
   }, [gameId]);
+
+  const lastPlayTimeRevision = useRef(playTimeRevision);
+  useEffect(() => {
+    if (lastPlayTimeRevision.current === playTimeRevision) return;
+    lastPlayTimeRevision.current = playTimeRevision;
+    void refreshQuietly();
+  }, [playTimeRevision, refreshQuietly]);
 
   const launcher = useGameLauncher(() => void refreshQuietly());
 
@@ -395,40 +359,18 @@ export default function GameDetailPage() {
 
   /** Only fields the user actually changed, so a save never clobbers siblings. */
   const buildPatch = (): GamePatch | null => {
-    if (!game || !form) return null;
-    const patch: GamePatch = {};
-
-    if (form.title.trim() !== game.title) patch.title = form.title.trim();
-    if (form.installPath.trim() !== game.installPath)
-      patch.installPath = form.installPath.trim();
-    if (orNull(form.originalTitle) !== game.originalTitle)
-      patch.originalTitle = orNull(form.originalTitle);
-    if (orNull(form.developer) !== game.developer)
-      patch.developer = orNull(form.developer);
-    if (orNull(form.releaseDate) !== game.releaseDate)
-      patch.releaseDate = orNull(form.releaseDate);
-    if (form.coverPath.trim() !== (game.coverPath ?? ""))
-      patch.coverPath = orNull(form.coverPath);
-    if (form.description.trim() !== (game.description ?? ""))
-      patch.description = orNull(form.description);
-    if (form.exePath.trim() !== (game.exePath ?? ""))
-      patch.exePath = orNull(form.exePath);
-    if (form.launchArgs.trim() !== (game.launchArgs ?? ""))
-      patch.launchArgs = orNull(form.launchArgs);
-    if (form.workdir.trim() !== (game.workdir ?? ""))
-      patch.workdir = orNull(form.workdir);
-    if (form.savePath.trim() !== (game.savePath ?? ""))
-      patch.savePath = orNull(form.savePath);
-    if (form.notes.trim() !== (game.notes ?? ""))
-      patch.notes = orNull(form.notes);
-    if (form.vndbId.trim() !== (game.vndbId ?? ""))
-      patch.vndbId = orNull(form.vndbId);
-
-    const ratingRaw = form.rating.trim();
-    const rating = ratingRaw === "" ? null : roundRating(Number(ratingRaw));
-    if (rating !== game.rating) patch.rating = rating;
-
-    const currentTags = [...game.tags].sort((a, b) => a - b);
+    const baseline = formBaseline.current;
+    if (!form || !baseline) return null;
+    const entries: Array<[keyof GamePatch, GamePatch[keyof GamePatch]]> = [];
+    for (const field of [...detailFields.info, ...detailFields.files]) {
+      const value = form[field].trim();
+      if (value === baseline[field].trim()) continue;
+      if (field === "rating") entries.push([field, value === "" ? null : roundRating(Number(value))]);
+      else if (field === "title" || field === "installPath") entries.push([field, value]);
+      else entries.push([field, orNull(value)]);
+    }
+    const patch: GamePatch = Object.fromEntries(entries);
+    const currentTags = [...tagBaseline.current].sort((a, b) => a - b);
     const nextTags = [...selectedTagIds].sort((a, b) => a - b);
     if (currentTags.join(",") !== nextTags.join(",")) patch.tags = nextTags;
     if (pendingTagNames.length > 0) patch.tagNames = pendingTagNames;
@@ -436,44 +378,110 @@ export default function GameDetailPage() {
     return patch;
   };
 
-  const save = async () => {
-    if (!form || saving || statusPending.current) return;
-    if (form.title.trim() === "") {
-      setError("标题不能为空。");
-      return;
+  function resetDraft(section: "info" | "files", source: GameDetail) {
+    const restored = toForm(source);
+    const fields: readonly (keyof FormState)[] = detailFields[section];
+    const restoreSection = (current: FormState) => {
+      const next = { ...current };
+      for (const field of fields) next[field] = restored[field];
+      return next;
+    };
+    if (formBaseline.current) formBaseline.current = restoreSection(formBaseline.current);
+    setForm(current => current ? restoreSection(current) : current);
+  }
+
+  function closeInfoEditor() {
+    setEditingInfo(false);
+    requestAnimationFrame(() => editButton.current?.focus());
+  }
+
+  function cancelEdits(section: DetailSection) {
+    if (!game || saving) return;
+    setError(null);
+    if (section === "tags") {
+      tagBaseline.current = game.tags;
+      setSelectedTagIds(game.tags);
+      setPendingTagNames([]);
+      setNewTagName("");
+      setTagError(null);
+    } else {
+      resetDraft(section, game);
+      if (section === "info") closeInfoEditor();
     }
-    if (form.installPath.trim() === "") {
-      setError("安装路径不能为空。");
-      return;
-    }
-    const ratingRaw = form.rating.trim();
-    if (ratingRaw !== "") {
-      const rating = Number(ratingRaw);
-      if (!Number.isFinite(rating) || rating < 0 || rating > 10) {
+  }
+
+  const save = async (section: DetailSection) => {
+    if (!game || !form || saving || statusPending.current) return;
+    if (section === "info") {
+      if (!form.title.trim()) { setError("标题不能为空。"); return; }
+      const rating = Number(form.rating);
+      if (form.rating.trim() && (!Number.isFinite(rating) || rating < 0 || rating > 10)) {
         setError("评分必须是 0-10 的数字，支持小数。");
         return;
       }
     }
-
-    const patch = buildPatch();
-    if (!patch || Object.keys(patch).length === 0) {
-      toast("没有需要保存的修改。");
-      return;
-    }
+    if (section === "files" && !form.installPath.trim()) { setError("安装路径不能为空。"); return; }
+    const patch = detailPatchFor(buildPatch() ?? {}, section);
+    if (!Object.keys(patch).length) return;
 
     setSaving(true);
     setError(null);
-    void 0;
     try {
-      await gameUpdate(gameId, patch);
+      const updated = await gameUpdate(gameId, patch);
+      if (section === "tags") {
+        const [detail, tagList] = await Promise.all([gameGet(gameId), tagsList()]);
+        setGame(detail);
+        setAllTags(tagList);
+        tagBaseline.current = detail.tags;
+        setSelectedTagIds(detail.tags);
+        setPendingTagNames([]);
+        setNewTagName("");
+        setTagError(null);
+      } else {
+        setGame(current => current?.id === updated.id ? { ...current, ...updated } : current);
+        resetDraft(section, { ...updated, tags: game.tags });
+        if (section === "info") closeInfoEditor();
+      }
       toast("已保存。");
-      await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSaving(false);
     }
   };
+
+  function selectTab(value: string) {
+    setTab(value);
+    contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  async function chooseLaunchFile() {
+    if (!game || choosingLauncher) return;
+    selectTab("files");
+    setChoosingLauncher(true);
+    setError(null);
+    try {
+      const path = await open({
+        title: "选择游戏启动文件",
+        defaultPath: game.installPath || undefined,
+        filters: [{ name: "可执行文件或启动脚本", extensions: ["exe", "bat", "cmd"] }],
+      });
+      if (typeof path === "string") setForm(current => current ? { ...current, exePath: path } : current);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setChoosingLauncher(false);
+    }
+  }
+
+  async function openInstallFolder() {
+    setError(null);
+    try {
+      await invoke<void>("game_open_install_directory", { gameId });
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
+  }
 
   const toggleFavorite = async () => {
     if (!game) return;
@@ -585,6 +593,23 @@ export default function GameDetailPage() {
     .map((tagId) => tagById.get(tagId))
     .filter((tag): tag is Tag => tag !== undefined);
 
+  const pathState = pathCheck?.key === checkedPathKey ? pathCheck.state : undefined;
+  const running = process.status === "running";
+  const needsLauncher = !installation.archived && launchPathUnavailable(game.exePath, pathState, running);
+  const description = game.description?.trim() || "";
+  const longDescription = description.length > 180 || description.split("\n").length > 4;
+  const draftPatch = buildPatch() ?? {};
+  const sectionActions = (section: DetailSection, label: string) => {
+    const changed = Object.keys(detailPatchFor(draftPatch, section)).length > 0;
+    return <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+      <span className="text-xs text-muted-foreground" aria-live="polite">{changed ? "有未保存的修改" : ""}</span>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" disabled={saving || (section !== "info" && !changed)} onClick={() => cancelEdits(section)}>取消</Button>
+        <Button size="sm" loading={saving} disabled={!changed || statusSaving} onClick={() => void save(section)}>{label}</Button>
+      </div>
+    </div>;
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 p-5" data-game-detail data-game-id={game.id}>
       {/* Header ---------------------------------------------------------- */}
@@ -605,56 +630,6 @@ export default function GameDetailPage() {
           </div>
 
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            <div
-              className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1"
-              title="本款启动选项；在「路径与启动」中可恢复为跟随全局。"
-            >
-              <span className="text-[11px] text-muted-foreground">转区</span>
-              <MiniSwitch
-                checked={localeUse}
-                disabled={optionBusy !== null}
-                label="转区启动"
-                title="只切换本款游戏的转区启动"
-                onChange={next => void toggleLaunchOption("locale", next)}
-              />
-              <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-border" />
-              <span className="text-[11px] text-muted-foreground">缩放</span>
-              <MiniSwitch
-                checked={magpieAutostart}
-                disabled={optionBusy !== null}
-                label="启动时缩放"
-                title="启动游戏前自动启动 Magpie；放大仍需按 Magpie 快捷键"
-                onChange={next => void toggleLaunchOption("magpie", next)}
-              />
-            </div>
-            <Button
-              loading={launching}
-              disabled={!installation.loaded || installation.archived}
-              onClick={() => void launcher.launch(game)}
-              title={
-                installation.archived ? "请在「路径与启动」重新指定路径并恢复为已安装"
-                  : process.status === "running"
-                  ? "查看正在运行的游戏"
-                  : game.exePath?.trim()
-                  ? "启动这个游戏"
-                  : "请在「路径与启动」选择可执行文件并保存"
-              }
-            >
-              {installation.archived ? "已卸载" : launching ? "启动中…" : process.status === "running" ? "运行中" : "启动游戏"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={openMetadata}
-              title="从鲲 Galgame 论坛 / VNDB / Bangumi / 2DFan 联网获取资料"
-            >
-              联网获取资料
-            </Button>
-            <Button
-              variant={favorite ? "default" : "outline"}
-              onClick={() => void toggleFavorite()}
-            >
-              {favorite ? "★ 已收藏" : "☆ 收藏"}
-            </Button>
             <Select
               aria-label="游戏状态"
               className="w-24 shrink-0"
@@ -663,12 +638,47 @@ export default function GameDetailPage() {
               onValueChange={value => void changeStatus(value)}
               options={GAME_STATUSES.map(status => ({ value: status, label: GAME_STATUS_LABELS[status] }))}
             />
-            <Button variant="outline" loading={saving} disabled={statusSaving} onClick={() => void save()}>
-              保存
+            <Button variant="outline" aria-pressed={favorite} onClick={() => void toggleFavorite()}>
+              {favorite ? "★ 已收藏" : "☆ 收藏"}
             </Button>
-            <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-              删除
+            <Button
+              loading={launching || choosingLauncher}
+              disabled={!installation.loaded || installation.archived || saving}
+              onClick={() => void (needsLauncher ? chooseLaunchFile() : launcher.launch(game))}
+              title={installation.archived ? "请在「路径与启动」恢复为已安装" : undefined}
+            >
+              {installation.archived ? "已卸载" : launching ? "启动中…" : running ? "运行中" : needsLauncher ? "选择启动文件" : "启动游戏"}
             </Button>
+            <details ref={moreActions} className="group relative z-20" onBlur={event => {
+              if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+            }} onKeyDown={event => {
+              if (event.key === "Escape" && event.currentTarget.open) {
+                event.currentTarget.open = false;
+                event.currentTarget.querySelector("summary")?.focus();
+              }
+            }}>
+              <summary aria-label="更多操作" title="更多操作" className={buttonClassName({
+                variant: "outline",
+                size: "icon",
+                className: "w-10 cursor-pointer list-none rounded-full text-sm font-semibold [&::-webkit-details-marker]:hidden",
+              })}>···</summary>
+              <div className="absolute right-0 top-full mt-1 grid w-36 gap-1 rounded-lg border border-border bg-background p-1.5 text-foreground shadow-lg [.glass_&]:border-glass-border [.glass_&]:bg-glass-strong [.glass_&]:shadow-glass-lg [.glass_&]:backdrop-blur-[var(--glass-blur)] [.glass_&]:backdrop-saturate-150">
+                <Button size="sm" variant="ghost" className="justify-start" onClick={() => {
+                  if (moreActions.current) {
+                    moreActions.current.open = false;
+                    moreActions.current.querySelector("summary")?.focus();
+                  }
+                  openMetadata();
+                }}>联网获取资料</Button>
+                <Button size="sm" variant="ghost" className="justify-start text-destructive hover:text-destructive" onClick={() => {
+                  if (moreActions.current) {
+                    moreActions.current.open = false;
+                    moreActions.current.querySelector("summary")?.focus();
+                  }
+                  setConfirmDelete(true);
+                }}>删除条目</Button>
+              </div>
+            </details>
           </div>
         </div>
         <h1 className="min-w-0 truncate text-2xl font-semibold tracking-tight sm:text-3xl" title={game.title}>
@@ -680,10 +690,7 @@ export default function GameDetailPage() {
         className="shrink-0"
         label="游戏详情分区"
         value={tab}
-        onValueChange={value => {
-          setTab(value);
-          contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
-        }}
+        onValueChange={selectTab}
         items={[
           { value: "info", label: "基本信息" },
           { value: "history", label: "游玩历史" },
@@ -696,11 +703,16 @@ export default function GameDetailPage() {
       <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
       {installation.archived ? <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
         <span>已卸载并归档 · 游戏资料、游玩历史和存档备份保留。</span>
-        <Button size="sm" variant="outline" onClick={() => { setTab('files'); contentRef.current?.scrollTo({ top: 0 }); }}>重新指定路径与安装状态</Button>
+        <Button size="sm" variant="outline" onClick={() => selectTab("files")}>重新指定路径与安装状态</Button>
       </div> : null}
+      {needsLauncher ? <p role="status" className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs">
+        {pathState === "offline" ? "安装磁盘未连接，可重新连接磁盘或选择启动文件。"
+          : pathState === "missingFolder" ? "安装目录找不到，请核对安装路径和启动文件。"
+          : game.exePath ? "找不到启动文件，请重新选择并保存路径。" : "尚未设置启动文件。"}
+      </p> : null}
       {launcher.error ? <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">{launcher.error}</p> : null}
-      {error ? (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      {error && tab !== "files" && !(tab === "info" && editingInfo) ? (
+        <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
         </div>
       ) : null}
@@ -726,49 +738,23 @@ export default function GameDetailPage() {
             <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
             <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
               <dt className="text-muted-foreground">评分</dt>
-              <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{form.rating === "" ? "未评分" : formatRating(Number(form.rating))}</dd>
+              <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{game.rating === null ? "未评分" : formatRating(game.rating)}</dd>
               <dt className="text-muted-foreground">发售日</dt>
-              <dd className="min-w-0 break-words text-right">{form.releaseDate || "未填写"}</dd>
+              <dd className="min-w-0 break-words text-right">{game.releaseDate || "未填写"}</dd>
               <dt className="text-muted-foreground">开发商</dt>
-              <dd className="min-w-0 break-words text-right">{form.developer || "未填写"}</dd>
+              <dd className="min-w-0 break-words text-right">{game.developer || "未填写"}</dd>
               <dt className="text-muted-foreground">原名</dt>
-              <dd className="min-w-0 break-words text-right">{form.originalTitle || "未填写"}</dd>
+              <dd className="min-w-0 break-words text-right">{game.originalTitle || "未填写"}</dd>
               <dt className="text-muted-foreground">状态</dt>
               <dd className="min-w-0 text-right">{GAME_STATUS_LABELS[game.status]}</dd>
             </dl>
-            <details data-detail-editor className="mt-3 text-xs">
-              <summary className="cursor-pointer text-primary">编辑资料</summary>
-              <div className="mt-2 flex flex-col gap-2">
-                <Field label="评分" hint="0-10，支持小数，留空表示未评分">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10}
-                    step="0.01"
-                    value={form.rating}
-                    onChange={event => setForm({ ...form, rating: event.target.value })}
-                    placeholder="留空"
-                  />
-                </Field>
-                <Field label="发售日" hint="通常是 YYYY-MM-DD">
-                  <Input value={form.releaseDate} onChange={event => setForm({ ...form, releaseDate: event.target.value })} />
-                </Field>
-                <Field label="开发商">
-                  <Input value={form.developer} onChange={event => setForm({ ...form, developer: event.target.value })} />
-                </Field>
-                <Field label="原名">
-                  <Input value={form.originalTitle} onChange={event => setForm({ ...form, originalTitle: event.target.value })} />
-                </Field>
-                <p className="text-muted-foreground">修改后点击右上角「保存」生效。</p>
-              </div>
-            </details>
             <dl data-detail-records className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
               <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">游玩时长</dt>
+                <dt className="shrink-0 whitespace-nowrap text-muted-foreground">游玩时长</dt>
                 <dd>{formatPlayTime(game.playTimeSeconds)}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">最近游玩</dt>
+                <dt className="shrink-0 whitespace-nowrap text-muted-foreground">最近游玩</dt>
                 <dd className="text-right">{formatDateTime(game.lastPlayedAt)}</dd>
               </div>
               <div className="flex justify-between gap-2">
@@ -787,106 +773,111 @@ export default function GameDetailPage() {
         {/* Panels -------------------------------------------------------- */}
         <div className="min-w-0 space-y-3" data-detail-panel>
         {tab === "info" ? (
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>基本信息</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
-              <Field label="简介" className="sm:col-span-2">
-                <div id="game-description" className="flex flex-col gap-2">
-                  <Textarea
-                    aria-label="简介"
-                    className="min-h-40"
-                    value={form.description}
-                    onChange={event => setForm({ ...form, description: event.target.value })}
-                    placeholder="暂无简介，可在此填写或联网获取资料。"
-                  />
-                </div>
-              </Field>
-              <Field label="标题" className="sm:col-span-2">
-                <Input
-                  value={form.title}
-                  onChange={(event) =>
-                    setForm({ ...form, title: event.target.value })
-                  }
-                />
-              </Field>
-              <Field label="原封面路径" hint="自定义封面可在左侧封面区域设置，并可随时恢复为此封面。">
-                <Input
-                  value={form.coverPath}
-                  onChange={(event) =>
-                    setForm({ ...form, coverPath: event.target.value })
-                  }
-                  placeholder="本地绝对路径"
-                />
-              </Field>
-              <Field label="VNDB ID">
-                <Input
-                  value={form.vndbId}
-                  onChange={(event) =>
-                    setForm({ ...form, vndbId: event.target.value })
-                  }
-                />
-              </Field>
-              <Field label="备注" className="sm:col-span-2">
-                <Textarea
-                  value={form.notes}
-                  onChange={(event) =>
-                    setForm({ ...form, notes: event.target.value })
-                  }
-                />
-              </Field>
-            </CardContent>
-          </Card>
+          <>
+            <Card className="min-w-0">
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                <CardTitle>{editingInfo ? "编辑资料" : "作品简介"}</CardTitle>
+                {!editingInfo ? <Button ref={editButton} size="sm" variant="outline" onClick={() => {
+                  setError(null);
+                  resetDraft("info", game);
+                  setEditingInfo(true);
+                }}>编辑资料</Button> : null}
+              </CardHeader>
+              <CardContent>
+                {editingInfo ? (
+                  <fieldset disabled={saving} className="min-w-0 space-y-4">
+                    <div data-detail-editor className="grid gap-3 sm:grid-cols-2">
+                      <Field label="标题" className="sm:col-span-2"><Input autoFocus value={form.title} onChange={event => setForm({ ...form, title: event.target.value })} /></Field>
+                      <Field label="原名"><Input value={form.originalTitle} onChange={event => setForm({ ...form, originalTitle: event.target.value })} /></Field>
+                      <Field label="开发商"><Input value={form.developer} onChange={event => setForm({ ...form, developer: event.target.value })} /></Field>
+                      <Field label="评分" hint="0–10，支持小数，留空表示未评分">
+                        <Input type="number" min={0} max={10} step="0.01" value={form.rating} onChange={event => setForm({ ...form, rating: event.target.value })} />
+                      </Field>
+                      <Field label="发售日" hint="YYYY-MM-DD"><Input value={form.releaseDate} onChange={event => setForm({ ...form, releaseDate: event.target.value })} /></Field>
+                      <Field label="简介" className="sm:col-span-2"><Textarea className="min-h-40" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></Field>
+                      <Field label="原封面路径"><Input value={form.coverPath} onChange={event => setForm({ ...form, coverPath: event.target.value })} placeholder="本地绝对路径" /></Field>
+                      <Field label="VNDB ID"><Input value={form.vndbId} onChange={event => setForm({ ...form, vndbId: event.target.value })} /></Field>
+                      <Field label="备注" className="sm:col-span-2"><Textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} /></Field>
+                    </div>
+                    {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+                    {sectionActions("info", "保存资料")}
+                  </fieldset>
+                ) : (
+                  <div className="space-y-3">
+                    {description ? <>
+                      <p id="game-description" className={cn("whitespace-pre-wrap break-words text-sm leading-7", longDescription && !expandedDescription && "line-clamp-6")}>{description}</p>
+                      {longDescription ? <Button size="sm" variant="ghost" className="px-0 text-primary" aria-expanded={expandedDescription} aria-controls="game-description" onClick={() => setExpandedDescription(value => !value)}>{expandedDescription ? "收起简介" : "展开简介"}</Button> : null}
+                    </> : <p className="text-sm text-muted-foreground">暂无简介。可编辑资料，或在更多操作中联网获取。</p>}
+                    {game.tags.length ? <div className="flex flex-wrap gap-1.5" aria-label="作品标签">
+                      {game.tags.map(id => {
+                        const tag = tagById.get(id);
+                        return tag ? <Badge key={id} color={tag.color} variant="outline">{t(tag.name)}</Badge> : null;
+                      })}
+                    </div> : null}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            {game.notes && !editingInfo ? <Card>
+              <CardHeader><CardTitle>备注</CardTitle></CardHeader>
+              <CardContent><p className="whitespace-pre-wrap break-words text-sm leading-6">{game.notes}</p></CardContent>
+            </Card> : null}
+            <BangumiSyncProfilePanel key={game.id} gameId={game.id} />
+          </>
         ) : null}
 
-        {tab === "info" ? <BangumiSyncProfilePanel key={game.id} gameId={game.id} /> : null}
-
         {tab === "files" ? (
-          <><ArchivePanel key={game.id} gameId={game.id} />
-          <Card>
-            <CardHeader>
-              <CardTitle>路径与启动</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
-              <Field label="安装路径" className="sm:col-span-2">
-                <PathInput label="安装路径" kind="directory" value={form.installPath} disabled={saving}
-                  onChange={value => setForm(before => before ? { ...before, installPath: value } : before)} />
-              </Field>
-              <Field label="可执行文件" className="sm:col-span-2">
-                <PathInput label="可执行文件" kind="file" value={form.exePath} disabled={saving}
-                  onChange={value => setForm(before => before ? { ...before, exePath: value } : before)} />
-              </Field>
-              {isScriptPath(form.exePath) ? (
-                <p className="text-xs leading-relaxed text-muted-foreground sm:col-span-2">
-                  当前使用 .bat/.cmd 启动脚本（通过 cmd 运行），会继续跟踪本次启动产生的后续游戏进程。转区启动暂不支持脚本，需要转区时请改用游戏 exe。
-                </p>
-              ) : null}
-              <Field label="启动参数">
-                <Input
-                  value={form.launchArgs}
-                  onChange={(event) =>
-                    setForm({ ...form, launchArgs: event.target.value })
-                  }
-                />
-              </Field>
-              <Field label="工作目录">
-                <PathInput label="工作目录" kind="directory" value={form.workdir} disabled={saving}
-                  onChange={value => setForm(before => before ? { ...before, workdir: value } : before)} />
-              </Field>
-              <Field label="存档路径" className="sm:col-span-2">
-                <PathInput label="存档路径" kind="either" value={form.savePath} disabled={saving}
-                  onChange={value => setForm(before => before ? { ...before, savePath: value } : before)} />
-              </Field>
-              <p className="text-xs text-muted-foreground sm:col-span-2">路径可直接输入、粘贴或点击按钮选择。修改后点击右上角「保存」生效；工作目录留空时使用可执行文件所在目录。</p>
-              <LaunchProfilePanel key={`${gameId}-${profileRevision}`} gameId={gameId} onSaved={() => setProfileRevision(value => value + 1)} />
-            </CardContent>
-          </Card></>
+          <>
+            <Card>
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                <CardTitle>路径与启动</CardTitle>
+                <Button size="sm" variant="outline" onClick={() => void openInstallFolder()}>打开安装目录</Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <fieldset disabled={saving} className="min-w-0 space-y-3">
+                  <Field label="启动文件">
+                    <PathInput label="可执行文件" kind="file" value={form.exePath} disabled={saving || choosingLauncher}
+                      onChange={value => setForm(before => before ? { ...before, exePath: value } : before)} />
+                  </Field>
+                  <Field label="安装路径">
+                    <PathInput label="安装路径" kind="directory" value={form.installPath} disabled={saving}
+                      onChange={value => setForm(before => before ? { ...before, installPath: value } : before)} />
+                  </Field>
+                  {isScriptPath(form.exePath) ? (
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      当前使用 .bat/.cmd 启动脚本，恋页会跟踪脚本启动的游戏进程。需要转区时，请选择游戏 exe。
+                    </p>
+                  ) : null}
+                  <Field label="存档路径">
+                    <PathInput label="存档路径" kind="either" value={form.savePath} disabled={saving}
+                      onChange={value => setForm(before => before ? { ...before, savePath: value } : before)} />
+                  </Field>
+                  <details className="rounded-lg border border-border">
+                    <summary className="cursor-pointer rounded-lg px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">高级启动设置</summary>
+                    <div className="space-y-3 border-t border-border p-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="启动参数"><Input value={form.launchArgs} onChange={event => setForm({ ...form, launchArgs: event.target.value })} /></Field>
+                        <Field label="工作目录" hint="留空时使用可执行文件所在目录">
+                          <PathInput label="工作目录" kind="directory" value={form.workdir} disabled={saving}
+                            onChange={value => setForm(before => before ? { ...before, workdir: value } : before)} />
+                        </Field>
+                      </div>
+                      <LaunchProfilePanel gameId={gameId} />
+                    </div>
+                  </details>
+                </fieldset>
+                {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
+                {sectionActions("files", "保存路径")}
+              </CardContent>
+            </Card>
+            <ArchivePanel key={game.id} gameId={game.id} />
+          </>
         ) : null}
 
         {tab === 'saves' ? <Card><CardHeader><CardTitle>游戏存档备份</CardTitle></CardHeader><CardContent>
           <SaveBackupPanel gameId={game.id} savePath={game.savePath} onPathSaved={path => {
             setGame(current => current?.id === game.id ? { ...current, savePath: path } : current);
+            if (formBaseline.current) formBaseline.current = { ...formBaseline.current, savePath: path };
             setForm(current => current ? { ...current, savePath: path } : current);
           }} />
         </CardContent></Card> : null}
@@ -976,11 +967,10 @@ export default function GameDetailPage() {
                       />
                     </div>
                   </details>
-                  <p className="text-xs text-muted-foreground">
-                    添加或移除标签后，点击右上角「保存」生效。
-                  </p>
+
                 </div>
               </fieldset>
+              {sectionActions("tags", "保存标签")}
             </CardContent>
           </Card>
         ) : null}

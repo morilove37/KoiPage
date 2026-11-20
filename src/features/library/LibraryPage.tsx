@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { loadInstallationState, useInstallationStore } from "@/features/installation/store";
 import { matchesInstallation } from "@/features/installation/model";
@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { LabeledSelect } from "@/components/ui/select";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { cn } from "@/lib/utils";
 import { GeometryIcon } from '@/components/ui/geometry-icon';
 import { useLocalizedTags } from "@/lib/localization";
@@ -74,6 +75,7 @@ const rememberedRenderCounts = new Map<string, number>();
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "title", label: "标题" },
+  { value: "developer", label: "开发商" },
   { value: "createdAt", label: "最近添加" },
   { value: "releaseDate", label: "发售日" },
   { value: "rating", label: "评分" },
@@ -114,6 +116,7 @@ function compareNullable<T>(
 
 export default function LibraryPage({ folderPage = false }: { folderPage?: boolean }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [folderParams, setFolderParams] = useSearchParams();
   const folderTab = folderParams.get('tab') === 'custom' ? 'custom' : folderParams.get('tab') === 'status' ? 'status' : 'society';
   const activeFolder = folderTab === 'custom' ? folderParams.get('folder') ?? '' : '';
@@ -151,6 +154,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const saveLibraryPreset = useAppStore(s => s.saveLibraryPreset);
   const deleteLibraryPreset = useAppStore(s => s.deleteLibraryPreset);
   const { search, status, favoriteOnly, activeTagIds, developer, installation } = filters;
+  /** Multi-select filters read as sets; `status` / `developer` are arrays. */
+  const statuses = status;
+  const developerNames = developer;
   const archived = useInstallationStore(state => state.archived);
   const installationLoaded = useInstallationStore(state => state.loaded);
   const processes = useAppStore(state => state.gameProcesses);
@@ -160,9 +166,10 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     setLibraryFilters({ ...current, [key]: typeof value === "function" ? value(current[key]) : value });
   };
   const setSearch = (value: string) => setFilter("search", value);
-  const setStatus = (value: string) => setFilter("status", value);
+  const setStatus = (value: string) => setFilter("status", value ? [value] : []);
   const setFavoriteOnly = (value: boolean | ((current: boolean) => boolean)) => setFilter("favoriteOnly", value);
-  const setDeveloper = (value: string) => setFilter("developer", value);
+  const setStatuses = (value: string[]) => setFilter("status", value);
+  const setDevelopers = (value: string[]) => setFilter("developer", value);
   const setActiveTagIds = useCallback((value: number[] | ((current: number[]) => number[])) => {
     const current = useAppStore.getState().library.filters;
     setLibraryFilters({ ...current, activeTagIds: typeof value === "function" ? value(current.activeTagIds) : value });
@@ -200,16 +207,22 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     return () => cancelAnimationFrame(frame);
   }, [loading, folderPage]);
   const [scanOpen, setScanOpen] = useState(false);
-  // Folders extracted in 实用工具 are handed over through sessionStorage; the
-  // scan dialog opens preloaded so the user lands on the review list.
-  const [pendingScanRoots, setPendingScanRoots] = useState<string[] | null>(null);
+  // Both extracted folders and files dropped on Home reuse the import review.
+  const [pendingScanPaths, setPendingScanPaths] = useState<string[] | null>(null);
   useEffect(() => {
     const roots = takePendingScanRoots();
     if (roots !== null) {
-      setPendingScanRoots(roots);
+      setPendingScanPaths(roots);
       setScanOpen(true);
     }
   }, []);
+  useEffect(() => {
+    const paths: unknown = location.state?.scanPaths;
+    if (folderPage || !Array.isArray(paths)) return;
+    setPendingScanPaths(paths.filter((path): path is string => typeof path === 'string' && Boolean(path.trim())));
+    setScanOpen(true);
+    navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true });
+  }, [folderPage, location, navigate]);
   const [metadataQueue, setMetadataQueue] = useState<GameInput[]>([]);
   const [batchDrafts, setBatchDrafts] = useState<GameInput[] | null>(null);
   const [customImportPaths, setCustomImportPaths] = useState<Set<string>>(() => new Set());
@@ -395,9 +408,10 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           .toLowerCase();
         if (!haystack.includes(needle)) return false;
       }
-      if (!(folderPage && folderTab === 'status' && activeStatus) && status && game.status !== status) return false;
+      // Multi-select: an empty list means "全部"; otherwise any selected value matches.
+      if (!(folderPage && folderTab === 'status' && activeStatus) && statuses.length > 0 && !statuses.includes(game.status)) return false;
       if (favoriteOnly && !isFavorite(game)) return false;
-      if (developer && game.developer !== developer) return false;
+      if (developerNames.length > 0 && !developerNames.includes(game.developer ?? '')) return false;
       if (activeTagIds.length > 0) {
         const gameTags = tagsByGame.get(game.id) ?? [];
         // AND semantics: a game must carry every selected tag.
@@ -412,6 +426,14 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           return (
             compareNullable(a.title, b.title, sortDirection) ||
             compareNullable(a.id, b.id, "asc")
+          );
+        case "developer":
+          // Same developer groups together; the title breaks the tie so the
+          // group has a stable, readable order. Empty developers sink to the
+          // bottom either way, which `compareNullable` already handles.
+          return (
+            compareNullable(a.developer ?? "", b.developer ?? "", sortDirection) ||
+            compareNullable(a.title, b.title, "asc")
           );
         case "createdAt":
           return compareNullable(a.createdAt, b.createdAt, sortDirection) || compareNullable(a.id, b.id, sortDirection);
@@ -442,16 +464,24 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     installation,
     games,
     search,
-    status,
+    statuses,
     favoriteOnly,
-    developer,
+    developerNames,
     activeTagIds,
     tagsByGame,
     sortKey,
     sortDirection,
   ]);
 
-  const renderScope = JSON.stringify([folderPage, folderParams.toString(), search, status, favoriteOnly, developer, activeTagIds, installation, sortKey, sortDirection]);
+  /**
+   * Identity of the current view for the render-count memory.
+   *
+   * The multi-select arrays are sorted before stringifying: the same selection
+   * reached by clicking the options in a different order is the same view, and
+   * `JSON.stringify` on the raw array would otherwise mint a fresh cache entry
+   * (and a fresh batch size) for it.
+   */
+  const renderScope = JSON.stringify([folderPage, folderParams.toString(), search, [...statuses].sort(), favoriteOnly, [...developerNames].sort(), activeTagIds, installation, sortKey, sortDirection]);
   const [renderState, setRenderState] = useState(() => ({ scope: renderScope, count: rememberedRenderCounts.get(renderScope) ?? LIBRARY_RENDER_BATCH }));
   const renderCount = libraryRenderCount(visibleGames.length, renderState.scope === renderScope ? renderState.count : rememberedRenderCounts.get(renderScope));
   const renderedGames = visibleGames.slice(0, renderCount);
@@ -561,9 +591,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const resetFilters = () => {
     setFilter("installation", "all");
     setSearch("");
-    setStatus("");
+    setStatuses([]);
     setFavoriteOnly(false);
-    setDeveloper("");
+    setDevelopers([]);
     setActiveTagIds([]);
   };
 
@@ -691,9 +721,9 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const hasFilters =
     installation !== "all" ||
     search.trim() !== "" ||
-    status !== "" ||
+    statuses.length > 0 ||
     favoriteOnly ||
-    developer !== "" ||
+    developerNames.length > 0 ||
     activeTagIds.length > 0;
   const pageTitle = !folderPage ? '游戏库'
     : customFolderView ? folders.find(folder => folder.id === activeFolder)?.name ?? (loading ? '载入中…' : '文件夹不存在')
@@ -891,24 +921,35 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
 
           <LabeledSelect label="安装状态" className="w-36 gap-1" value={installation} onValueChange={value => setFilter("installation", value as LibraryFilters["installation"])} options={[{value:"all",label:"全部安装状态"},{value:"installed",label:"已安装"},{value:"archived",label:"已卸载 / 已归档"}]} />
 
-          <LabeledSelect
-            label="状态"
-            className="w-32 gap-1"
-            value={folderPage && folderTab === 'status' && activeStatus ? activeStatus : status}
-            disabled={folderPage && folderTab === 'status' && activeStatus !== null}
-            onValueChange={setStatus}
-            options={[...STATUS_OPTIONS, ...(folderPage && folderTab === 'status' && activeStatus === 'waiting' ? [{value:'waiting',label:'待开始'}] : [])]}
-          />
+          {/* 状态：文件夹的状态分栏已经锁定了单一状态，那里保留旧的单选；
+              库页本体则用多选，允许一次勾选多个状态。 */}
+          {folderPage && folderTab === 'status' && activeStatus ? (
+            <LabeledSelect
+              label="状态"
+              className="w-32 gap-1"
+              value={activeStatus}
+              disabled
+              onValueChange={setStatus}
+              options={[...STATUS_OPTIONS, ...(activeStatus === 'waiting' ? [{value:'waiting',label:'待开始'}] : [])]}
+            />
+          ) : (
+            <MultiSelect
+              label="状态"
+              className="w-32"
+              allLabel="全部状态"
+              values={statuses}
+              onValuesChange={setStatuses}
+              options={STATUS_OPTIONS.slice(1).map(option => ({ value: option.value, label: option.label }))}
+            />
+          )}
 
-          <LabeledSelect
+          <MultiSelect
             label="开发商"
-            className="w-40 gap-1"
-            value={developer}
-            onValueChange={setDeveloper}
-            options={[
-              { value: "", label: "全部开发商" },
-              ...developers.map((name) => ({ value: name, label: name })),
-            ]}
+            className="w-40"
+            allLabel="全部开发商"
+            values={developerNames}
+            onValuesChange={setDevelopers}
+            options={developers.map((name) => ({ value: name, label: name }))}
           />
 
           <LabeledSelect
@@ -1059,10 +1100,10 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
         open={scanOpen}
         onClose={() => {
           setScanOpen(false);
-          setPendingScanRoots(null);
+          setPendingScanPaths(null);
         }}
         onConfirmed={handleConfirmed}
-        initialRoots={pendingScanRoots ?? undefined}
+        initialPaths={pendingScanPaths ?? undefined}
       />
       {pickerFolderId && folders.some(folder => folder.id === pickerFolderId) ? <FolderGamePicker
         key={pickerFolderId} folder={folders.find(folder => folder.id === pickerFolderId)!} games={games} busy={folderBusy}

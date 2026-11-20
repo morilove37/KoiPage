@@ -138,20 +138,46 @@ fn custom_path(custom: Option<&str>) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-/// Well-known install locations, in priority order.
+/// Normalise an executable path for identity comparison.
 ///
-/// Portable copies extracted anywhere else are covered by the running-process
-/// lookup: a portable Magpie that is already running reports its own path, and
-/// the frontend persists that value so the next cold start knows where it is.
-fn detect() -> Option<PathBuf> {
+/// Windows paths are case-insensitive, and `QueryFullProcessImageNameW` may hand
+/// back the `\\?\` extended-length form, so both sides are compared as lowercase
+/// text with that prefix removed (it marks the spelling, not the file).
+fn normalize_exe_path(path: &Path) -> String {
+    let mut text = path.to_string_lossy().into_owned();
+    for prefix in [r"\\?\", r"\??\"] {
+        if let Some(stripped) = text.strip_prefix(prefix) {
+            text = stripped.to_string();
+            break;
+        }
+    }
+    text.replace('/', r"\").to_ascii_lowercase()
+}
+
+/// Append `path` unless an equivalent spelling is already listed.
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths
+        .iter()
+        .any(|existing| normalize_exe_path(existing) == normalize_exe_path(&path))
+    {
+        paths.push(path);
+    }
+}
+
+/// Every well-known install location that holds a real `Magpie.exe`.
+///
+/// [`detect`] only needs the first hit, but the process-identity check needs the
+/// whole set: a Magpie started from a different known install is still ours.
+fn detect_all() -> Vec<PathBuf> {
+    let mut found = Vec::new();
     if let Some(value) = std::env::var_os("MAGPIE_PATH") {
         let value = PathBuf::from(value);
         if value.is_file() {
-            return Some(value);
+            push_unique(&mut found, value.clone());
         }
         let nested = value.join(EXE_NAME);
         if nested.is_file() {
-            return Some(nested);
+            push_unique(&mut found, nested);
         }
     }
 
@@ -169,7 +195,69 @@ fn detect() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("APPDATA") {
         candidates.push(PathBuf::from(root).join("Magpie").join(EXE_NAME));
     }
-    candidates.into_iter().find(|candidate| candidate.is_file())
+    for candidate in candidates {
+        if candidate.is_file() {
+            push_unique(&mut found, candidate);
+        }
+    }
+    found
+}
+
+/// Well-known install locations, in priority order.
+///
+/// Portable copies extracted anywhere else are covered by the running-process
+/// lookup: a portable Magpie that is already running reports its own path, and
+/// the frontend persists that value so the next cold start knows where it is.
+fn detect() -> Option<PathBuf> {
+    detect_all().into_iter().next()
+}
+
+/// Paths this app legitimately manages or knows as a real Magpie install.
+///
+/// The executable *name* alone is ambiguous — other software also ships a
+/// `Magpie.exe` (an agent manager, for instance). A running process therefore
+/// only counts as this app's Magpie when its image path is one of these, so an
+/// unrelated `Magpie.exe` is neither reported as running, nor started over, nor
+/// terminated by `magpie_quit`.
+fn managed_magpie_paths(app: Option<&AppHandle>, custom: Option<&str>) -> Vec<PathBuf> {
+    let mut managed = Vec::new();
+    // Only an already-unpacked bundled copy can be running, so probing the file
+    // keeps this check free of the extraction side effect.
+    if let Some(path) = app.and_then(bundled_exe_if_present) {
+        push_unique(&mut managed, path);
+    }
+    if let Some(path) = custom_path(custom) {
+        push_unique(&mut managed, path);
+    }
+    for path in detect_all() {
+        push_unique(&mut managed, path);
+    }
+    managed
+}
+
+/// Does this `Magpie.exe` process belong to this app?
+///
+/// A readable image path decides it: matching one of `managed` means ours, any
+/// other path is someone else's same-named program. An unreadable path (an
+/// elevated Magpie refuses the query) is treated as ours on purpose — assuming
+/// "running" is the safe side, because it prevents a duplicate start and still
+/// lets `magpie_quit` try.
+fn is_ours(process: &RunningProcess, managed: &[PathBuf]) -> bool {
+    let Some(path) = process.path.as_deref() else {
+        return true;
+    };
+    let identity = normalize_exe_path(path);
+    managed
+        .iter()
+        .any(|candidate| normalize_exe_path(candidate) == identity)
+}
+
+/// Drop same-named processes that are not this app's Magpie.
+fn our_processes(running: Vec<RunningProcess>, managed: &[PathBuf]) -> Vec<RunningProcess> {
+    running
+        .into_iter()
+        .filter(|process| is_ours(process, managed))
+        .collect()
 }
 
 /// Is the user asking for their own `Magpie.exe` instead of the bundled copy?
@@ -213,20 +301,33 @@ fn extract_to(directory: &Path) -> CmdResult<PathBuf> {
     Ok(directory.join(EXE_NAME))
 }
 
+/// Directory the bundled release unpacks into.
+fn bundled_directory(app: &AppHandle) -> CmdResult<PathBuf> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| CmdError(error.to_string()))?
+        .join("tools")
+        .join("magpie")
+        .join(BUNDLED_VERSION))
+}
+
 /// Path of the bundled `Magpie.exe`, extracting the release on first use.
 ///
 /// Lives under the app-local data directory rather than next to the executable:
 /// Magpie writes its cache and logs beside itself, and an installed app's own
 /// directory may be read-only for a standard user.
 pub fn bundled_path(app: &AppHandle) -> CmdResult<PathBuf> {
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| CmdError(error.to_string()))?
-        .join("tools")
-        .join("magpie")
-        .join(BUNDLED_VERSION);
-    extract_to(&directory)
+    extract_to(&bundled_directory(app)?)
+}
+
+/// Bundled `Magpie.exe` when it is already unpacked, without extracting.
+///
+/// Process identity checks must stay cheap and free of side effects: a bundled
+/// process can only exist after some earlier launch unpacked the release.
+fn bundled_exe_if_present(app: &AppHandle) -> Option<PathBuf> {
+    let exe = bundled_directory(app).ok()?.join(EXE_NAME);
+    exe.is_file().then_some(exe)
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +855,8 @@ fn terminate(_pid: u32) -> bool {
 /// `custom` mode falls back from a valid user choice to a running instance (the
 /// copy actually in use) and then to well-known install paths.
 fn build_status(app: &AppHandle, source_setting: Option<&str>, custom: Option<&str>) -> MagpieStatus {
-    let running = running_processes();
+    let managed = managed_magpie_paths(Some(app), custom);
+    let running = our_processes(running_processes(), &managed);
     let custom_mode = is_custom_source(source_setting);
     let (path, source) = if custom_mode {
         if let Some(path) = custom_path(custom) {
@@ -882,7 +984,16 @@ pub async fn magpie_scaling_set(app: AppHandle, mode: String) -> CmdResult<Scali
     store_setting(&db, SCALING_MODE_KEY, &mode).await?;
 
     let config_path = Some(config.to_string_lossy().into_owned());
-    if !running_processes().is_empty() {
+    // Only a real Magpie of ours owns this file; an unrelated same-named process
+    // must not stop the write.
+    let mut managed = Vec::new();
+    if let Some(path) = exe.as_ref() {
+        push_unique(&mut managed, path.clone());
+    }
+    for path in detect_all() {
+        push_unique(&mut managed, path);
+    }
+    if !our_processes(running_processes(), &managed).is_empty() {
         return Ok(ScalingSetResult {
             applied: false,
             reason: Some("running"),
@@ -905,7 +1016,9 @@ pub async fn magpie_scaling_set(app: AppHandle, mode: String) -> CmdResult<Scali
 #[tauri::command]
 pub async fn magpie_scaling_reset(app: AppHandle) -> CmdResult<ScalingResetResult> {
     let db = pool(&app).await?;
-    if !running_processes().is_empty() {
+    let custom = super::setting(&db, PATH_KEY).await?;
+    let managed = managed_magpie_paths(Some(&app), custom.as_deref());
+    if !our_processes(running_processes(), &managed).is_empty() {
         return Err(CmdError("Magpie 正在运行，请先退出 Magpie 再恢复默认配置。".into()));
     }
     // Validate the bundled payload before touching the user's file.
@@ -954,14 +1067,19 @@ pub async fn magpie_launch(app: AppHandle) -> CmdResult<bool> {
     Ok(true)
 }
 
-/// `magpie_quit` — terminate running Magpie processes.
+/// `magpie_quit` — terminate running Magpie processes of this app.
 ///
-/// Magpie commonly runs elevated; terminating it from this non-elevated process
-/// then fails with access denied, which is reported so the UI can point at the
-/// tray icon instead of pretending it worked.
+/// Only processes whose image path this app manages are terminated; another
+/// program that happens to ship a `Magpie.exe` is left alone. Magpie commonly
+/// runs elevated; terminating it from this non-elevated process then fails with
+/// access denied, which is reported so the UI can point at the tray icon instead
+/// of pretending it worked.
 #[tauri::command]
-pub fn magpie_quit() -> CmdResult<bool> {
-    let processes = running_processes();
+pub async fn magpie_quit(app: AppHandle) -> CmdResult<bool> {
+    let db = pool(&app).await?;
+    let custom = super::setting(&db, PATH_KEY).await?;
+    let managed = managed_magpie_paths(Some(&app), custom.as_deref());
+    let processes = our_processes(running_processes(), &managed);
     if processes.is_empty() {
         return Ok(false);
     }
@@ -979,11 +1097,14 @@ pub fn magpie_quit() -> CmdResult<bool> {
     Ok(true)
 }
 
-/// Start Magpie before a game when the user enabled the autostart setting.
+/// Is this app's own Magpie running right now?
 ///
-/// Best effort by design: a missing tool must not block the launch. The bundled
-/// release is unpacked here too, so the very first game launch already works.
-pub fn is_running() -> bool { !running_processes().is_empty() }
+/// A same-named process of another program must not count, otherwise the game
+/// launch path would refuse to start the scaling tool at all.
+pub fn is_running(app: &AppHandle, custom: Option<&str>) -> bool {
+    let managed = managed_magpie_paths(Some(app), custom);
+    !our_processes(running_processes(), &managed).is_empty()
+}
 
 pub fn autostart(
     app: &AppHandle,
@@ -991,7 +1112,8 @@ pub fn autostart(
     custom: Option<&str>,
     scaling_mode: Option<&str>,
 ) {
-    if !running_processes().is_empty() {
+    let managed = managed_magpie_paths(Some(app), custom);
+    if !our_processes(running_processes(), &managed).is_empty() {
         return;
     }
     let exe = if is_custom_source(source_setting) {
@@ -1212,6 +1334,72 @@ mod tests {
         assert_eq!(default_scaling_index(&read_config_value(&config).unwrap()), Some(7));
         assert!(!directory.join("v4").join("config.koipage-tmp.json").is_file());
 
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Identity helpers: a same-named exe elsewhere must not be mistaken for ours.
+    #[test]
+    fn normalizes_process_image_paths() {
+        // `QueryFullProcessImageNameW` may return the extended-length form.
+        assert_eq!(
+            normalize_exe_path(Path::new(r"\\?\C:\Tools\Magpie\Magpie.exe")),
+            normalize_exe_path(Path::new(r"c:\tools\magpie\magpie.exe"))
+        );
+        // Forward slashes (as produced by some Windows APIs) compare equal too.
+        assert_eq!(
+            normalize_exe_path(Path::new("C:/Tools/Magpie/Magpie.exe")),
+            normalize_exe_path(Path::new(r"C:\Tools\Magpie\Magpie.exe"))
+        );
+        assert_ne!(
+            normalize_exe_path(Path::new(r"C:\Tools\Magpie\Magpie.exe")),
+            normalize_exe_path(Path::new(r"C:\Tools\MagpieAgent\Magpie.exe"))
+        );
+    }
+
+    #[test]
+    fn only_managed_paths_count_as_our_magpie() {
+        let managed = vec![PathBuf::from(r"C:\Tools\Magpie\Magpie.exe")];
+
+        let ours = RunningProcess {
+            pid: 1,
+            path: Some(PathBuf::from(r"\\?\C:\Tools\Magpie\Magpie.exe")),
+        };
+        assert!(is_ours(&ours, &managed));
+
+        // Another program that also ships a `Magpie.exe` is not ours.
+        let foreign = RunningProcess {
+            pid: 2,
+            path: Some(PathBuf::from(r"C:\Program Files\MagpieAgent\Magpie.exe")),
+        };
+        assert!(!is_ours(&foreign, &managed));
+
+        // An unreadable path (elevated process) is assumed to be ours on purpose.
+        let unknown = RunningProcess { pid: 3, path: None };
+        assert!(is_ours(&unknown, &managed));
+
+        let kept = our_processes(vec![ours, foreign, unknown], &managed);
+        assert_eq!(
+            kept.iter().map(|process| process.pid).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+    }
+
+    #[test]
+    fn managed_paths_include_the_custom_choice() {
+        let directory = temporary("managed");
+        let exe = directory.join("Magpie.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        let managed = managed_magpie_paths(None, exe.to_str());
+        assert!(
+            managed.iter().any(|path| normalize_exe_path(path) == normalize_exe_path(&exe)),
+            "custom choice missing from {managed:?}"
+        );
+        // A missing custom path contributes nothing.
+        let missing = directory.join("missing.exe");
+        let managed = managed_magpie_paths(None, missing.to_str());
+        assert!(!managed
+            .iter()
+            .any(|path| normalize_exe_path(path) == normalize_exe_path(&missing)));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
