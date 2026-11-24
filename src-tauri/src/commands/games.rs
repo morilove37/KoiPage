@@ -37,8 +37,30 @@ pub async fn pool(app: &AppHandle) -> CmdResult<Pool<Sqlite>> {
 // The tiny tolerance matches round_rating for legacy half-way floats (8.725).
 const SELECT_GAME: &str = "SELECT id, title, original_title, developer, release_date, status, \
      ROUND(CAST(rating AS REAL) + 1e-12, 2) AS rating, favorite, cover_path, description, install_path, exe_path, launch_args, workdir, \
-     save_path, play_time_seconds, last_played_at, notes, vndb_id, bangumi_id, created_at, \
+     save_path, play_time_seconds, last_played_at, notes, vndb_id, bangumi_id, twodfan_id, created_at, \
      updated_at FROM games";
+
+/// Columns for `games_list`.
+///
+/// The library, home page, tag page and AI search all work from list rows, and
+/// none of them needs the long free-text columns. Shipping them for every game
+/// makes opening the library the heaviest query in the app: a few hundred
+/// multi-kilobyte descriptions travel over IPC on every reload, filter change
+/// and play-time tick.
+///
+/// So the list payload drops `notes` outright (it comes back as NULL) and keeps
+/// only a short `description` preview, which is all the home hero renders (it is
+/// line-clamped to two lines). Anything that needs the real text — the detail
+/// page, the metadata dialog, the AI agent's `get_game` — loads a single row
+/// through `game_get`, which still uses the full `SELECT_GAME`.
+///
+/// `launch_args` and `workdir` stay: the launch dialog is opened from list rows
+/// and prints them as-is, and they are short by nature.
+const SELECT_GAME_LIST: &str = "SELECT id, title, original_title, developer, release_date, status, \
+     ROUND(CAST(rating AS REAL) + 1e-12, 2) AS rating, favorite, cover_path, \
+     SUBSTR(description, 1, 300) AS description, install_path, exe_path, launch_args, workdir, \
+     save_path, play_time_seconds, last_played_at, \
+     NULL AS notes, vndb_id, bangumi_id, twodfan_id, created_at, updated_at FROM games";
 
 async fn fetch_game(pool: &Pool<Sqlite>, id: i64) -> CmdResult<Game> {
     let game = sqlx::query_as::<_, Game>(&format!("{SELECT_GAME} WHERE id = ?"))
@@ -46,6 +68,25 @@ async fn fetch_game(pool: &Pool<Sqlite>, id: i64) -> CmdResult<Game> {
         .fetch_optional(pool)
         .await?;
     game.ok_or_else(|| not_found("game", id))
+}
+
+/// Write one game's bound 2DFan subject id.
+///
+/// Kept next to the schema it touches so the auto-bind path does not have to go
+/// through `game_update` (which would also bump `updated_at` semantics and fire
+/// the sync bookkeeping meant for user edits).
+pub(crate) async fn write_twodfan_id(pool: &Pool<Sqlite>, id: i64, subject_id: &str) -> CmdResult<()> {
+    let affected = sqlx::query("UPDATE games SET twodfan_id = ?, updated_at = ? WHERE id = ?")
+        .bind(optional_string(Some(subject_id.to_string())))
+        .bind(now_iso8601())
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(not_found("game", id));
+    }
+    Ok(())
 }
 
 /// `games_list` — all games, newest first, optionally filtered.
@@ -68,7 +109,7 @@ pub async fn games_list(
 
     // Conditions and their binds are built together so positional `?`
     // placeholders always line up with `.bind()` call order.
-    let mut sql = String::from(SELECT_GAME);
+    let mut sql = String::from(SELECT_GAME_LIST);
     let mut conditions: Vec<&str> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
 
@@ -163,9 +204,9 @@ async fn create_game(pool: &Pool<Sqlite>, input: GameInput) -> CmdResult<Game> {
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO games (title, original_title, developer, release_date, status, rating, \
          favorite, cover_path, description, install_path, exe_path, launch_args, workdir, \
-         save_path, play_time_seconds, last_played_at, notes, vndb_id, bangumi_id, created_at, \
-         updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
-         ?16, ?17, ?18, ?19, ?20, ?20) RETURNING id",
+         save_path, play_time_seconds, last_played_at, notes, vndb_id, bangumi_id, twodfan_id, \
+         created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, \
+         ?16, ?17, ?18, ?19, ?20, ?21, ?21) RETURNING id",
     )
     .bind(&title)
     .bind(optional_string(input.original_title.clone()))
@@ -186,6 +227,7 @@ async fn create_game(pool: &Pool<Sqlite>, input: GameInput) -> CmdResult<Game> {
     .bind(optional_string(input.notes.clone()))
     .bind(optional_string(input.vndb_id.clone()))
     .bind(optional_string(input.bangumi_id.clone()))
+    .bind(optional_string(input.twodfan_id.clone()))
     .bind(&now)
     .fetch_one(&mut *tx)
     .await?;
@@ -338,6 +380,7 @@ async fn update_game(pool: &Pool<Sqlite>, id: i64, patch: GamePatch) -> CmdResul
     set_nullable!(patch.notes, "notes");
     set_nullable!(patch.vndb_id, "vndb_id");
     set_nullable!(patch.bangumi_id, "bangumi_id");
+    set_nullable!(patch.twodfan_id, "twodfan_id");
 
     if let Some(last_played_at) = patch.last_played_at.as_ref() {
         if let Some(value) = last_played_at.as_deref() {
@@ -509,6 +552,9 @@ mod tests {
             .connect("sqlite::memory:")
             .await.unwrap();
         sqlx::raw_sql(include_str!("../../migrations/0001_init.sql"))
+            .execute(&pool).await.unwrap();
+        // `SELECT_GAME` reads `twodfan_id`, which migration 5 adds.
+        sqlx::raw_sql(include_str!("../../migrations/0005_twodfan_topics.sql"))
             .execute(&pool).await.unwrap();
         pool
     }

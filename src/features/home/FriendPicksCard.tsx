@@ -48,7 +48,7 @@ function PublishedPicks({ accountId, games }: { accountId: string; games: readon
     <ul className="divide-y divide-border">
       {picks.map(({ game, friend, rating }) => <li key={game.id} className="flex min-w-0 items-center gap-3 px-4 py-3">
         <Link to={`/library/${game.id}`} aria-label={`查看 ${game.title}`} className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <CoverImage gameId={game.id} path={game.coverPath} alt="" fallbackText="" className="h-full w-full object-cover" />
+          <CoverImage gameId={game.id} path={game.coverPath} thumbnail alt="" fallbackText="" className="h-full w-full object-cover" />
         </Link>
         <div className="min-w-0 flex-1">
           <Link to={`/library/${game.id}`} title={game.title} className="block truncate rounded text-sm font-medium hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{game.title}</Link>

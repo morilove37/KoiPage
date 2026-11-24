@@ -9,7 +9,7 @@ import { useToast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { BackButton } from "@/components/ui/back-button";
 import { EmptyState } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { LabeledSelect } from "@/components/ui/select";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -18,16 +18,21 @@ import { GeometryIcon } from '@/components/ui/geometry-icon';
 import { useLocalizedTags } from "@/lib/localization";
 import {
   gamesDelete,
-  gamesList,
   gamesStats,
-  gamesTagsGet,
-  tagsList,
   gameUpdate,
-  settingsGet,
   settingsSet,
   ready,
 } from "@/lib/db";
 import { invoke } from '@/lib/logging';
+import {
+  applyLibraryFolders,
+  ensureLibraryData,
+  readLibraryFolders,
+  refreshLibraryData,
+  setLibraryGames,
+  setLibraryStats,
+  useLibraryDataStore,
+} from "./data-store";
 import { useGameLauncher } from '@/features/launch/useGameLauncher';
 import LaunchDialog from '@/features/launch/LaunchDialog';
 import { useAppStore } from "@/store/app";
@@ -38,7 +43,7 @@ import {
   formatPlayTime,
   isFavorite,
 } from "@/types/game";
-import type { Game, GameInput, GameStats, Tag } from "@/types/game";
+import type { Game, GameInput, Tag } from "@/types/game";
 
 import { gamesBatchUpdate } from "./api";
 import type { LibraryBatchPatch } from "./api";
@@ -53,6 +58,7 @@ import { contextMenuTargets, gameContextActions, isContextMenuCurrent } from './
 import type { GameContextActionId } from './context-menu';
 import { canOpenLibraryContextMenu, focusLibraryModal, LIBRARY_MODAL_SELECTOR } from './modal-boundary';
 import type { LibraryModalState } from './modal-boundary';
+import { acceptsLibraryShortcut, libraryKeyIntent, nextFocusIndex, rowFocusIndex } from './keyboard';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH } from './render-window';
 import { FolderPanel } from "./FolderPanel";
 import { FolderTile } from './FolderTile';
@@ -61,7 +67,7 @@ import { FolderGamePicker } from './FolderGamePicker';
 import { FolderMoveDialog } from './FolderMoveDialog';
 import { canResetFolder, folderStatistics, moveFolder, replaceFolderGames, resetEmptyFolder } from './folder-operations';
 import { useFolderDrag } from './useFolderDrag';
-import { assignFolder, FOLDERS_KEY, matchesFolder, parseFolders, groupBySociety, matchesSociety, folderPath, getFolderMode, selectFolderMode } from "./folders";
+import { assignFolder, FOLDERS_KEY, matchesFolder, groupBySociety, matchesSociety, folderPath, getFolderMode, selectFolderMode } from "./folders";
 import type { LibraryFolder } from "./folders";
 import ScanDialog from "@/features/scan/ScanDialog";
 import BatchImportDialog from "@/features/scan/BatchImportDialog";
@@ -130,13 +136,29 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const setSort = useAppStore((s) => s.setSort);
   const playTimeRevision = useAppStore((s) => s.playTimeRevision);
 
-  const [games, setGames] = useState<Game[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [links, setLinks] = useState<Array<[number, number]>>([]);
-  const [stats, setStats] = useState<GameStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [folders, setFolders] = useState<LibraryFolder[]>([]);
+  // The rows are shared with 首页 and 游戏文件夹 through this store, so coming
+  // back to 游戏库 paints the cached grid immediately instead of reloading it
+  // from the Rust commands behind a "载入中…" shell.
+  const games = useLibraryDataStore(state => state.games);
+  const tags = useLibraryDataStore(state => state.tags);
+  const links = useLibraryDataStore(state => state.links);
+  const stats = useLibraryDataStore(state => state.stats);
+  const folders = useLibraryDataStore(state => state.folders);
+  const foldersLoaded = useLibraryDataStore(state => state.foldersLoaded);
+  const loading = useLibraryDataStore(state => state.loading);
+  const refreshing = useLibraryDataStore(state => state.refreshing);
+  const loadError = useLibraryDataStore(state => state.error);
+  /**
+   * Failures of an action on this page (delete, batch edit, folder save) are
+   * local: they must not be confused with "the library failed to load", which
+   * the store reports and which survives navigation.
+   */
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? loadError;
+  const setError = setActionError;
+  const setGames = setLibraryGames;
+  const setStats = setLibraryStats;
+  const setFolders = applyLibraryFolders;
   const customMode = customFolderView ? getFolderMode(folders,activeFolder) : null;
   const folderOverview = folderPage && (folderTab === 'society' && activeSociety === null || folderTab === 'status' && activeStatus === null || customFolderView && customMode !== 'games' && customMode !== 'mixed');
   const [pickerFolderId, setPickerFolderId] = useState<string | null>(null);
@@ -146,7 +168,6 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   useEffect(()=>{if(!folderUndo)return;const timer=window.setTimeout(()=>setFolderUndo(null),8000);return()=>window.clearTimeout(timer);},[folderUndo]);
   const [folderTarget, setFolderTarget] = useState('');
   const [folderBusy, setFolderBusy] = useState(false);
-  const [foldersLoaded, setFoldersLoaded] = useState(false);
   const folderSaving = useRef(false);
   const folderRevision = useRef(0);
 
@@ -188,6 +209,19 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const batchPending = useRef(false);
   const [metadataEditGame, setMetadataEditGame] = useState<Game | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  /**
+   * Grid container, read on demand to translate ArrowUp/ArrowDown into "one
+   * visual row" instead of "one item". Reading `grid-template-columns` at key
+   * time keeps it correct across window resizes without a ResizeObserver.
+   */
+  const gridRef = useRef<HTMLDivElement>(null);
+  const gridColumns = () => {
+    const grid = gridRef.current;
+    if (!grid || typeof window === 'undefined') return 1;
+    const tracks = window.getComputedStyle(grid).gridTemplateColumns;
+    const count = tracks.split(' ').filter(Boolean).length;
+    return count > 0 ? count : 1;
+  };
   const restoredScroll = useRef(false);
   useEffect(() => {
     const main = rootRef.current?.closest("main");
@@ -245,32 +279,38 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /**
+   * Roving focus for keyboard navigation. `-1` means nothing is focused yet;
+   * the index refers to the currently *rendered* slice of the visible list.
+   */
+  const [focusIndex, setFocusIndex] = useState(-1);
+  /** The `?` shortcut and the header button both open this cheat sheet. */
+  const [keyboardHelp, setKeyboardHelp] = useState(false);
 
+  /**
+   * Re-read the shared rows, plus the folder definitions on 游戏文件夹.
+   *
+   * `refreshLibraryData` keeps whatever is already cached on screen while the
+   * new rows arrive, so every caller that used to blank the grid — the refresh
+   * button, a delete, a batch edit, a launch, a metadata apply — now swaps the
+   * data in place instead of flashing "载入中…".
+   */
   const reload = useCallback(async () => {
     const revision = folderRevision.current;
-    setLoading(true);
     setError(null);
-    try {
-      const [nextGames, nextTags, nextLinks, nextStats, , savedFolders] = await Promise.all([
-        gamesList(),
-        tagsList(),
-        gamesTagsGet(),
-        gamesStats(),
-        loadInstallationState(),
-        folderPage ? settingsGet(FOLDERS_KEY) : Promise.resolve(null),
-      ]);
-      setGames(nextGames);
-      setTags(nextTags);
-      setLinks(nextLinks);
-      setStats(nextStats);
-      if (!folderSaving.current && revision === folderRevision.current) {
-        setFolders(parseFolders(savedFolders));
-        setFoldersLoaded(true);
-      }
-    } catch (cause) {
+    const foldersTask = folderPage ? readLibraryFolders() : Promise.resolve(null);
+    await Promise.all([
+      refreshLibraryData(),
+      loadInstallationState().catch(cause => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }),
+    ]);
+    const nextFolders = await foldersTask.catch(cause => {
       setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
+      return null;
+    });
+    if (nextFolders && !folderSaving.current && revision === folderRevision.current) {
+      applyLibraryFolders(nextFolders);
     }
   }, [folderPage]);
   const launcher = useGameLauncher(() => { void reload(); });
@@ -309,9 +349,27 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     if(await saveFolders(folderUndo.before))setImportNotice('已撤销文件夹操作。');
   };
 
+  // Join the startup prefetch. Mounting this page never refetches rows that are
+  // already cached, which is what made every navigation show "载入中…".
   useEffect(() => {
-    void reload();
-  }, [reload, playTimeRevision]);
+    void ensureLibraryData();
+    void loadInstallationState().catch(cause => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    if (folderPage && !useLibraryDataStore.getState().foldersLoaded) {
+      void readLibraryFolders().then(applyLibraryFolders).catch(cause => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    }
+  }, [folderPage]);
+
+  /** Play sessions changed (game exited, metadata refreshed): swap rows quietly. */
+  const seenPlayTimeRevision = useRef(playTimeRevision);
+  useEffect(() => {
+    if (seenPlayTimeRevision.current === playTimeRevision) return;
+    seenPlayTimeRevision.current = playTimeRevision;
+    void refreshLibraryData();
+  }, [playTimeRevision]);
 
   /** gameId -> tagIds, built once per link change instead of per card. */
   const tagsByGame = useMemo(() => {
@@ -516,7 +574,6 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
       return next;
     });
   }, []);
-
   /** Select every game currently passing the filters. */
   const selectAllVisible = useCallback(() => {
     setSelectedIds(new Set(visibleGames.map((game) => game.id)));
@@ -621,10 +678,10 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
     folderPicker: Boolean(pickerFolderId), folderMove: Boolean(movingFolderId), metadataImport: Boolean(metadataGame),
     batchImport: Boolean(batchDrafts), deleteConfirmation: confirmBulkDelete,
   };
-  const pendingLibraryModal = Object.values(libraryModals).some(Boolean);
+  // The help sheet counts as an open modal so shortcuts cannot fire behind it.
+  const pendingLibraryModal = Object.values(libraryModals).some(Boolean) || keyboardHelp;
   const contextScope = JSON.stringify([renderScope, viewMode, selectMode, [...selectedIds]]);
-  const contextMenuCurrent = contextMenu && !pendingLibraryModal && isContextMenuCurrent(contextMenu, contextScope, visibleGames);
-  const closeContextMenu = useCallback((restoreFocus = true) => {
+  const contextMenuCurrent = contextMenu && !pendingLibraryModal && isContextMenuCurrent(contextMenu, contextScope, visibleGames);  const closeContextMenu = useCallback((restoreFocus = true) => {
     const trigger = contextTrigger.current;
     if (restoreFocus && trigger?.isConnected && !document.querySelector(LIBRARY_MODAL_SELECTOR)) {
       trigger.focus({ preventScroll: true });
@@ -652,6 +709,115 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   useLayoutEffect(() => {
     if (launcher.dialogGame || metadataEditGame) focusLibraryModal(document);
   }, [launcher.dialogGame?.id, metadataEditGame?.id]);
+
+  // ---------------------------------------------------------------------
+  // Keyboard navigation
+  //
+  // Arrow keys move a roving focus over the rendered slice — left/right step one
+  // item, up/down step a visual row in the grid — Enter opens the detail page,
+  // F toggles the favourite, L launches, X toggles multi-select and 1-6 set a
+  // status. The handler reads everything through a ref so it can be registered
+  // once: `applyBatch`/`toggleFavorite` change identity on every render, and
+  // re-subscribing would drop keys typed mid-render.
+  // ---------------------------------------------------------------------
+  const keyboard = useRef({
+    games: [] as Game[], focus: -1, selectMode: false, blocked: true,
+    open: (_game: Game) => {}, favorite: (_game: Game) => {}, launch: (_game: Game) => {},
+    toggle: (_id: number) => {}, selectAll: () => {}, exit: () => {},
+    status: (_game: Game, _status: GameStatus) => {}, setFocus: (_index: number) => {}, help: () => {},
+    columnsOf: (): number => 1,
+  });
+  keyboard.current = {
+    games: renderedGames, focus: focusIndex, selectMode, blocked: loading || folderOverview || pendingLibraryModal,
+    open: game => navigate(`/library/${game.id}`),
+    favorite: game => void toggleFavorite(game),
+    launch: game => void launcher.launch(game),
+    toggle: id => { if (!selectMode) setSelectMode(true); toggleSelected(id); },
+    selectAll: selectAllVisible,
+    exit: () => { if (selectMode) exitSelectMode(); else setFocusIndex(-1); },
+    status: (game, status) => {
+      if (selectMode && selectedIds.size > 0) void applyBatch({ status }, [...selectedIds]);
+      else if (game.status !== status) void applyBatch({ status }, [game.id]);
+    },
+    setFocus: index => setFocusIndex(index),
+    help: () => setKeyboardHelp(true),
+    columnsOf: gridColumns,
+  };
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const state = keyboard.current;
+      if (state.blocked) return;
+      if (!acceptsLibraryShortcut(event.target)) return;
+      // Escape already exits full screen at the app level; do not fight it.
+      if (event.key === 'Escape' && document.fullscreenElement) return;
+      const intent = libraryKeyIntent(event, { selectMode: state.selectMode });
+      if (!intent) return;
+      const length = state.games.length;
+      /** Move the roving focus to `next` and pull the DOM focus along with it. */
+      const focusAt = (next: number) => {
+        if (next < 0 || next >= length) return;
+        event.preventDefault();
+        const game = state.games[next];
+        if (!game) return;
+        const card = rootRef.current?.querySelector<HTMLElement>(`[data-game-entry="${game.id}"]`);
+        // Keep the DOM focus in sync even when the index did not move: after a
+        // view or filter switch the index can already be right while the focus
+        // sits on a toolbar button.
+        if (next !== state.focus) state.setFocus(next);
+        if (card && document.activeElement !== card) card.focus({ preventScroll: false });
+      };
+      if (intent.type === 'selectAll') {
+        event.preventDefault(); state.selectAll(); return;
+      }
+      if (intent.type === 'escape') {
+        if (!state.selectMode && state.focus < 0) return;
+        event.preventDefault(); state.exit(); return;
+      }
+      if (intent.type === 'help') {
+        event.preventDefault(); state.help(); return;
+      }
+      if (intent.type === 'first' || intent.type === 'last') {
+        if (!length) return;
+        focusAt(intent.type === 'first' ? 0 : length - 1);
+        return;
+      }
+      if (intent.type === 'move') {
+        focusAt(nextFocusIndex(state.focus, intent.delta, length));
+        return;
+      }
+      if (intent.type === 'row') {
+        // Grid: one visual row at a time. List view reports a single column, so
+        // up/down simply walk the list there.
+        focusAt(rowFocusIndex(state.focus, intent.delta, length, state.columnsOf()));
+        return;
+      }
+      if (intent.type === 'page') {
+        focusAt(nextFocusIndex(state.focus, intent.delta * 10, length));
+        return;
+      }
+      const game = state.games[state.focus];
+      if (!game) return;
+      event.preventDefault();
+      if (intent.type === 'open') state.open(game);
+      else if (intent.type === 'favorite') state.favorite(game);
+      else if (intent.type === 'launch') state.launch(game);
+      else if (intent.type === 'toggleSelect') state.toggle(game.id);
+      else if (intent.type === 'status') state.status(game, intent.status);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  /** Keep the roving index inside the rendered slice as filters change. */
+  useEffect(() => {
+    setFocusIndex(current => (current >= renderedGames.length ? renderedGames.length - 1 : current));
+  }, [renderedGames.length]);
+  /**
+   * The card that is tabbable. With no roving focus yet, the first entry keeps
+   * Tab entry into the grid working; `onFocusEntry` then adopts that index.
+   */
+  const focusedGameId = (focusIndex >= 0 ? renderedGames[focusIndex] : renderedGames[0])?.id;
+
   const openContextMenu = (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     event.preventDefault(); event.stopPropagation();
     if (loading || folderOverview || !canOpenLibraryContextMenu(libraryModals, document)) return;
@@ -719,8 +885,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
   };
 
   const hasFilters =
-    installation !== "all" ||
-    search.trim() !== "" ||
+    installation !== "all" ||    search.trim() !== "" ||
     statuses.length > 0 ||
     favoriteOnly ||
     developerNames.length > 0 ||
@@ -788,7 +953,8 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
               多选
             </Button>
           ))}
-          <Button variant="outline" disabled={folderBusy} onClick={() => void reload()} loading={loading}>
+          {!folderOverview ? <Button variant="outline" onClick={() => setKeyboardHelp(true)} title="查看键盘快捷键（也可以按 ? 打开）">键盘</Button> : null}
+          <Button variant="outline" disabled={folderBusy} onClick={() => void reload()} loading={loading || refreshing}>
             刷新
           </Button>
         </div>
@@ -1026,7 +1192,7 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
           }
         />
       ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+        <div ref={gridRef} className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
           {renderedGames.map((game) => (
             <GameCard
               key={game.id}
@@ -1038,6 +1204,8 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              focused={game.id === focusedGameId}
+              onFocusEntry={() => setFocusIndex(renderedGames.indexOf(game))}
               onOpenContextMenu={openContextMenu}
               dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
@@ -1069,6 +1237,8 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
               selectable={selectMode}
               selected={selectedIds.has(game.id)}
               onToggleSelected={toggleSelected}
+              focused={game.id === focusedGameId}
+              onFocusEntry={() => setFocusIndex(renderedGames.indexOf(game))}
               onOpenContextMenu={openContextMenu}
               dragInteraction={folderPage?folderDrag.gameProps(selectedIds.has(game.id)?visibleSelection(selectedIds,visibleGames):[game.id]):undefined}
             />
@@ -1135,6 +1305,46 @@ export default function LibraryPage({ folderPage = false }: { folderPage?: boole
 
       {batchDrafts ? <BatchImportDialog drafts={batchDrafts} onFinished={handleBatchFinished}
         onClose={() => setBatchDrafts(null)} onManual={handleBatchManual} /> : null}
+
+      {/*
+        Keyboard cheat sheet. Discoverability is the weak point of a shortcut
+        system, so the same list is reachable from the header and from `?`.
+        The keys are read-only documentation; the handler in keyboard.ts is the
+        single source of truth for behaviour.
+      */}
+      <Dialog
+        open={keyboardHelp}
+        onClose={() => setKeyboardHelp(false)}
+        title="键盘操作"
+        description="在游戏库或文件夹页按这些键，焦点所在的那部游戏会被操作。"
+        className="max-w-md"
+        footer={<Button type="button" variant="outline" onClick={() => setKeyboardHelp(false)}>关闭</Button>}
+      >
+        <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-2 text-sm">
+          {[
+            ['← / →', '上一部 / 下一部'],
+            ['↑ / ↓', '上一行 / 下一行（列表视图为上一部 / 下一部）'],
+            ['Page Up / Page Down', '上翻 / 下翻十部'],
+            ['Home / End', '跳到第一部 / 最后一部'],
+            ['Enter', '打开详情'],
+            ['L', '按已保存的启动配置启动'],
+            ['F', '收藏或取消收藏'],
+            ['X', '多选这一部（自动进入多选）'],
+            ['Ctrl / Cmd + A', '全选当前筛选结果（仅多选时）'],
+            ['1 – 6', `设为${GAME_STATUSES.map((status) => GAME_STATUS_LABELS[status]).join(' / ')}`],
+            ['Esc', '退出多选，或清除键盘焦点'],
+            ['? 或 F1', '打开这份说明'],
+          ].map(([keys, meaning]) => (
+            <div key={keys} className="contents">
+              <dt className="justify-self-end whitespace-nowrap rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">{keys}</dt>
+              <dd className="text-muted-foreground">{meaning}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          输入框和下拉框里不响应这些快捷键；全屏时 Esc 仍然用于退出全屏。
+        </p>
+      </Dialog>
 
       {/*
         Bulk-delete confirmation. The body names the games rather than only

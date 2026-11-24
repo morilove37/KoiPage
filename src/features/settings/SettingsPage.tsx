@@ -99,6 +99,7 @@ import { AnnouncementContact } from '@/features/announcements/AnnouncementContac
 import { AccentSettings } from './AccentSettings';
 import { GlassAppearanceSettings } from './GlassAppearanceSettings';
 import { LogSettings } from './LogSettings';
+import { ProxySettings } from './ProxySettings';
 import { ResourceStorageSettings } from './ResourceStorageSettings';
 import { AiSettings } from '@/features/ai/AiSettings';
 import type { SettingsSectionId } from './SettingsSectionNav';
@@ -1284,6 +1285,9 @@ export default function SettingsPage() {
         <WindowSection />
         <LocalizationSection />
         <MetadataSection />
+        <Section id="settings-proxy" title="网络代理">
+          <ProxySettings />
+        </Section>
         <Section id="settings-ai" title="AI 助手"><AiSettings /></Section>
         <Section id="settings-bangumi-sync" title="Bangumi 双向同步"><BangumiSyncSettings /></Section>
 

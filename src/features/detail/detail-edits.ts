@@ -1,7 +1,7 @@
 import type { GamePatch } from '@/types/game';
 
 export const detailFields = {
-  info: ['title', 'originalTitle', 'developer', 'releaseDate', 'rating', 'coverPath', 'description', 'notes', 'vndbId'],
+  info: ['title', 'originalTitle', 'developer', 'releaseDate', 'rating', 'coverPath', 'description', 'notes', 'vndbId', 'twodfanId'],
   files: ['installPath', 'exePath', 'launchArgs', 'workdir', 'savePath'],
   tags: ['tags', 'tagNames'],
 } as const satisfies Record<string, readonly (keyof GamePatch)[]>;

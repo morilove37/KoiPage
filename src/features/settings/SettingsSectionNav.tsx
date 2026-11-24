@@ -7,6 +7,7 @@ const SECTIONS = [
   { id: 'settings-window', label: '窗口' },
   { id: 'settings-localization', label: '资料汉化' },
   { id: 'settings-metadata', label: '资料匹配' },
+  { id: 'settings-proxy', label: '网络代理' },
   { id: 'settings-ai', label: 'AI 助手' },
   { id: 'settings-bangumi-sync', label: 'Bangumi 同步' },
   { id: 'settings-birthdays', label: '角色生日' },

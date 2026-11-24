@@ -131,13 +131,15 @@ fn request_with_token(
     {
         return Err(super::CmdError("Bangumi 令牌仅可用于官方 API".into()));
     }
-    let client = reqwest::Client::builder()
-        .user_agent(super::USER_AGENT)
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|_| super::CmdError("无法创建 Bangumi 资料连接".into()))?;
+    let client = crate::net::proxy::apply(
+        reqwest::Client::builder()
+            .user_agent(super::USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .timeout(std::time::Duration::from_secs(20)),
+    )
+    .build()
+    .map_err(|_| super::CmdError("无法创建 Bangumi 资料连接".into()))?;
     let mut request = client
         .request(method, url)
         .header("Accept", "application/json");

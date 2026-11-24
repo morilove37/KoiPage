@@ -43,4 +43,4 @@ Locale Emulator、Magpie 和 7-Zip 用于本地转区、窗口缩放、解压等
 
 GitHub：https://github.com/morilove37/KoiPage。版本检查、源码及安装包访问会向 GitHub 及其分发基础设施发送必要网络请求和请求头；恋页更新请求不包含完整游戏库。GitHub 隐私说明：https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement。
 
-你自行通过邮箱、GitHub、QQ群或其他平台反馈问题时，平台会按其规则处理账号、联系信息和你提交的内容。请先检查截图、日志和附件，不要发送密码、令牌、邀请码或无关私人资料。隐私或注销申请请优先使用 3375482795@qq.com，不要把账号隐私发布在公开 Issues。
+你自行通过邮箱、GitHub、QQ群或其他平台反馈问题时，平台会按其规则处理账号、联系信息和你提交的内容。请先检查截图、日志和附件，不要发送密码、令牌或无关私人资料。隐私或注销申请请优先使用 3375482795@qq.com，不要把账号隐私发布在公开 Issues。

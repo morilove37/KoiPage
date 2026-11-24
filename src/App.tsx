@@ -8,16 +8,11 @@ import { GeometryIcon } from "@/components/ui/geometry-icon";
 import type { GeometryIconName } from "@/components/ui/geometry-icon";
 import { cn } from "@/lib/utils";
 import { loadBackdrop, syncBackdrop } from "@/lib/backdrop";
+import { appearanceApplied } from "@/lib/startup-appearance";
 import { syncAssetScope } from "@/lib/db";
 import { loadLocalizationPreference } from "@/lib/localization";
 import { BRAND } from "@/lib/brand";
-import { UpdateDialog } from "@/features/updates/UpdateDialog";
-import { AnnouncementDialog } from "@/features/announcements/AnnouncementDialog";
-import { BirthdayCelebrationDialog } from "@/features/birthdays/BirthdayCelebrationDialog";
 import { CloseBehaviorDialog } from "@/features/window/CloseBehaviorDialog";
-import { BangumiSyncRuntime } from "@/features/bangumi-sync/BangumiSyncRuntime";
-import { FriendsRuntime } from "@/features/friends/FriendsRuntime";
-import { AiAssistant } from "@/features/ai/AiAssistant";
 import type { SyncReport } from "@/features/bangumi-sync/api";
 import type { RefreshState } from "@/features/metadata/metadata-refresh-state";
 import { useAppStore } from "@/store/app";
@@ -47,6 +42,35 @@ const TagsPage = lazy(() => import("@/features/tags/TagsPage"));
 const SettingsPage = lazy(() => import("@/features/settings/SettingsPage"));
 const FriendsPage = lazy(() => import("@/features/friends/FriendsPage"));
 const FriendProfilePage = lazy(() => import("@/features/friends/FriendProfilePage"));
+
+/**
+ * Resident shell components (dialogs + background runtimes) are code-split too.
+ *
+ * None of them can paint anything before the user acts, yet importing them
+ * eagerly dragged their whole dependency graph — the AI agent, the birthday and
+ * announcement dialogs with every release note, the friends and Bangumi
+ * runtimes — into the entry chunk that blocks the first paint. Each lazy()
+ * starts fetching as soon as the shell renders, so they are ready long before
+ * they are needed, just off the critical path.
+ */
+const UpdateDialog = lazy(() =>
+  import("@/features/updates/UpdateDialog").then((module) => ({ default: module.UpdateDialog })),
+);
+const AnnouncementDialog = lazy(() =>
+  import("@/features/announcements/AnnouncementDialog").then((module) => ({ default: module.AnnouncementDialog })),
+);
+const BirthdayCelebrationDialog = lazy(() =>
+  import("@/features/birthdays/BirthdayCelebrationDialog").then((module) => ({ default: module.BirthdayCelebrationDialog })),
+);
+const BangumiSyncRuntime = lazy(() =>
+  import("@/features/bangumi-sync/BangumiSyncRuntime").then((module) => ({ default: module.BangumiSyncRuntime })),
+);
+const FriendsRuntime = lazy(() =>
+  import("@/features/friends/FriendsRuntime").then((module) => ({ default: module.FriendsRuntime })),
+);
+const AiAssistant = lazy(() =>
+  import("@/features/ai/AiAssistant").then((module) => ({ default: module.AiAssistant })),
+);
 
 interface NavItem {
   to: string;
@@ -137,6 +161,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Bind the library's unbound games to 2DFan in the background, so opening a
+    // game's guide tab never pays for the lookup. Delayed a few seconds so the
+    // first paint, the library query and the cover cache all get the network and
+    // the CPU first; failures are expected (2DFan is often unreachable) and must
+    // stay silent, because the guide panel reports them where they matter.
+    const timer = window.setTimeout(() => {
+      void invoke("twodfan_autobind_sweep").catch((cause) => {
+        console.warn("[twodfan] background auto-bind failed:", cause);
+      });
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     // Capture before React and portal handlers: right-clicking a dialog scrim
     // must not dismiss it, and the WebView context menu must stay closed.
     const blockRightClick = (event: MouseEvent) => {
@@ -153,15 +191,16 @@ export default function App() {
     };
   }, []);
 
-  // Runtime scope is not persisted; restore access to saved cover files and to
-  // the stored glass wallpaper (`main.tsx` already granted the latter before the
-  // first paint — this is a cheap idempotent top-up for the case where the shell
-  // mounted without that bootstrap succeeding).
+  // Runtime scope is not persisted; restore access to saved cover files. The
+  // stored glass wallpaper was already granted before the first paint, so only
+  // re-grant it when that bootstrap did not run (it failed, or a hot reload
+  // remounted the shell without re-running `main.tsx`).
   useEffect(() => {
     void loadLocalizationPreference().catch(cause => console.warn("[localization] settings:", cause));
     syncAssetScope().catch((cause) => {
       console.warn("[asset-scope] sync failed:", cause);
     });
+    if (appearanceApplied()) return;
     void (async () => {
       try {
         const stored = await loadBackdrop();
@@ -206,7 +245,14 @@ export default function App() {
           ))}
         </nav>
 
-        <AiAssistant />
+        {/* Reserves the button's exact footprint (h-10 + mb-2) so the sidebar
+            footer does not jump while the AI chunk loads. The boundary keeps a
+            failed chunk from taking the shell down with it. */}
+        <ErrorBoundary label="AI 助手">
+          <Suspense fallback={<div aria-hidden="true" className="mx-2 mb-2 h-10 shrink-0" />}>
+            <AiAssistant />
+          </Suspense>
+        </ErrorBoundary>
         <div className="flex min-w-0 items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
           <button
             type="button"
@@ -257,11 +303,22 @@ export default function App() {
           </Suspense>
         </ErrorBoundary>
       </main>
-      <BangumiSyncRuntime />
-      <FriendsRuntime />
-      <UpdateDialog />
-      <AnnouncementDialog />
-      <BirthdayCelebrationDialog />
+      {/* A chunk that fails to load rejects the lazy() promise; without a
+          boundary here that would unmount the whole shell and leave a blank
+          window — the same failure the routed boundary above guards against. */}
+      <ErrorBoundary label="应用组件">
+        <Suspense fallback={null}>
+          <BangumiSyncRuntime />
+          <FriendsRuntime />
+          <UpdateDialog />
+          <AnnouncementDialog />
+          <BirthdayCelebrationDialog />
+        </Suspense>
+      </ErrorBoundary>
+      {/* Eager on purpose: Rust prevent_close()s the window and emits
+          `close-requested`; if this listener were still loading, an early click
+          on the close button would be swallowed and the window could not be
+          closed. It shares Dialog/Button/db with the entry chunk anyway. */}
       <CloseBehaviorDialog />
     </div>
   );

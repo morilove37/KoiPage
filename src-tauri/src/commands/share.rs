@@ -107,9 +107,14 @@ pub async fn share_images_upload(pages: Vec<Vec<u8>>) -> CmdResult<String> {
     let manifest: Vec<_> = files.iter().map(|(path, data, mime)| serde_json::json!({
         "path": path, "size": data.len(), "contentType": mime, "hash": format!("sha256:{:x}", Sha256::digest(data))
     })).collect();
-    let client = reqwest::Client::builder().user_agent(crate::metadata::USER_AGENT)
-        .redirect(reqwest::redirect::Policy::none()).timeout(std::time::Duration::from_secs(90))
-        .build().map_err(|error| CmdError(error.to_string()))?;
+    let client = crate::net::proxy::apply(
+        reqwest::Client::builder()
+            .user_agent(crate::metadata::USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(90)),
+    )
+    .build()
+    .map_err(|error| CmdError(error.to_string()))?;
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Site { url: String, slug: String, expires_at: String }

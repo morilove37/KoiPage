@@ -127,7 +127,7 @@ export default function FriendsPage(){
   const filteredFriends=friends.filter(friend=>(!onlineOnly||friend.online)&&`${friend.nickname}\n${friend.username}`.toLocaleLowerCase().includes(friendQuery.trim().toLocaleLowerCase()));
   const librarySynced=formatSyncTime(status?.librarySyncedAt),historySynced=formatSyncTime(status?.historySyncedAt);
   return <div className={'mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8'}>
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友 <Badge variant="secondary">内测</Badge></h1><p className="mt-1 text-sm text-muted-foreground">与同好相聚，发现彼此的游戏时光。</p></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">好友</h1><p className="mt-1 text-sm text-muted-foreground">与同好相聚，发现彼此的游戏时光。</p></div>
       <div className="flex items-center gap-2">{account?<Button variant="outline" disabled={busy||status?.deletionPending} onClick={()=>void perform(api.logoutFriends,'已退出登录。',true)}>退出登录</Button>:null}</div></div>
     {!account?<div className="text-xs text-muted-foreground"><LegalDocuments/></div>:null}
     {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>:null}
@@ -140,7 +140,7 @@ export default function FriendsPage(){
       <Button size="sm" variant="outline" className="mt-3" disabled={busy} onClick={()=>void perform(api.friendsStatus)}>刷新连接状态</Button>
     </section>:null}
 
-    {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取内测配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友内测</CardTitle></CardHeader><CardContent>
+    {!status?<p role="status" className="py-8 text-center text-muted-foreground">正在读取好友配置…</p>:!account?<Card><CardHeader><CardTitle>加入恋页好友</CardTitle></CardHeader><CardContent>
       <div className="mb-5 flex gap-2">{(['login','register','reset'] as const).map(item=><Button key={item} size="sm" variant={mode===item?'default':'outline'} disabled={busy} onClick={()=>{setMode(item);setPassword('');setRegistrationConsent(emptyRegistrationConsent());setError('');}}>{item==='login'?'登录':item==='register'?'注册':'重置密码'}</Button>)}</div>
       {mode==='register'?<p className="mb-4 max-w-lg text-xs leading-relaxed text-muted-foreground">无需邀请码，每个公网 IP 累计最多注册 5 个账号，注销不会重置名额；提交后若连接中断，可先用原用户名和密码尝试登录。</p>:null}
       <form className="grid max-w-lg gap-4" onSubmit={e=>{e.preventDefault();if(requiresConsent&&(!isRegistrationConsentValid(registrationConsent)||!isPolicyService(config?.serverUrl??''))){setError('请先阅读并同意本服务当前版本的协议、隐私政策和出境告知。');return;}const attempt={mode,username,password,nickname,resetCode,consent:requiresConsent?registrationConsent:undefined};setPassword('');setResetCode('');void perform(()=>api.authenticateFriends(attempt),mode==='register'?'注册成功，已登录。':'已登录。',true);}}>

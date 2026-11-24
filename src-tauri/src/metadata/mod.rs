@@ -24,6 +24,7 @@ pub mod description;
 pub mod nextmoe;
 pub mod vndb;
 pub mod twodfan;
+pub mod twodfan_topics;
 pub mod verification;
 pub mod search_progress;
 
@@ -155,15 +156,19 @@ pub struct MetadataDetail {
 
 /// Shared HTTP client with the User-Agent our upstreams require.
 ///
-/// A single client is reused so connections are pooled across providers.
+/// A single client is reused so connections are pooled across providers. The
+/// user-configured proxy is attached here, which covers VNDB, Bangumi, NextMoe
+/// and 2DFan in one place.
 pub fn http_client() -> CmdResult<reqwest::Client> {
-    reqwest::Client::builder()
-        // VNDB and Bangumi both ask callers to identify themselves; a default
-        // reqwest UA is a common cause of unexplained 403s.
-        .user_agent(crate::metadata::USER_AGENT)
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|error| CmdError(format!("could not build http client: {error}")))
+    crate::net::proxy::apply(
+        reqwest::Client::builder()
+            // VNDB and Bangumi both ask callers to identify themselves; a default
+            // reqwest UA is a common cause of unexplained 403s.
+            .user_agent(crate::metadata::USER_AGENT)
+            .timeout(std::time::Duration::from_secs(20)),
+    )
+    .build()
+    .map_err(|error| CmdError(format!("could not build http client: {error}")))
 }
 
 /// 2DFan's image host returns 404 unless the request comes from the site.

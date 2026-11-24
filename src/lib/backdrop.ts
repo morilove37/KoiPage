@@ -42,6 +42,8 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { coverSrc } from './asset';
 import { settingsGet, settingsSet } from './db';
+import { snapshotValue } from './settings-snapshot';
+import type { SettingsSnapshot } from './settings-snapshot';
 
 /** Settings keys owned by this module. */
 export const BACKDROP_IMAGE_KEY = 'background_image_path';
@@ -265,9 +267,20 @@ export function clearBackdrop(): void {
 /**
  * Read the persisted backdrop. Never throws: a database failure degrades to
  * {@link DEFAULT_BACKDROP}, because a broken setting must not stop the render.
+ *
+ * `snapshot` is the startup settings read; passing it avoids four separate
+ * `settings_get` calls. Without one the keys are read directly.
  */
-export async function loadBackdrop(): Promise<BackdropSettings> {
+export async function loadBackdrop(snapshot?: SettingsSnapshot): Promise<BackdropSettings> {
   try {
+    if (snapshot) {
+      return parseBackdrop({
+        path: snapshotValue(snapshot, BACKDROP_IMAGE_KEY),
+        opacity: snapshotValue(snapshot, BACKDROP_OPACITY_KEY),
+        blur: snapshotValue(snapshot, BACKDROP_BLUR_KEY),
+        fit: snapshotValue(snapshot, BACKDROP_FIT_KEY),
+      });
+    }
     const [path, opacity, blur, fit] = await Promise.all([
       settingsGet(BACKDROP_IMAGE_KEY),
       settingsGet(BACKDROP_OPACITY_KEY),
@@ -300,9 +313,12 @@ export async function saveBackdrop(settings: BackdropSettings): Promise<void> {
  * Bootstrap: read the stored backdrop, grant read access to the image and paint
  * it. Returns the applied settings so callers (the settings page) can seed their
  * local state. Never throws.
+ *
+ * `snapshot` is the startup settings read; passing it keeps startup to a single
+ * settings query.
  */
-export async function initBackdrop(): Promise<BackdropSettings> {
-  const settings = await loadBackdrop();
+export async function initBackdrop(snapshot?: SettingsSnapshot): Promise<BackdropSettings> {
+  const settings = await loadBackdrop(snapshot);
   applyBackdrop(settings);
   syncBackdrop(settings.path);
   return settings;

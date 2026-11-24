@@ -129,8 +129,14 @@ fn verify_probe(message: &Value) -> CmdResult<()> {
 }
 async fn send_request(config: &Config, key: Option<String>, body: Value, cancel: Arc<Notify>) -> CmdResult<Value> {
     let work = async {
-        let client = reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(120))
-            .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| err("无法创建 AI 连接"))?;
+        let client = crate::net::proxy::apply(
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(120))
+                .redirect(reqwest::redirect::Policy::none()),
+        )
+        .build()
+        .map_err(|_| err("无法创建 AI 连接"))?;
         let mut request = client.post(format!("{}/chat/completions", config.base_url)).json(&body);
         if let Some(key) = key { request = request.bearer_auth(key); }
         let mut response = request.send().await.map_err(|e| if e.is_timeout() { err("AI 请求超时，请重试或更换模型") } else { err("无法连接 AI 接口，请检查地址、网络和证书") })?;

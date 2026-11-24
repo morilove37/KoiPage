@@ -3,7 +3,7 @@ import { useState } from "react";
 import { coverSrc } from "@/lib/asset";
 import { cn } from "@/lib/utils";
 import { useGameCover } from "@/features/covers/store";
-import { effectiveCoverPath } from "@/features/covers/model";
+import { effectiveCoverPath, coverThumbnailPath } from "@/features/covers/model";
 import type { CropRect } from "@/features/covers/model";
 import { useProtectedCover } from "@/lib/protected-cover";
 
@@ -24,6 +24,16 @@ export interface CoverImageProps {
   crop?: CropRect | null;
   /** Report decoded dimensions; null means the image failed to load. */
   onDimensions?: (size: { width: number; height: number } | null) => void;
+  /**
+   * Load the small cached copy for grid/list layouts.
+   *
+   * Managed covers are stored as full-size originals next to a 320px WebP
+   * thumbnail; lists only ever paint a few hundred pixels, so decoding the
+   * original wastes memory and time on every card. Ignored when the caller
+   * needs exact pixels (`onDimensions`) or an explicit crop, and never applied
+   * to remote or protected sources.
+   */
+  thumbnail?: boolean;
 }
 
 /**
@@ -34,18 +44,28 @@ export interface CoverImageProps {
  * instead of a silent broken image, so we swap to the same placeholder used for
  * "no cover".
  */
-export function CoverImage({ path, gameId, censored, ...props }: CoverImageProps) {
+export function CoverImage({ path, gameId, censored, thumbnail, ...props }: CoverImageProps) {
   const { preferences, loaded, error } = useGameCover(gameId);
-  const src = loaded ? coverSrc(effectiveCoverPath(path, preferences)) : undefined;
+  const effective = loaded ? effectiveCoverPath(path, preferences) : null;
+  // Crops are percentage-based so they work on the small copy too, but a
+  // dimension readout needs the real pixels — that path keeps the original.
+  const thumbnailPath = thumbnail && !props.onDimensions
+    ? coverThumbnailPath(effective)
+    : null;
+  const src = loaded ? coverSrc(thumbnailPath ?? effective) : undefined;
+  // Thumbnails are best-effort: a cover stored before they existed has no
+  // cached copy, so fall back to the original instead of a blank card.
+  const fallbackSrc = thumbnailPath ? coverSrc(effective) : undefined;
   // Remount the image state for each source. Resetting `failed` in an effect
   // races with cached image errors, which can otherwise leave a broken image.
-  return <CoverImageSource key={src ?? ""} src={src} {...props}
+  return <CoverImageSource key={src ?? ""} src={src} fallbackSrc={fallbackSrc} {...props}
     censored={censored ?? preferences.censored}
     fallbackText={!loaded ? error ? "封面设置读取失败" : "载入封面…" : props.fallbackText} />;
 }
 
 function CoverImageSource({
   src,
+  fallbackSrc,
   alt,
   className,
   fallbackClassName,
@@ -55,10 +75,13 @@ function CoverImageSource({
   onDimensions,
   censored = false,
   crop,
-}: Omit<CoverImageProps, "path"> & { src: string | undefined }) {
+}: Omit<CoverImageProps, "path"> & { src: string | undefined; fallbackSrc?: string }) {
   const [failed, setFailed] = useState(false);
   const [landscape, setLandscape] = useState(false);
-  const resolved = useProtectedCover(src);
+  // Set when the cached thumbnail is unusable (e.g. the cover predates it).
+  const [originalOnly, setOriginalOnly] = useState(false);
+  const activeSrc = originalOnly && fallbackSrc ? fallbackSrc : src;
+  const resolved = useProtectedCover(activeSrc);
 
   if (!resolved.src || failed) {
     return (
@@ -83,7 +106,13 @@ function CoverImageSource({
         if (fitLandscape) setLandscape(width > height);
         onDimensions?.({ width, height });
       }}
-      onError={() => { setFailed(true); onDimensions?.(null); }}
+      onError={() => {
+        // Thumbnails are best-effort: retry once with the stored original,
+        // then give up so a genuinely broken file still shows the placeholder.
+        if (fallbackSrc && !originalOnly) { setOriginalOnly(true); return; }
+        setFailed(true);
+        onDimensions?.(null);
+      }}
       className={crop ? "absolute max-w-none" : className}
       data-landscape={fitLandscape ? landscape : undefined}
       data-censored={censored || undefined}

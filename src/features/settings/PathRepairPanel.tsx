@@ -11,10 +11,20 @@ import { useAppStore } from '@/store/app';
 
 interface PathCheck { id: number; title: string; installPath: string; exePath: string | null; state: 'archived' | 'ok' | 'offline' | 'missingFolder' | 'missingExe' }
 interface Relocation { id: number; title: string; oldInstallPath: string; newInstallPath: string; newExePath: string | null; newWorkdir: string | null; newSavePath: string | null; ready: boolean; message: string; fingerprint: string }
+interface HealthIssue { id: number; title: string; installPath: string; exePath: string | null; coverPath: string | null; problems: HealthProblem[] }
+interface HealthReport { checked: number; healthy: number; missingInstall: number; missingExe: number; missingCover: number; duplicateInstall: number; archived: number; issues: HealthIssue[] }
+type HealthProblem = 'missingInstall' | 'missingExe' | 'missingCover' | 'duplicateInstall';
 const stateLabels = { archived: '已卸载 / 已归档', ok: '正常', offline: '磁盘离线或不可访问', missingFolder: '安装目录缺失', missingExe: '启动文件缺失' };
+const problemLabels: Record<HealthProblem, string> = {
+  missingInstall: '安装目录不存在',
+  missingExe: '启动文件不存在',
+  missingCover: '封面文件丢失',
+  duplicateInstall: '安装路径重复',
+};
 
 export function PathRepairPanel() {
   const [checks, setChecks] = useState<PathCheck[] | null>(null);
+  const [health, setHealth] = useState<HealthReport | null>(null);
   const [oldRoot, setOldRoot] = useState('');
   const [newRoot, setNewRoot] = useState('');
   const [preview, setPreview] = useState<Relocation[] | null>(null);
@@ -29,6 +39,7 @@ export function PathRepairPanel() {
     try { await ready; await action(); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
   async function check() { await operation(async () => { setChecks(await invoke<PathCheck[]>('game_paths_check')); }); }
+  async function healthCheck() { await operation(async () => { setHealth(await invoke<HealthReport>('library_health_check')); }); }
   async function inspect() { await operation(async () => {
     const rows = await invoke<Relocation[]>('game_paths_preview', { oldRoot, newRoot });
     setPreview(rows); setSelected(new Set(rows.filter(row => row.ready).map(row => row.id)));
@@ -41,7 +52,15 @@ export function PathRepairPanel() {
   }); }
   const updateRoot = (kind: 'old' | 'new', value: string) => { if (kind === 'old') setOldRoot(value); else setNewRoot(value); setPreview(null); setSelected(new Set()); };
   return <div className="space-y-4">
-    <div><Button variant="outline" loading={busy} onClick={() => void check()}>检查游戏路径</Button></div>
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="outline" loading={busy} onClick={() => void check()}>检查游戏路径</Button>
+      <Button variant="outline" loading={busy} onClick={() => void healthCheck()}>库健康检查</Button>
+    </div>
+    {health ? <div className="space-y-2 text-xs">
+      <p>已检查 {health.checked} 部，健康 {health.healthy} 部，已归档 {health.archived} 部，需处理 {health.issues.length} 部。</p>
+      <p className="text-muted-foreground">安装目录缺失 {health.missingInstall} · 启动文件缺失 {health.missingExe} · 封面丢失 {health.missingCover} · 路径重复 {health.duplicateInstall}</p>
+      {health.issues.length > 0 ? <ul className="max-h-48 divide-y divide-border overflow-y-auto rounded-md border border-border">{health.issues.map(issue => <li key={issue.id} className="space-y-1 p-2"><p className="font-medium">{issue.title} · {issue.problems.map(problem => problemLabels[problem]).join('、')}</p><p className="break-all text-muted-foreground">{issue.installPath}</p>{issue.problems.includes('missingCover') && issue.coverPath ? <p className="break-all text-muted-foreground">封面：{issue.coverPath}</p> : null}</li>)}</ul> : <p className="text-primary">没有发现问题。</p>}
+    </div> : null}
     {checks ? <div className="space-y-2 text-xs"><p>已检查 {checks.length} 部，正常 {checks.filter(row => row.state === 'ok').length} 部，已归档 {checks.filter(row => row.state === 'archived').length} 部，需检查 {checks.filter(row => row.state !== 'ok' && row.state !== 'archived').length} 部。</p><ul className="max-h-48 divide-y divide-border overflow-y-auto rounded-md border border-border">{checks.filter(row => row.state !== 'ok').map(row => <li key={row.id} className="space-y-1 p-2"><p className="font-medium">{row.title} · {stateLabels[row.state]}</p><p className="break-all text-muted-foreground">{row.exePath || row.installPath}</p></li>)}</ul></div> : null}
     <div className="space-y-3 border-t border-border pt-4"><h3 className="text-sm font-medium">游戏搬盘后的批量修复</h3><p className="text-xs text-muted-foreground">更新路径记录，不移动游戏文件。</p>
       <Field label="原游戏根目录"><PathInput label="原游戏根目录" kind="directory" value={oldRoot} disabled={busy} onChange={value => updateRoot('old', value)} /></Field>

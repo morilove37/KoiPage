@@ -9,11 +9,25 @@ import { AnnouncementContact } from "./AnnouncementContact";
 import { AnnouncementCommunity } from './AnnouncementCommunity';
 
 // Release notes travel with the installed version and remain available offline.
-const releases = import.meta.glob<string>("/docs/releases/v*.md", { query: "?raw", import: "default", eager: true });
-const releaseNotes = releases[`/docs/releases/v${BRAND.version}.md`];
+// They are loaded on demand: inlining all of `docs/releases` eagerly pulled
+// every historical release into the startup bundle for the one file this build
+// can ever display.
+const releases = import.meta.glob<string>("/docs/releases/v*.md", { query: "?raw", import: "default" });
+const releaseFile = `/docs/releases/v${BRAND.version}.md`;
 const plainText = (value: string) => value.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
 
 function VersionContent() {
+  const [releaseNotes, setReleaseNotes] = useState<string | null>(null);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = releases[releaseFile];
+    if (!load) { setSettled(true); return; }
+    void load().then(text => { if (alive) { setReleaseNotes(text); setSettled(true); } })
+      .catch(() => { if (alive) setSettled(true); });
+    return () => { alive = false; };
+  }, []);
+  if (!settled) return <p className="text-sm text-muted-foreground">正在载入更新内容…</p>;
   if (!releaseNotes) return <p className="text-sm leading-relaxed text-muted-foreground">当前版本为 v{BRAND.version}，此版本暂未附带详细更新公告。可在设置的「关于」中前往 GitHub 查看更新记录。</p>;
   const blocks = releaseNotes.trim().split(/\r?\n\s*\r?\n/);
   return <div className="space-y-4 text-sm leading-relaxed">

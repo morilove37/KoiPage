@@ -12,7 +12,9 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL?.match(/\/(accent|theme)\.ts$/)) {
       if (specifier === './db') return { url: `data:text/javascript,${encodeURIComponent(dbModule)}`, shortCircuit: true };
-      if (specifier === './accent' || specifier === './accent-model') return nextResolve(`${specifier}.ts`, context);
+      if (specifier === './accent' || specifier === './accent-model' || specifier === './settings-snapshot') {
+        return nextResolve(`${specifier}.ts`, context);
+      }
     }
     return nextResolve(specifier, context);
   },

@@ -13,7 +13,7 @@ import { GeometryIcon } from "@/components/ui/geometry-icon";
 import LaunchDialog from "@/features/launch/LaunchDialog";
 import { useGameLauncher } from "@/features/launch/useGameLauncher";
 import { useGameProcess } from "@/features/launch/useGameProcess";
-import { gamesList, gamesTagsGet, tagsList } from "@/lib/db";
+import { ensureLibraryData, refreshLibraryData, useLibraryDataStore } from "@/features/library/data-store";
 import { useLocalizedTags } from "@/lib/localization";
 import { formatRating } from "@/lib/rating";
 import { useAppStore } from "@/store/app";
@@ -171,7 +171,7 @@ function GameSelector({ games, currentIndex, onSelect, onMove }: {
           tabIndex={index === currentIndex ? 0 : -1} title={game.title}
           className="home-game-choice" onClick={() => onSelect(index)}>
           <span className="home-game-thumbnail">
-            <CoverImage gameId={game.id} path={game.coverPath} alt="" loading={index < 10 ? "eager" : "lazy"}
+            <CoverImage gameId={game.id} path={game.coverPath} thumbnail alt="" loading={index < 10 ? "eager" : "lazy"}
               className="h-full w-full object-cover" fallbackClassName="bg-slate-800 text-white/75" fallbackText="暂无封面" />
           </span>
           <span className="home-game-caption">{game.title}</span>
@@ -231,12 +231,16 @@ export default function HomePage() {
   const navigate = useNavigate();
   const playTimeRevision = useAppStore(state => state.playTimeRevision);
   const presets = useAppStore(state => state.library.presets);
-  const [games, setGames] = useState<Game[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [links, setLinks] = useState<Array<[number, number]>>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
+  // The rows live in a shared store: 首页, 游戏库 and 游戏文件夹 all render the
+  // same game/tag rows, so re-entering this page reuses them instead of
+  // refetching everything and blanking the hero.
+  const games = useLibraryDataStore(state => state.games);
+  const tags = useLibraryDataStore(state => state.tags);
+  const links = useLibraryDataStore(state => state.links);
+  const loading = useLibraryDataStore(state => state.loading);
+  const refreshing = useLibraryDataStore(state => state.refreshing);
+  const error = useLibraryDataStore(state => state.error);
+  const dataRevision = useLibraryDataStore(state => state.revision);
   const [friendRefresh, setFriendRefresh] = useState(0);
   const [selection, setSelection] = useState<Selection>(INITIAL_SELECTION);
   const [dragging, setDragging] = useState(false);
@@ -274,28 +278,35 @@ export default function HomePage() {
     return () => { disposed = true; unlisten?.(); };
   }, [navigate]);
 
+  // Join the startup prefetch, or start one if this is the first page.
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void Promise.all([gamesList(), tagsList(), gamesTagsGet()]).then(([nextGames, nextTags, nextLinks]) => {
-      if (cancelled) return;
-      setGames(nextGames);
-      setTags(nextTags);
-      setLinks(nextLinks);
-      setSelection(INITIAL_SELECTION);
-    }).catch(cause => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [playTimeRevision, reloadKey]);
+    void ensureLibraryData();
+  }, []);
+
+  // Drop a selection whose game disappeared (deleted from 游戏库, or filtered
+  // away by a refresh) instead of rendering a stale hero.
+  useEffect(() => {
+    if (dataRevision === 0) return;
+    setSelection(state => state.id === null || games.some(game => game.id === state.id)
+      ? state
+      : { ...state, id: null, previousId: null, revision: state.revision + 1 });
+  }, [dataRevision, games]);
+
+  /**
+   * Refetch when play sessions changed. The cached rows stay on screen while
+   * the new ones load, so returning to 首页 never shows the shimmer again.
+   */
+  const seenPlayTimeRevision = useRef(playTimeRevision);
+  useEffect(() => {
+    if (seenPlayTimeRevision.current === playTimeRevision) return;
+    seenPlayTimeRevision.current = playTimeRevision;
+    void refreshLibraryData();
+  }, [playTimeRevision]);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen("game-exited", () => setReloadKey(key => key + 1)).then(remove => {
+    void listen("game-exited", () => { void refreshLibraryData(); }).then(remove => {
       if (disposed) remove();
       else unlisten = remove;
     }).catch(cause => console.warn("[home] game-exited listener:", cause));
@@ -380,8 +391,8 @@ export default function HomePage() {
             <GeometryIcon name="folder" />快速入库
           </Button>
           <Button variant="outline" aria-haspopup="dialog" onClick={() => setCustomizing(true)}><GeometryIcon name="settings" />自定义首页</Button>
-          <Button variant="outline" loading={loading} onClick={() => {
-            setReloadKey(key => key + 1);
+          <Button variant="outline" loading={loading || refreshing} onClick={() => {
+            void refreshLibraryData();
             setFriendRefresh(key => key + 1);
           }}>刷新</Button>
           <Button disabled={loading || games.length === 0} onClick={randomGame}>随机选一款 <span aria-hidden="true">↗</span></Button>
@@ -470,8 +481,8 @@ export default function HomePage() {
       {games.length > 0 && (leftCards || rightCards) ? (
         <div className={`grid items-start gap-4${leftCards && rightCards ? " xl:grid-cols-[minmax(0,1.5fr)_minmax(250px,1fr)]" : ""}`}>
           {leftCards ? <div className="flex min-w-0 flex-col gap-4">
-            {visible("recent") ? <RecentPlayHistory games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} /> : null}
-            {visible("statistics") ? <PlayTimeChart games={games} refreshKey={`${playTimeRevision}:${reloadKey}`} /> : null}
+            {visible("recent") ? <RecentPlayHistory games={games} refreshKey={`${playTimeRevision}:${dataRevision}`} /> : null}
+            {visible("statistics") ? <PlayTimeChart games={games} refreshKey={`${playTimeRevision}:${dataRevision}`} /> : null}
           </div> : null}
 
           {rightCards ? <div className="flex min-w-0 flex-col gap-4">
@@ -486,7 +497,7 @@ export default function HomePage() {
                 <div className="divide-y divide-border">
                   {waitingGames.slice(0, 3).map(game => (
                     <Link key={game.id} to={`/library/${game.id}`} className="flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game.id} path={game.coverPath} alt={game.title} className="h-full w-full object-cover" fallbackText="" /></div>
+                      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game.id} path={game.coverPath} thumbnail alt={game.title} className="h-full w-full object-cover" fallbackText="" /></div>
                       <div className="min-w-0 flex-1">
                         <h3 className="truncate text-sm font-medium">{game.title}</h3>
                         <p className="mt-1 text-xs text-muted-foreground">{isFavorite(game) ? "★ 已收藏 · " : ""}{GAME_STATUS_LABELS[game.status]}</p>

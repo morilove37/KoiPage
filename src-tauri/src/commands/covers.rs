@@ -2,8 +2,17 @@ use super::error::{CmdError, CmdResult};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_COVER: usize = 20 * 1024 * 1024;
+/// Long edge of the thumbnails used by list and card views.
+const THUMB_SIZE: u32 = 320;
+const THUMB_DIRECTORY: &str = "thumbs";
+/// Remembers the last reference set so an unchanged library skips the copy pass.
+const FINGERPRINT_KEY: &str = "covers_migrate_fingerprint";
+
+/// Serialises temporary file names for concurrent writers.
+static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +21,8 @@ pub struct MigrationReport {
     pub already_managed: usize,
     pub missing: usize,
     pub failed: usize,
+    /// True when the stored fingerprint matched and no reference was rescanned.
+    pub skipped: bool,
 }
 
 pub(crate) fn directory(app: &tauri::AppHandle) -> CmdResult<PathBuf> {
@@ -32,6 +43,77 @@ fn is_managed(path: &str, directory: &Path) -> bool {
     roots
         .iter()
         .any(|root| root.canonicalize().is_ok_and(|root| path.starts_with(root)))
+}
+
+/// Directory holding the downscaled copies used by list and card views.
+fn thumbnail_directory(directory: &Path) -> PathBuf {
+    directory.join(THUMB_DIRECTORY)
+}
+
+/// `covers/<sha>.png` -> `covers/thumbs/<sha>.jpg`. Only managed covers have
+/// thumbnails, so any other path returns `None` and callers keep the original.
+fn thumbnail_path(directory: &Path, original: &Path) -> Option<PathBuf> {
+    if original.parent()? != directory {
+        return None;
+    }
+    let stem = original.file_stem()?;
+    Some(thumbnail_directory(directory).join(stem).with_extension("jpg"))
+}
+
+/// Write a 320px thumbnail beside the stored cover. Best effort: a failure is
+/// logged and the full-size original still renders, so it never blocks a save.
+fn ensure_thumbnail(directory: &Path, original: &Path, bytes: &[u8]) {
+    let Some(target) = thumbnail_path(directory, original) else {
+        return;
+    };
+    if target.is_file() {
+        return;
+    }
+    if let Err(error) = write_thumbnail(&target, bytes) {
+        crate::app_warn!("[covers] could not build a thumbnail for {}: {error}", original.display());
+    }
+}
+
+fn write_thumbnail(target: &Path, bytes: &[u8]) -> CmdResult<()> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| CmdError(format!("无法识别封面图片格式：{error}")))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(10000);
+    limits.max_image_height = Some(10000);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|error| CmdError(format!("封面图片损坏或尺寸过大：{error}")))?;
+    // `thumbnail` keeps the aspect ratio and only shrinks, so small covers are
+    // copied at their own size instead of being blown up.
+    // JPEG at quality 82 measured ~25 KB per card against ~132 KB for the
+    // lossless WebP this used to write, and covers carry no transparency.
+    let small = image.thumbnail(THUMB_SIZE, THUMB_SIZE).to_rgb8();
+    let mut encoded = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 82)
+        .encode(
+            small.as_raw(),
+            small.width(),
+            small.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|error| CmdError(format!("无法生成封面缩略图：{error}")))?;
+    let parent = target.parent().unwrap_or(target);
+    std::fs::create_dir_all(parent).map_err(|error| CmdError(format!("无法创建缩略图目录：{error}")))?;
+    let temporary = parent.join(format!(
+        ".thumb-{}-{}.tmp",
+        std::process::id(),
+        TEMPORARY.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = std::fs::write(&temporary, &encoded)
+        .and_then(|_| crate::file_ops::rename(&temporary, target));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(CmdError(format!("无法保存封面缩略图：{error}")));
+    }
+    Ok(())
 }
 
 fn read_image(path: &Path) -> CmdResult<Vec<u8>> {
@@ -161,7 +243,8 @@ async fn migrate_reference(
     })
 }
 
-pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResult<MigrationReport> {
+/// Every stored cover reference: game rows first, then custom overrides.
+async fn collect_references(db: &sqlx::SqlitePool) -> CmdResult<Vec<Reference>> {
     let mut references = Vec::new();
     let sources: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id,cover_path FROM games WHERE cover_path IS NOT NULL AND trim(cover_path)<>''",
@@ -193,6 +276,57 @@ pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResul
             references.push(Reference::Custom { key, raw, path });
         }
     }
+    Ok(references)
+}
+
+/// Stable digest of the whole reference set. Paths are already stored in a
+/// canonical form by the migration itself, so an unchanged library hashes the
+/// same on every launch while any add, edit or removal changes it.
+fn fingerprint(references: &[Reference]) -> String {
+    let mut entries: Vec<String> = references
+        .iter()
+        .map(|reference| match reference {
+            Reference::Source { id, path } => format!("g{id}\u{0}{path}"),
+            Reference::Custom { key, path, .. } => format!("c{key}\u{0}{path}"),
+        })
+        .collect();
+    entries.sort();
+    let mut digest = Sha256::new();
+    for entry in entries {
+        digest.update(entry.as_bytes());
+        digest.update([0u8]);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+/// The stored fingerprint is only trusted when the previous pass finished with
+/// nothing left to repair, so a transient failure is retried on the next start.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredFingerprint {
+    digest: String,
+    clean: bool,
+}
+
+async fn stored_fingerprint(db: &sqlx::SqlitePool) -> Option<StoredFingerprint> {
+    let raw = super::settings::settings_get_impl(db, FINGERPRINT_KEY).await.ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
+async fn save_fingerprint(db: &sqlx::SqlitePool, digest: &str, clean: bool) {
+    let value = serde_json::to_string(&StoredFingerprint {
+        digest: digest.to_string(),
+        clean,
+    });
+    if let Ok(value) = value {
+        let _ = super::settings::settings_set_impl(db, FINGERPRINT_KEY, Some(value)).await;
+    }
+}
+
+async fn migrate_references(
+    db: &sqlx::SqlitePool,
+    directory: &Path,
+    references: Vec<Reference>,
+) -> CmdResult<MigrationReport> {
     let mut pending = references.into_iter();
     let mut tasks = tokio::task::JoinSet::new();
     let mut report = MigrationReport::default();
@@ -220,6 +354,12 @@ pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResul
             }
         }
     }
+    Ok(report)
+}
+
+pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResult<MigrationReport> {
+    let references = collect_references(db).await?;
+    let report = migrate_references(db, directory, references).await?;
     crate::logging::record(
         "INFO",
         "covers",
@@ -233,11 +373,60 @@ pub(crate) async fn migrate(db: &sqlx::SqlitePool, directory: &Path) -> CmdResul
 
 /// Run after SQLite opens, before pages hydrate their game/cover references.
 /// Retrying is safe: managed images are skipped and failed originals are kept.
+///
+/// The reference set is fingerprinted so an unchanged library skips the pass
+/// entirely; only an unfinished previous attempt (missing/failed references)
+/// forces another one.
 #[tauri::command]
 pub async fn covers_migrate(app: tauri::AppHandle) -> CmdResult<MigrationReport> {
     let _resources = super::resource_storage::operation_guard()?;
     let db = super::games::pool(&app).await?;
-    let report = migrate(&db, &directory(&app)?).await?;
+    let directory = directory(&app)?;
+    let references = collect_references(&db).await?;
+    let digest = fingerprint(&references);
+    if let Some(stored) = stored_fingerprint(&db).await {
+        if stored.clean && stored.digest == digest {
+            // Thumbnails are cheap to check and are what lists actually render,
+            // so a cover stored before they existed still gets one. The decode
+            // runs on a blocking thread: it is CPU work, not I/O.
+            let pending: Vec<PathBuf> = references
+                .iter()
+                .map(|reference| PathBuf::from(reference.path()))
+                .filter(|original| {
+                    thumbnail_path(&directory, original).is_some_and(|thumb| !thumb.is_file())
+                })
+                .collect();
+            let pending_count = pending.len();
+            if !pending.is_empty() {
+                let directory = directory.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    for original in pending {
+                        if let Ok(bytes) = read_image(&original) {
+                            ensure_thumbnail(&directory, &original, &bytes);
+                        }
+                    }
+                })
+                .await;
+            }
+            super::scan_roots::sync_asset_scope(app).await?;
+            crate::logging::record(
+                "INFO",
+                "covers",
+                &format!("封面未变化，跳过检查（{} 张缩略图已补齐）", pending_count),
+            );
+            return Ok(MigrationReport {
+                skipped: true,
+                ..MigrationReport::default()
+            });
+        }
+    }
+    let report = migrate(&db, &directory).await?;
+    // Fingerprint the references *after* the pass: the migration rewrites them
+    // to managed paths, and only that settled form is stable between launches.
+    let settled = fingerprint(&collect_references(&db).await?);
+    // Only a clean pass is remembered: a missing or failed reference must be
+    // retried on the next launch, which is exactly what an unclean flag does.
+    save_fingerprint(&db, &settled, report.missing == 0 && report.failed == 0).await;
     super::scan_roots::sync_asset_scope(app).await?;
     Ok(report)
 }
@@ -268,11 +457,10 @@ fn cache_image(dir: &Path, bytes: &[u8]) -> CmdResult<String> {
     std::fs::create_dir_all(dir).map_err(|e| CmdError(format!("无法创建封面目录：{e}")))?;
     let path = dir.join(format!("{:x}.{ext}", Sha256::digest(bytes)));
     if std::fs::read(&path).ok().as_deref() != Some(bytes) {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let temporary = dir.join(format!(
             ".cover-{}-{}.tmp",
             std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            TEMPORARY.fetch_add(1, Ordering::Relaxed)
         ));
         let result =
             std::fs::write(&temporary, bytes).and_then(|_| crate::file_ops::rename(&temporary, &path));
@@ -281,6 +469,7 @@ fn cache_image(dir: &Path, bytes: &[u8]) -> CmdResult<String> {
             return Err(CmdError(format!("无法保存封面：{error}")));
         }
     }
+    ensure_thumbnail(dir, &path, bytes);
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -367,6 +556,15 @@ mod tests {
             .unwrap();
         bytes.into_inner()
     }
+    /// Stored originals only — `thumbs/` is a derived cache, not a cover.
+    fn stored_files(directory: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file())
+            .collect()
+    }
     async fn database() -> sqlx::SqlitePool {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -438,7 +636,7 @@ mod tests {
         assert_eq!(untouched, (321, "original".into()));
         let second = migrate(&db, &directory).await.unwrap();
         assert_eq!((second.copied, second.already_managed), (0, 2));
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(stored_files(&directory).len(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[tokio::test]
@@ -537,7 +735,7 @@ mod tests {
         std::fs::write(&path, b"interrupted write").unwrap();
         assert_eq!(cache_image(&root, &png()).unwrap(), path);
         assert_eq!(std::fs::read(path).unwrap(), png());
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        assert_eq!(stored_files(&root).len(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

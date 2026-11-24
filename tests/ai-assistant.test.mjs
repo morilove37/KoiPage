@@ -5,17 +5,28 @@ import { createGameProcessController } from '../src/features/launch/process-stat
 
 function fixture() {
   const writes = [];
+  const confirmations = [];
   const games = [
     { id: 1, title: 'Alpha', status: 'unplayed', rating: 7, favorite: 0, installPath: 'SECRET', notes: 'PRIVATE' },
     { id: 2, title: 'Beta', status: 'completed', rating: 9, favorite: 1, exePath: 'SECRET' },
   ];
+  let folders = [{ id: 'folder-a', name: '已有文件夹', gameIds: [1] }];
+  let confirmAnswer = true;
   const deps = { list: async () => games, get: async id => ({ ...games.find(g => g.id === id), tags: [3] }),
     tags: async () => [{ id: 3, name: '原标签' }], stats: async () => ({ total: 2 }),
     update: async (id, patch) => { writes.push({ id, patch }); return { ...games[0], ...patch }; },
     open: async id => { writes.push({ open: id }); }, launch: async id => { writes.push({ launch: id }); return { kind: 'started' }; },
     confirmLaunch: async () => true, changed: () => {},
+    confirm: async preview => { confirmations.push(preview); return confirmAnswer; },
+    batchUpdate: async (ids, patch) => { writes.push({ batch: ids, patch }); return ids.length; },
+    searchMetadata: async query => ({ candidates: [{ provider: 'vndb', externalId: 'v1', title: 'Alpha 条目', rating: 8 }], errors: [] }),
+    metadataDetail: async () => ({ provider: 'vndb', externalId: 'v1', title: 'Alpha 条目', titleOriginal: 'Alpha', developer: '制作组', releaseDate: '2024-01-01', rating: 8, description: '简介', tags: ['新标签'] }),
+    applyMetadata: async (id, detail, fields, tagMode) => { writes.push({ apply: id, fields, tagMode }); return { fieldsApplied: fields, tagsAdded: 1 }; },
+    folders: async () => folders,
+    saveFolders: async next => { folders = next; writes.push({ folders: next.map(f => f.name) }); return true; },
+    createTag: async (name, color) => { writes.push({ tag: name, color }); return { id: 9, name }; },
   };
-  return { writes, deps, execute: createToolExecutor(deps) };
+  return { writes, confirmations, deps, setConfirm: value => { confirmAnswer = value; }, getFolders: () => folders, execute: createToolExecutor(deps) };
 }
 const call = (name, args = {}, id = 'c1') => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
 
@@ -120,7 +131,15 @@ test('stopping during a response prevents any tool execution and leaves usable h
 });
 
 test('tool schema exposes no filesystem, shell, delete or credential tools', () => {
-  assert.deepEqual(TOOLS.map(t => t.function.name), ['list_games', 'get_game', 'get_stats', 'update_game', 'open_game', 'launch_game']);
+  assert.deepEqual(TOOLS.map(t => t.function.name), [
+    'list_games', 'get_game', 'get_stats', 'update_game', 'open_game', 'launch_game',
+    'bulk_update', 'search_metadata', 'apply_metadata', 'manage_folder', 'create_tag',
+  ]);
+  const forbidden = /delete|remove_file|shell|exec|write_file|read_file|credential|secret|path/i;
+  for (const tool of TOOLS) {
+    assert.doesNotMatch(tool.function.name, forbidden);
+    assert.doesNotMatch(JSON.stringify(tool.function.parameters), /installPath|exePath|savePath|notes/i);
+  }
 });
 
 test('path-bearing tool failures stay local and are not sent upstream', async () => {
@@ -198,4 +217,121 @@ test('nullable metadata can be cleared and description edits detect changes made
   await f.execute(call('get_game', { id: 1 }));
   await f.execute(call('update_game', { id: 1, originalTitle: null, developer: null, releaseDate: null, rating: null, description: null }));
   assert.deepEqual(f.writes[0].patch, { originalTitle: null, developer: null, releaseDate: null, rating: null, description: null });
+});
+
+test('bulk update previews the change and only writes after confirmation', async () => {
+  const f = fixture();
+  await f.execute(call('list_games'));
+  const result = await f.execute(call('bulk_update', { ids: [1, 2], status: 'completed', addTags: ['原标签'] }));
+  assert.equal(result.updated, 2);
+  assert.equal(f.confirmations.length, 1);
+  assert.match(f.confirmations[0].title, /批量修改 2 部游戏/);
+  assert.deepEqual(f.confirmations[0].items, ['Alpha', 'Beta']);
+  assert.deepEqual(f.writes, [{ batch: [1, 2], patch: { status: 'completed', addTagIds: [3] } }]);
+
+  const declined = fixture();
+  await declined.execute(call('list_games'));
+  declined.setConfirm(false);
+  const cancelled = await declined.execute(call('bulk_update', { ids: [1], favorite: true }));
+  assert.equal(cancelled.cancelled, true);
+  assert.deepEqual(declined.writes, []);
+});
+
+test('bulk update rejects forged ids, unknown tags and contradictory tag edits', async () => {
+  const f = fixture();
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1], status: 'completed' })), /先查询/);
+  await f.execute(call('list_games'));
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1, 99], status: 'completed' })), /查询结果/);
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1], addTags: ['不存在的标签'] })), /create_tag/);
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1], addTags: ['原标签'], removeTags: ['原标签'] })), /同时/);
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1] })), /没有需要修改的内容/);
+  assert.deepEqual(f.writes, []);
+});
+
+test('metadata search previews candidates and apply_metadata confirms the written fields', async () => {
+  const f = fixture();
+  await f.execute(call('list_games'));
+  const search = await f.execute(call('search_metadata', { query: 'Alpha' }));
+  assert.equal(search.candidates.length, 1);
+  assert.equal(search.candidates[0].externalId, 'v1');
+  assert.equal(search.candidates[0].provider, 'vndb');
+
+  const applied = await f.execute(call('apply_metadata', { id: 1, provider: 'vndb', externalId: 'v1', fields: ['title', 'developer'] }));
+  assert.equal(applied.applied, true);
+  assert.equal(applied.title, 'Alpha');
+  assert.match(f.confirmations.at(-1).title, /把资料写入「Alpha」/);
+  assert.deepEqual(f.confirmations.at(-1).items, ['标题', '开发商']);
+  assert.deepEqual(f.writes.at(-1), { apply: 1, fields: ['title', 'developer'], tagMode: 'merge' });
+
+  await assert.rejects(f.execute(call('apply_metadata', { id: 1, provider: 'vndb', externalId: 'v1', fields: ['bangumi_id'] })), /没有这些字段/);
+  await assert.rejects(f.execute(call('apply_metadata', { id: 1, provider: 'evil', externalId: 'v1' })), /资料源无效/);
+});
+
+test('apply_metadata without explicit fields writes every populated field', async () => {
+  const f = fixture();
+  await f.execute(call('list_games'));
+  const applied = await f.execute(call('apply_metadata', { id: 1, provider: 'vndb', externalId: 'v1', tagMode: 'replace' }));
+  assert.deepEqual(applied.fields, ['title', 'original_title', 'developer', 'release_date', 'description', 'rating', 'tags']);
+  assert.deepEqual(f.writes.at(-1), { apply: 1, fields: applied.fields, tagMode: 'replace' });
+});
+
+test('folder management lists freely but every mutation needs confirmation', async () => {
+  const f = fixture();
+  const listed = await f.execute(call('manage_folder', { action: 'list' }));
+  assert.deepEqual(listed.folders, [{ id: 'folder-a', name: '已有文件夹', parentId: null, gameCount: 1 }]);
+  assert.equal(f.confirmations.length, 0);
+
+  await f.execute(call('list_games'));
+  await f.execute(call('manage_folder', { action: 'create', name: '新文件夹' }));
+  assert.equal(f.confirmations.at(-1).title, '创建文件夹「新文件夹」？');
+  assert.deepEqual(f.getFolders().map(folder => folder.name), ['已有文件夹', '新文件夹']);
+
+  await f.execute(call('manage_folder', { action: 'assign', folderId: 'folder-a', ids: [2] }));
+  assert.match(f.confirmations.at(-1).title, /把 1 部游戏加入「已有文件夹」/);
+  assert.deepEqual(f.getFolders()[0].gameIds, [1, 2]);
+
+  await f.execute(call('manage_folder', { action: 'unassign', folderId: 'folder-a', ids: [1] }));
+  assert.deepEqual(f.getFolders()[0].gameIds, [2]);
+
+  await assert.rejects(f.execute(call('manage_folder', { action: 'rename', folderId: 'missing', name: 'x' })), /文件夹不存在/);
+  await assert.rejects(f.execute(call('manage_folder', { action: 'assign', folderId: 'folder-a', ids: [99] })), /查询结果/);
+});
+
+test('folder deletion keeps games and a failed save reports a retryable error', async () => {
+  const f = fixture();
+  await f.execute(call('manage_folder', { action: 'delete', folderId: 'folder-a' }));
+  assert.match(f.confirmations.at(-1).detail, /不会删除游戏/);
+  assert.deepEqual(f.getFolders(), []);
+
+  const failing = fixture();
+  failing.deps.saveFolders = async () => false;
+  const result = await failing.execute(call('manage_folder', { action: 'create', name: '另一个' }));
+  assert.equal(result.error, '保存文件夹失败，请稍后重试');
+});
+
+test('create_tag reuses an existing name and confirms before creating a new one', async () => {
+  const f = fixture();
+  const reused = await f.execute(call('create_tag', { name: ' 原标签 ' }));
+  assert.deepEqual(reused, { created: false, reused: true, tag: '原标签', id: 3 });
+  assert.equal(f.confirmations.length, 0);
+
+  const created = await f.execute(call('create_tag', { name: '新标签', color: '#ff8800' }));
+  assert.deepEqual(created, { created: true, tag: '新标签', id: 9 });
+  assert.equal(f.confirmations.at(-1).title, '创建标签「新标签」？');
+  assert.deepEqual(f.writes, [{ tag: '新标签', color: '#ff8800' }]);
+
+  const declined = fixture(); declined.setConfirm(false);
+  const cancelled = await declined.execute(call('create_tag', { name: '不建' }));
+  assert.equal(cancelled.cancelled, true);
+  assert.deepEqual(declined.writes, []);
+});
+
+test('new tools reject unsupported arguments and multi-line names', async () => {
+  const f = fixture();
+  await assert.rejects(f.execute(call('bulk_update', { ids: [1], status: 'completed', notes: 'x' })), /不支持的参数/);
+  await assert.rejects(f.execute(call('manage_folder', { action: 'list', path: 'C:/x' })), /不支持的参数/);
+  await assert.rejects(f.execute(call('create_tag', { name: '换\n行' })), /name/);
+  await assert.rejects(f.execute(call('search_metadata', { query: 'x', sources: ['evil'] })), /资料源参数无效/);
+  await f.execute(call('list_games'));
+  await assert.rejects(f.execute(call('apply_metadata', { id: 1, provider: 'vndb', externalId: 'v1', fields: ['install_path'] })), /字段参数无效/);
 });

@@ -6,6 +6,8 @@ import {
   parseAccentSettings,
   type AccentSettings,
 } from './accent-model';
+import { snapshotValue } from './settings-snapshot';
+import type { SettingsSnapshot } from './settings-snapshot';
 
 let currentAccent: AccentSettings = { ...DEFAULT_ACCENT };
 let pendingWrite: Promise<void> = Promise.resolve();
@@ -27,9 +29,11 @@ export function applyAccent(settings: AccentSettings = currentAccent): void {
   root.style.setProperty('--primary-text', tokens.text);
 }
 
-export async function loadAccent(): Promise<AccentSettings> {
+/** `snapshot` is the startup settings read; omit it to read the key directly. */
+export async function loadAccent(snapshot?: SettingsSnapshot): Promise<AccentSettings> {
   try {
-    return parseAccentSettings(await settingsGet(ACCENT_SETTING_KEY));
+    const stored = snapshot ? snapshotValue(snapshot, ACCENT_SETTING_KEY) : await settingsGet(ACCENT_SETTING_KEY);
+    return parseAccentSettings(stored ?? null);
   } catch {
     return { ...DEFAULT_ACCENT };
   }
@@ -45,6 +49,6 @@ export function setAccent(settings: AccentSettings): Promise<void> {
   return write;
 }
 
-export async function initAccent(): Promise<void> {
-  applyAccent(await loadAccent());
+export async function initAccent(snapshot?: SettingsSnapshot): Promise<void> {
+  applyAccent(await loadAccent(snapshot));
 }

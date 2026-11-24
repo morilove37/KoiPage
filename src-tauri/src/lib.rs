@@ -11,6 +11,7 @@ pub mod instance;
 pub mod launcher;
 pub mod logging;
 pub mod metadata;
+pub mod net;
 mod rating;
 pub mod scanner;
 
@@ -109,6 +110,8 @@ pub fn run() {
         .manage(friends::FriendsState::default())
         .manage(bangumi_sync::SyncState::default())
         .manage(commands::metadata_refresh::RefreshJob::default())
+        // Guards the startup 2DFan auto-bind sweep against a second run.
+        .manage(commands::twodfan_topics::AutobindSweepJob::default())
         .plugin(commands::backup::restore_plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -117,6 +120,24 @@ pub fn run() {
         .setup(|app| {
             commands::window::remember_app(app.handle().clone());
             metadata::verification::remember_app(app.handle().clone());
+            // Open and migrate the database while the window is still being
+            // created, then load the saved proxy before the first request can
+            // run. The frontend's first settings read would otherwise have to
+            // wait for the connection; this overlaps it with startup. Until the
+            // proxy is loaded the cache is empty and traffic goes direct, which
+            // is the safe default rather than an error.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                commands::data_storage::warm_up(&handle).await;
+                match commands::games::pool(&handle).await {
+                    Ok(pool) => {
+                        if let Err(error) = net::proxy::reload(&pool).await {
+                            app_warn!("[net] saved proxy is unusable: {error}");
+                        }
+                    }
+                    Err(error) => app_warn!("[net] could not read proxy settings: {error}"),
+                }
+            });
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -212,6 +233,10 @@ pub fn run() {
             commands::settings::settings_set,
             commands::settings::settings_get_all,
             commands::settings::settings_delete,
+            // outbound proxy
+            commands::network::network_proxy_get,
+            commands::network::network_proxy_save,
+            commands::network::network_proxy_test,
             commands::resource_storage::resource_storage_info,
             commands::data_storage::initialize_database,
             commands::resource_storage::resource_storage_restart,
@@ -261,7 +286,14 @@ pub fn run() {
             commands::society_logos::society_logo_get,
             commands::society_logos::society_logo_set,
             commands::covers::covers_migrate,
+            commands::library_health::library_health_check,
             commands::metadata::metadata_autofetch,
+            // 2DFan guides and VNDB related works
+            commands::twodfan_topics::twodfan_autobind,
+            commands::twodfan_topics::twodfan_autobind_sweep,
+            commands::twodfan_topics::twodfan_topics_list,
+            commands::twodfan_topics::twodfan_topic_read,
+            commands::twodfan_topics::metadata_relations,
             commands::metadata_refresh::metadata_refresh_status,
             commands::metadata_refresh::metadata_refresh_start,
             commands::metadata_refresh::metadata_refresh_cancel,

@@ -55,3 +55,15 @@ test('moving a crop clamps the whole frame without changing its size', () => {
   assert.deepEqual(model.moveCoverCrop({ x: 0.2, y: 0.1, width: 0.3, height: 0.4 }, 1, -1),
     { x: 0.7, y: 0, width: 0.3, height: 0.4 });
 });
+
+test('managed covers map to their cached thumbnail and everything else keeps the original', () => {
+  assert.equal(model.coverThumbnailPath('C:\\data\\covers\\abc123.png'), 'C:\\data\\covers\\thumbs\\abc123.jpg');
+  assert.equal(model.coverThumbnailPath('/home/user/covers/abc123.jpg'), '/home/user/covers/thumbs/abc123.jpg');
+  // Only files the app stored itself have a thumbnail.
+  assert.equal(model.coverThumbnailPath('C:\\data\\custom-covers\\mine.png'), null);
+  assert.equal(model.coverThumbnailPath('https://example.test/cover.png'), null);
+  assert.equal(model.coverThumbnailPath('data:image/png;base64,AAAA'), null);
+  assert.equal(model.coverThumbnailPath('C:\\games\\cover.png'), null);
+  assert.equal(model.coverThumbnailPath(null), null);
+  assert.equal(model.coverThumbnailPath('   '), null);
+});

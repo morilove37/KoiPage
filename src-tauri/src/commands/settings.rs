@@ -27,20 +27,32 @@ pub async fn settings_get(app: AppHandle, key: String) -> CmdResult<Option<Strin
     settings_get_impl(&pool, &key).await
 }
 
+/// Upsert one setting from an existing pool.
+///
+/// Split out from the command so internal bookkeeping (e.g. the cover
+/// migration fingerprint) can persist without an `AppHandle`.
+pub async fn settings_set_impl(
+    pool: &Pool<Sqlite>,
+    key: &str,
+    value: Option<String>,
+) -> CmdResult<()> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES (?, ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(&value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// `settings_set` — upsert a key. Passing `null` stores SQL NULL.
 #[tauri::command]
 pub async fn settings_set(app: AppHandle, key: String, value: Option<String>) -> CmdResult<()> {
     let _resources = super::resource_storage::operation_guard()?;
     let pool = pool(&app).await?;
-    sqlx::query(
-        "INSERT INTO settings (key, value) VALUES (?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(&key)
-    .bind(&value)
-    .execute(&pool)
-    .await?;
-    Ok(())
+    settings_set_impl(&pool, &key, value).await
 }
 
 /// `settings_get_all` — every key/value pair, for hydrating app state in one call.

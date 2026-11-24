@@ -63,7 +63,7 @@ impl Api {
             }
             (result, _) => result,
         }
-            .map_err(|_| CmdError("FRIENDS_NETWORK: 无法连接内测服务，请稍后重试".into()))?;
+            .map_err(|_| CmdError("FRIENDS_NETWORK: 无法连接好友服务，请稍后重试".into()))?;
         let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -176,7 +176,7 @@ fn response_error(status: u16, value: &Value) -> CmdError {
     let (kind, summary) = if terminal || message.contains("FRIENDS_SESSION") {
         ("SESSION", "登录已失效或账号已在另一端登录，请重新登录")
     } else if auth_code == "FRIENDS_IP_BANNED" || message.contains("FRIENDS_IP_BANNED") {
-        ("IP_BANNED", "当前网络已被禁止注册或使用内测服务，请联系管理员")
+        ("IP_BANNED", "当前网络已被禁止注册或使用好友服务，请联系管理员")
     } else if auth_code == "FRIENDS_LIBRARY_BANNED" || message.contains("FRIENDS_LIBRARY_BANNED") {
         ("LIBRARY_BANNED", "该账号的游戏库已被管理员关闭或封禁")
     } else if auth_code == "FRIENDS_LIBRARY_CLOSED" || message.contains("FRIENDS_LIBRARY_CLOSED") {
@@ -190,9 +190,9 @@ fn response_error(status: u16, value: &Value) -> CmdError {
     } else if auth_code == "FRIENDS_IP_REGISTERED" {
         ("IP_REGISTERED", "当前公网 IP 已注册过账号，同一网络可能共用名额，请使用已有账号登录")
     } else if message.contains("FRIENDS_INVITE") {
-        ("INVITE", "邀请码无效、已使用或已过期")
+        ("INVITE", "注册证明无效或已过期，请返回注册页重新提交")
     } else if message.contains("FRIENDS_CAPACITY") {
-        ("CAPACITY", "本轮内测名额已满")
+        ("CAPACITY", "服务容量已满，请稍后重试")
     } else if message.contains("FRIENDS_RATE") || status == 429 {
         ("RATE", "操作过于频繁，请稍后重试")
     } else if message.contains("FRIENDS_UNAVAILABLE") {
@@ -202,9 +202,9 @@ fn response_error(status: u16, value: &Value) -> CmdError {
     } else if status == 401 || status == 403 {
         ("SESSION", "登录信息无效，请重新登录")
     } else if (400..500).contains(&status) {
-        ("INPUT", "请求未被接受，请检查账号、密码或内测配置")
+        ("INPUT", "请求未被接受，请检查账号、密码或服务配置")
     } else {
-        ("NETWORK", "内测服务暂时不可用，请稍后重试")
+        ("NETWORK", "好友服务暂时不可用，请稍后重试")
     };
     CmdError(format!("FRIENDS_{kind}: {summary}"))
 }

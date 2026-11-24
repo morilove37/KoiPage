@@ -1,6 +1,6 @@
 //! `scan_roots_*` commands.
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use super::error::{CmdError, CmdResult};
 use super::games::pool;
@@ -33,6 +33,15 @@ pub async fn sync_asset_scope(app: AppHandle) -> CmdResult<usize> {
             if let Some(path) = value.get("customPath").and_then(|p| p.as_str()) {
                 if std::path::Path::new(path).is_file() { crate::allow_asset_file(&app, path); granted += 1; }
             }
+        }
+    }
+    // Grid and list layouts load the cached 320px copies instead of the
+    // originals. Granting the whole directory once beats one scope entry per
+    // thumbnail, and the directory only ever holds files the app wrote itself.
+    if let Ok(root) = super::resource_storage::root(&app) {
+        let thumbs = root.join("covers").join("thumbs");
+        if thumbs.is_dir() {
+            let _ = app.asset_protocol_scope().allow_directory(&thumbs, false);
         }
     }
     Ok(granted)

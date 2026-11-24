@@ -35,6 +35,14 @@ length_minutes,description,tags{id,name,rating,spoiler,category},developers{id,n
 const SEARCH_FIELDS: &str = "id,title,alttitle,titles{lang,title,latin,official,main},\
 released,image.url,rating,votecount";
 
+/// Fields for a relations lookup: the VN itself plus its directly related VNs.
+///
+/// The nested `relations` selection repeats the fields rendered per row so the
+/// whole graph arrives in one request; VNDB charges one request per call.
+const RELATION_FIELDS: &str = "id,title,alttitle,released,rating,image{url,sexual},\
+relations{id,relation,title,alttitle,released,rating,image{url,sexual},\
+titles{lang,title,official,main}}";
+
 #[derive(Debug, Deserialize)]
 struct KanaResponse {
     #[serde(default)]
@@ -63,6 +71,10 @@ struct Vn {
     tags: Vec<VnTag>,
     #[serde(default)]
     developers: Vec<VnProducer>,
+    /// Directly related VNs (sequels, prequels, fandiscs, ...). Only populated
+    /// when the query selects `relations`.
+    #[serde(default)]
+    relations: Vec<VnRelation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +111,47 @@ struct VnTag {
 #[derive(Debug, Deserialize)]
 struct VnProducer {
     name: Option<String>,
+}
+
+/// One entry of VNDB's `relations` array (a single related VN).
+///
+/// `relation` is the VNDB relation code (`seq`, `preq`, `set`, ...); the
+/// human-readable Chinese label is derived on the way out by [`relation_label`].
+#[derive(Debug, Deserialize)]
+struct VnRelation {
+    id: String,
+    relation: String,
+    title: Option<String>,
+    alttitle: Option<String>,
+    released: Option<String>,
+    /// 0-100.
+    rating: Option<f64>,
+    image: Option<VnImage>,
+    /// All known titles; relations carry the same `titles` shape as a full VN,
+    /// so the Chinese localization can be shown instead of the romaji title.
+    #[serde(default)]
+    titles: Vec<VnTitle>,
+}
+
+/// A related VN, flattened for the frontend.
+///
+/// Serialised in camelCase because the TypeScript side consumes it directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VndbRelation {
+    pub id: String,
+    /// Raw VNDB relation code, kept so the UI can style or group rows.
+    pub relation: String,
+    /// Chinese label for `relation`, e.g. 续作 / 外传 / 相关.
+    pub relation_label: String,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub release_date: Option<String>,
+    pub rating: Option<f64>,
+    pub cover_url: Option<String>,
+    pub nsfw: Option<bool>,
+    /// Canonical VNDB page for the related VN.
+    pub url: String,
 }
 
 /// Request body for a Kana query.
@@ -153,8 +206,16 @@ fn original_title(vn: &Vn) -> Option<String> {
 /// They are the reason importing from VNDB does not have to fall back to the
 /// romanised English title: prefer official translations, then any Chinese one.
 fn chinese_title(vn: &Vn) -> Option<String> {
+    chinese_title_of(&vn.titles)
+}
+
+/// [`chinese_title`] over a bare title list.
+///
+/// Split out because `relations` entries carry the same `titles` shape but are
+/// not full [`Vn`] values.
+fn chinese_title_of(titles: &[VnTitle]) -> Option<String> {
     let mut unofficial: Option<String> = None;
-    for title in &vn.titles {
+    for title in titles {
         let Some(lang) = title.lang.as_deref() else {
             continue;
         };
@@ -231,14 +292,47 @@ fn matching_aliases(vn: &Vn, title: &str, original: Option<&str>) -> Vec<String>
     aliases
 }
 
-async fn post(body: KanaQuery<'_>) -> super::CmdResult<Vec<Vn>> {
+/// Chinese label for a VNDB relation code.
+///
+/// VNDB's documented codes are finite; anything new or unexpected degrades to
+/// 相关 instead of leaking the raw code into the UI.
+fn relation_label(code: &str) -> &'static str {
+    match code {
+        "seq" => "续作",
+        "preq" => "前作",
+        "set" => "同设定",
+        "alt" => "外传",
+        "char" => "角色作",
+        "side" => "旁支",
+        "par" => "同世界观",
+        "ser" => "同系列",
+        "fan" => "同人",
+        "orig" => "原作",
+        "misc" => "其他",
+        "unknown" => "相关",
+        _ => "相关",
+    }
+}
+
+/// Shared Kana POST: sends `body`, enforces the error contract, parses JSON.
+///
+/// Generic over the response type so each lookup can name its own shape while
+/// every request keeps the identical timeout / rate-limit / parse error strings.
+async fn post_typed<T: serde::de::DeserializeOwned>(body: KanaQuery<'_>) -> super::CmdResult<T> {
     let response = super::http_client()?
         .post(ENDPOINT)
         .header("Accept", "application/json")
         .json(&body)
         .send()
         .await
-        .map_err(|error| super::CmdError(if error.is_timeout() { "VNDB 请求超时，请稍后重试".into() } else { format!("VNDB 请求失败：{error}") }))?;
+        .map_err(|error| {
+            let hint = crate::net::proxy::failure_hint();
+            super::CmdError(if error.is_timeout() {
+                format!("VNDB 请求超时，请稍后重试{hint}")
+            } else {
+                format!("VNDB 请求失败：{error}{hint}")
+            })
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -255,11 +349,17 @@ async fn post(body: KanaQuery<'_>) -> super::CmdResult<Vec<Vn>> {
         )));
     }
 
-    let parsed: KanaResponse = response
+    response
         .json()
         .await
-        .map_err(|error| super::CmdError(format!("VNDB 响应解析失败：{error}")))?;
-    Ok(parsed.results)
+        .map_err(|error| super::CmdError(format!("VNDB 响应解析失败：{error}")))
+}
+
+/// Standard `results`-shaped query, kept for the existing search/detail callers.
+async fn post(body: KanaQuery<'_>) -> super::CmdResult<Vec<Vn>> {
+    post_typed::<KanaResponse>(body)
+        .await
+        .map(|parsed| parsed.results)
 }
 
 /// Search VNDB by title.
@@ -370,6 +470,74 @@ fn detail_from_vn(vn: Vn) -> MetadataDetail {
     }
 }
 
+/// Project one raw relation entry into the flattened frontend struct.
+fn relation_from_vn(entry: VnRelation) -> VndbRelation {
+    let id = entry.id.clone();
+    let clean = |value: Option<&String>| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let romaji = clean(entry.title.as_ref());
+    let original = clean(entry.alttitle.as_ref());
+    // Prefer the Chinese localization, then the original script, then romaji.
+    let chinese = chinese_title_of(&entry.titles);
+    let title = chinese
+        .clone()
+        .or_else(|| original.clone())
+        .or_else(|| romaji.clone())
+        .unwrap_or_else(|| id.clone());
+    // Keep whichever name adds information over the displayed title: when the
+    // title is already the original script, the romaji spelling is the useful
+    // second line, and vice versa.
+    let original_title = [original.clone(), romaji.clone()]
+        .into_iter()
+        .flatten()
+        .find(|value| value != &title);
+    // A cover's `sexual` flag describes that image only; zero/absent means
+    // "no evidence", never "safe for all ages".
+    let nsfw = entry
+        .image
+        .as_ref()
+        .and_then(|image| image.sexual)
+        .map(|sexual| sexual > 0.0);
+    let cover_url = entry.image.as_ref().and_then(|image| image.url.clone());
+
+    VndbRelation {
+        id: id.clone(),
+        relation: entry.relation.clone(),
+        relation_label: relation_label(&entry.relation).to_string(),
+        title,
+        original_title,
+        release_date: entry.released.clone(),
+        rating: normalise(entry.rating),
+        cover_url,
+        nsfw,
+        url: format!("https://vndb.org/{id}"),
+    }
+}
+
+/// Related VNs for one VN (sequels, prequels, fandiscs, ...).
+///
+/// A VN with no relations is a normal, non-error answer and yields an empty
+/// list; only a missing VN is reported as 未找到.
+pub async fn relations(id: &str) -> super::CmdResult<Vec<VndbRelation>> {
+    let parsed = post_typed::<KanaResponse>(KanaQuery {
+        filters: serde_json::json!(["id", "=", id]),
+        fields: RELATION_FIELDS,
+        results: Some(1),
+    })
+    .await?;
+
+    let vn = parsed
+        .results
+        .into_iter()
+        .next()
+        .ok_or_else(|| super::CmdError(format!("VNDB 未找到 {id}")))?;
+
+    Ok(vn.relations.into_iter().map(relation_from_vn).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +595,7 @@ mod tests {
                 .collect(),
             tags: Vec::new(),
             developers: Vec::new(),
+            relations: Vec::new(),
         }
     }
 
@@ -493,5 +662,114 @@ mod tests {
         assert!(aliases.iter().any(|alias| alias == "Sanoba Witch"));
         assert!(!aliases.iter().any(|alias| alias == "魔女的夜宴"));
         assert!(!aliases.iter().any(|alias| alias == "サノバウィッチ"));
+    }
+
+    #[test]
+    fn relation_label_maps_every_vndb_code_to_chinese() {
+        assert_eq!(relation_label("seq"), "续作");
+        assert_eq!(relation_label("preq"), "前作");
+        assert_eq!(relation_label("set"), "同设定");
+        assert_eq!(relation_label("alt"), "外传");
+        assert_eq!(relation_label("char"), "角色作");
+        assert_eq!(relation_label("side"), "旁支");
+        assert_eq!(relation_label("par"), "同世界观");
+        assert_eq!(relation_label("ser"), "同系列");
+        assert_eq!(relation_label("fan"), "同人");
+        assert_eq!(relation_label("orig"), "原作");
+        assert_eq!(relation_label("misc"), "其他");
+        assert_eq!(relation_label("unknown"), "相关");
+        // New/unknown codes must never leak into the UI verbatim.
+        assert_eq!(relation_label("brand_new_code"), "相关");
+        assert_eq!(relation_label(""), "相关");
+    }
+
+    #[test]
+    fn kana_response_with_relations_projects_into_vndb_relations() {
+        // Shape copied from a real Kana `/vn` response: `results` holds the
+        // queried VN and each entry carries a nested `relations` array.
+        let fixture = r#"{
+            "results": [{
+                "id": "v16044",
+                "title": "Sanoba Witch",
+                "alttitle": "サノバウィッチ",
+                "released": "2015-02-27",
+                "rating": 84.6,
+                "image": {"url": "https://t.vndb.org/cv/44/16044.jpg", "sexual": 0.4},
+                "relations": [
+                    {
+                        "id": "v17785",
+                        "relation": "seq",
+                        "title": "Sabbat of the Witch",
+                        "alttitle": "サノバウィッチ 続編",
+                        "released": "2016-06-24",
+                        "rating": 80.0,
+                        "image": {"url": "https://t.vndb.org/cv/85/17785.jpg", "sexual": 1.8},
+                        "titles": [
+                            {"lang": "ja", "title": "サノバウィッチ 続編", "official": true, "main": true},
+                            {"lang": "zh-Hans", "title": "魔女的夜宴 续篇", "official": false, "main": false}
+                        ]
+                    },
+                    {
+                        "id": "v21755",
+                        "relation": "fan",
+                        "title": "Sanoba Witch Fandisc",
+                        "released": "2018-01-26",
+                        "rating": 0.0,
+                        "image": {"url": "https://t.vndb.org/cv/55/21755.jpg", "sexual": 0.0}
+                    },
+                    {
+                        "id": "v99999",
+                        "relation": "par",
+                        "title": "Related But Bare",
+                        "alttitle": "関連作"
+                    }
+                ]
+            }],
+            "more": false
+        }"#;
+
+        let parsed: KanaResponse = serde_json::from_str(fixture).unwrap();
+        assert_eq!(parsed.results.len(), 1);
+        let vn = parsed.results.into_iter().next().unwrap();
+        assert_eq!(vn.relations.len(), 3);
+
+        let relations: Vec<VndbRelation> = vn.relations.into_iter().map(relation_from_vn).collect();
+
+        let sequel = &relations[0];
+        assert_eq!(sequel.id, "v17785");
+        assert_eq!(sequel.relation, "seq");
+        assert_eq!(sequel.relation_label, "续作");
+        assert_eq!(sequel.title, "魔女的夜宴 续篇", "Chinese localization wins over romaji");
+        assert_eq!(sequel.original_title.as_deref(), Some("サノバウィッチ 続編"));
+        assert_eq!(sequel.release_date.as_deref(), Some("2016-06-24"));
+        assert_eq!(sequel.rating, Some(8.0), "0-100 is normalised to 0-10");
+        assert_eq!(sequel.cover_url.as_deref(), Some("https://t.vndb.org/cv/85/17785.jpg"));
+        assert_eq!(sequel.nsfw, Some(true));
+        assert_eq!(sequel.url, "https://vndb.org/v17785");
+
+        let fandisc = &relations[1];
+        assert_eq!(fandisc.relation_label, "同人");
+        assert_eq!(fandisc.original_title, None, "alttitle absent -> no 原名");
+        assert_eq!(fandisc.rating, None, "a zero rating is unrated, not 0.0");
+        assert_eq!(fandisc.nsfw, Some(false), "sexual 0.0 is evidence of a safe cover");
+
+        let bare = &relations[2];
+        assert_eq!(bare.relation_label, "同世界观");
+        assert_eq!(bare.title, "関連作", "no Chinese -> original script is the title");
+        assert_eq!(bare.original_title.as_deref(), Some("Related But Bare"));
+        assert_eq!(bare.release_date, None);
+        assert_eq!(bare.rating, None);
+        assert_eq!(bare.cover_url, None);
+        assert_eq!(bare.nsfw, None, "no image -> no evidence either way");
+        assert_eq!(bare.url, "https://vndb.org/v99999");
+    }
+
+    #[test]
+    fn vn_without_relations_yields_an_empty_relation_list() {
+        // Absent `relations` must not be an error: VNDB simply omits or empties it.
+        let parsed: KanaResponse =
+            serde_json::from_str(r#"{"results":[{"id":"v1","title":"Lonely"}]}"#).unwrap();
+        let vn = parsed.results.into_iter().next().unwrap();
+        assert!(vn.relations.is_empty());
     }
 }

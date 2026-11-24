@@ -20,6 +20,9 @@ export interface GameRowProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
+  /** Roving keyboard focus: exactly one row in the list is tabbable. */
+  focused?: boolean;
+  onFocusEntry?: () => void;
   dragInteraction?:HTMLAttributes<HTMLElement>;
   onOpenContextMenu?: (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void;
 }
@@ -44,6 +47,8 @@ export function GameRow({
   selectable = false,
   selected = false,
   onToggleSelected,
+  focused = false,
+  onFocusEntry,
   dragInteraction,
   onOpenContextMenu,
 }: GameRowProps) {
@@ -57,11 +62,12 @@ export function GameRow({
       data-game-entry={game.id}
       {...dragInteraction}
       data-game-context-trigger={onOpenContextMenu ? '' : undefined}
-      tabIndex={-1}
+      tabIndex={focused ? 0 : -1}
+      onFocus={onFocusEntry}
       onContextMenu={event => onOpenContextMenu?.(game, event)}
       onKeyDown={event => { if (isContextMenuKey(event)) onOpenContextMenu?.(game, event); }}
       className={cn(
-        "flex items-center gap-3 border-b border-border px-3 py-2 text-sm transition-colors last:border-b-0",
+        "flex items-center gap-3 border-b border-border px-3 py-2 text-sm outline-none transition-colors last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/70",
         selected ? "bg-primary/10" : "hover:bg-accent/50",
       )}
     >
@@ -87,6 +93,7 @@ export function GameRow({
         <CoverImage
           gameId={game.id}
           path={game.coverPath}
+          thumbnail
           alt=""
           fallbackText=""
           className="h-full w-full object-cover"

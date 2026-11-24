@@ -3,12 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { GeometryIcon } from '@/components/ui/geometry-icon';
 import { chat, executor, getConfig } from './api';
-import { runAgent, type Message, type AgentEvent } from './agent';
+import { runAgent, type Message, type AgentEvent, type ConfirmationPreview } from './agent';
 import { EMPTY_USAGE, addUsage, estimateCost, formatCost, formatTokens, loadPricing, type UsageTotals } from './pricing';
 
 type Entry = AgentEvent | { kind: 'user' | 'error'; text: string };
 const button = 'rounded-md border border-border px-3 py-1.5 text-xs transition-colors hover:bg-accent disabled:opacity-50';
-const labels: Record<string, string> = { list_games: '查询游戏库', get_game: '读取游戏资料', get_stats: '统计游戏库', update_game: '修改游戏', open_game: '打开游戏详情', launch_game: '启动游戏' };
+const labels: Record<string, string> = {
+  list_games: '查询游戏库', get_game: '读取游戏资料', get_stats: '统计游戏库', update_game: '修改游戏',
+  open_game: '打开游戏详情', launch_game: '启动游戏', bulk_update: '批量修改游戏', search_metadata: '搜索资料',
+  apply_metadata: '写入游戏资料', manage_folder: '管理文件夹', create_tag: '创建标签',
+};
+const toolNamePattern = new RegExp(Object.keys(labels).join('|'), 'g');
 /** 操作记录里的具体游戏名：新事件直接带 detail；旧记录从结果 JSON 里补出标题。 */
 function entryDetail(entry: AgentEvent): string | undefined {
   if (entry.detail) return entry.detail;
@@ -43,7 +48,7 @@ export function AiAssistant() {
   const [usage, setUsage] = useState<UsageTotals>(EMPTY_USAGE);
   const resizing = useRef(false);
   const [status, setStatus] = useState('');
-  const [pending, setPending] = useState<{ title: string; resolve: (value: boolean) => void } | null>(null);
+  const [pending, setPending] = useState<{ preview: ConfirmationPreview; resolve: (value: boolean) => void } | null>(null);
   const history = useRef<Message[]>([]); const control = useRef<AbortController | null>(null);
   const log = useRef<HTMLDivElement>(null); const input = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
@@ -70,16 +75,16 @@ export function AiAssistant() {
       const config = await getConfig(); current.signal.throwIfAborted();
       if (!config.baseUrl || !config.model) throw new Error('请先在「设置 → AI 助手」填写 API 地址和模型并保存。');
       history.current.push({ role: 'user', content: text });
-      const confirm = (title: string) => new Promise<boolean>(resolve => {
+      const confirm = (preview: ConfirmationPreview) => new Promise<boolean>(resolve => {
         const finish = (accepted: boolean) => { current.signal.removeEventListener('abort', aborted); setPending(null); resolve(accepted); };
         const aborted = () => finish(false);
         current.signal.addEventListener('abort', aborted, { once: true });
-        if (current.signal.aborted) finish(false); else { setStatus('等待确认启动…'); setPending({ title, resolve: finish }); }
+        if (current.signal.aborted) finish(false); else { setStatus('等待确认…'); setPending({ preview, resolve: finish }); }
       });
       await runAgent({ history: history.current, signal: current.signal,
         request: messages => chat(messages, current.signal), execute: executor(navigate, confirm, current.signal),
         onEvent: event => {
-          if (event.kind === 'thinking') setStatus(event.text.replace(/list_games|get_game|get_stats|update_game|open_game|launch_game/g, name => labels[name]));
+          if (event.kind === 'thinking') setStatus(event.text.replace(toolNamePattern, name => labels[name] ?? name));
           else if (event.kind === 'usage') { if (event.usage) setUsage(old => addUsage(old, event.usage!)); }
           else add(event);
         },
@@ -161,7 +166,7 @@ export function AiAssistant() {
         {!entries.length && <div className="py-6">
           <p className="text-base font-medium">用一句话管理你的游戏库</p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">先在配置中接入你的模型，再告诉我你想做什么。每一步操作的实际结果都会显示在这里。</p>
-          <div className="mt-5 flex flex-col items-start gap-2">{['统计一下我的游戏库', '找出未游玩的游戏，按评分排序', '我想翻译并替换一款游戏的简介'].map(text => <button key={text} className={`${button} text-left`} onClick={() => void send(text)}>{text}</button>)}</div>
+          <div className="mt-5 flex flex-col items-start gap-2">{['统计一下我的游戏库', '找出未游玩的游戏，按评分排序', '把未游玩里评分低于 7 的全部设为搁置', '用 VNDB 的资料补全一款游戏的开发商和简介', '我想翻译并替换一款游戏的简介'].map(text => <button key={text} className={`${button} text-left`} onClick={() => void send(text)}>{text}</button>)}</div>
         </div>}
         {entries.map((entry, index) => {
           if (entry.kind === 'tool') {
@@ -173,8 +178,12 @@ export function AiAssistant() {
           </div>;
         })}
         {pending && <div className="rounded-lg border border-primary/40 bg-primary/5 p-4">
-          <p className="text-sm font-medium">启动「{pending.title}」？</p><p className="mt-1 text-xs text-muted-foreground">将按该游戏已保存的启动配置运行。</p>
-          <div className="mt-3 flex gap-2"><button className={button} onClick={() => pending.resolve(true)}>确认启动</button><button className={button} onClick={() => pending.resolve(false)}>取消</button></div>
+          <p className="text-sm font-medium">{pending.preview.title}</p>
+          {pending.preview.detail ? <p className="mt-1 text-xs text-muted-foreground">{pending.preview.detail}</p> : null}
+          {pending.preview.items?.length ? <ul className="mt-2 max-h-32 list-inside list-disc overflow-y-auto text-xs text-muted-foreground">
+            {pending.preview.items.map(item => <li key={item}>{item}</li>)}
+          </ul> : null}
+          <div className="mt-3 flex gap-2"><button className={button} onClick={() => pending.resolve(true)}>确认执行</button><button className={button} onClick={() => pending.resolve(false)}>取消</button></div>
         </div>}
         {status && <p role="status" className="animate-pulse text-xs text-muted-foreground">{status}</p>}
       </div>

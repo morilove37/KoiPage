@@ -7,7 +7,7 @@ use super::{
 use serde::{Deserialize, Serialize};
 use sqlx::{
     SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use std::{
     borrow::Cow,
@@ -18,6 +18,7 @@ use std::{
         OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_sql::{DbInstances, DbPool};
@@ -148,19 +149,84 @@ pub(crate) fn publish_location(original: &Path, target: &Path) -> CmdResult<()> 
     Ok(())
 }
 
+/// Options shared by every connection this module opens.
+///
+/// The busy timeout is not cosmetic: the pool runs five connections and the
+/// launcher's session accounting takes write locks, so the 5s sqlx default can
+/// surface as "database is locked" under a slow disk.
+fn base_options(path: &Path, create: bool) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(create)
+        .busy_timeout(Duration::from_secs(10))
+}
+
+/// Options for the pool that serves the running app.
+///
+/// WAL stops a read from waiting behind the writer — the UI reads games and
+/// settings while play-session accounting writes — and `synchronous = NORMAL`
+/// is the pairing SQLite documents for WAL: a crash may lose the last commits
+/// but cannot corrupt the file. The journal mode is stored in the file header,
+/// so the first launch after an upgrade pays for the switch and later ones do
+/// not; `synchronous` is per connection and is re-applied on every open.
+fn live_options(path: &Path, create: bool) -> SqliteConnectOptions {
+    base_options(path, create)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+}
+
+/// Open the pool that serves the running app, preferring WAL.
+///
+/// WAL needs shared memory beside the database, which network shares and some
+/// removable filesystems do not provide. A user who moved their library to such
+/// a drive could open it before this change, so a failed WAL switch must not be
+/// the reason they cannot open it now: the pool falls back to the rollback
+/// journal the app has always used.
+async fn connect_live(path: &Path, create: bool) -> CmdResult<SqlitePool> {
+    let attempt = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(live_options(path, create))
+        .await;
+    match attempt {
+        Ok(db) => {
+            // Some filesystems accept the pragma and silently keep the old
+            // journal mode, so read it back instead of trusting the request.
+            match sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+                .fetch_one(&db)
+                .await
+            {
+                Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(db),
+                Ok(mode) => {
+                    crate::app_warn!(
+                        "[database] this drive keeps the {mode} journal; WAL is unavailable here"
+                    );
+                    db.close().await;
+                }
+                Err(failure) => {
+                    crate::app_warn!("[database] could not read the journal mode: {failure}");
+                    db.close().await;
+                }
+            }
+        }
+        Err(failure) => {
+            crate::app_warn!("[database] WAL open failed ({failure}); using the rollback journal");
+        }
+    }
+    Ok(SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(base_options(path, create))
+        .await?)
+}
+
 pub(crate) async fn open_existing(path: &Path) -> CmdResult<SqlitePool> {
     Ok(SqlitePoolOptions::new()
         .max_connections(5)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(false),
-        )
+        .connect_with(base_options(path, false))
         .await?)
 }
 
 pub(crate) async fn reconnect(app: &AppHandle, path: &Path) -> CmdResult<()> {
-    let db = open_existing(path).await?;
+    let db = connect_live(path, false).await?;
     app.state::<DbInstances>()
         .0
         .write()
@@ -193,15 +259,42 @@ pub(crate) async fn snapshot_closed_database(source: &Path, target: &Path) -> Cm
     Ok(())
 }
 
+/// Refuse a library that a newer build already migrated.
+///
+/// Migrations only move forward. sqlx validates the versions recorded in the
+/// file against the ones this binary knows, and an unknown version aborts the
+/// open with "migration N was previously applied but is missing in the
+/// resolved migrations" — accurate, but meaningless to someone who just
+/// reinstalled an older installer or opened an old shortcut. Checking up front
+/// turns that into an instruction they can act on, and it costs one query on a
+/// file that is about to be read anyway.
+async fn reject_newer_library(db: &SqlitePool) -> CmdResult<()> {
+    let newest = super::migrations()
+        .into_iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0);
+    // A database this app has never opened has no bookkeeping table yet; the
+    // failed lookup is the expected state, not an error worth reporting.
+    let recorded: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
+        .fetch_one(db)
+        .await
+        .ok();
+    match recorded {
+        Some(version) if version > newest => Err(error(format!(
+            "这个游戏库已被更新版本的恋页打开过（数据结构版本 {version}，当前程序只支持到 {newest}）。\
+             请安装最新版本后再打开，或用备份恢复旧版本的数据。"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 async fn open_and_migrate(path: &Path, create: bool) -> CmdResult<SqlitePool> {
-    let db = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(create),
-        )
-        .await?;
+    let db = connect_live(path, create).await?;
+    if let Err(failure) = reject_newer_library(&db).await {
+        db.close().await;
+        return Err(failure);
+    }
     let migrations = super::migrations()
         .into_iter()
         .map(|migration| {
@@ -260,6 +353,37 @@ pub async fn initialize_database(app: AppHandle) -> CmdResult<()> {
     Ok(())
 }
 
+/// Open and migrate the database during startup, before the frontend asks.
+///
+/// The window paints the moment the WebView finishes loading, and its very
+/// first settings read has to wait for the connection. Opening here overlaps
+/// that work with window creation instead of serialising behind it: by the time
+/// the frontend calls `initialize_database` the pool is already registered, and
+/// the call returns from the "already open" branch.
+///
+/// This is deliberately *not* the sql plugin's `preload`: that resolves a
+/// relative `sqlite:` URL against `app_config_dir()`, which is exactly the
+/// location a relocated library must not use, and it consumes the migration
+/// list the normal path still needs. Everything here goes through the same
+/// directory resolution as the command above, so the two agree.
+///
+/// Failures are left to the command path, which reports them to the UI: a
+/// startup that cannot open the database should surface as a normal error
+/// dialog, not as a silent background failure.
+pub async fn warm_up(app: &AppHandle) {
+    // The plugin registers `DbInstances` while plugins initialise, which
+    // happens before the app's own setup closure — but only trust that if it
+    // is actually there, since `state` panics when it is missing.
+    if app.try_state::<DbInstances>().is_none() {
+        crate::app_warn!("[database] the sql plugin did not register its state; skipping warm-up");
+        return;
+    }
+    match initialize_database(app.clone()).await {
+        Ok(()) => crate::logging::record("INFO", "backend", "[database] opened before the frontend asked"),
+        Err(failure) => crate::app_warn!("[database] startup warm-up failed: {failure}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +395,17 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+    /// Windows releases SQLite's file handles a moment after `close()` resolves,
+    /// so removing the directory can still fail briefly. Retry instead of flaking.
+    fn cleanup(root: &Path) {
+        for _ in 0..50 {
+            match fs::remove_dir_all(root) {
+                Ok(()) => return,
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn missing_custom_database_never_falls_back_to_original_database() {
@@ -330,6 +465,172 @@ mod tests {
         assert!(resolve_directory(&original).is_err(), "no ready restore must fail instead of creating an empty database");
         fs::remove_dir_all(root).unwrap();
     }
+    /// Build the database an older release would have left behind: the same
+    /// migration SQL, applied only up to `through`.
+    async fn library_at_version(path: &Path, through: i64) -> SqlitePool {
+        let db = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(base_options(path, true))
+            .await
+            .unwrap();
+        let migrations = super::super::migrations()
+            .into_iter()
+            .filter(|migration| migration.version <= through)
+            .map(|migration| {
+                sqlx::migrate::Migration::new(
+                    migration.version,
+                    migration.description.into(),
+                    sqlx::migrate::MigrationType::ReversibleUp,
+                    migration.sql.into(),
+                    false,
+                )
+            })
+            .collect();
+        sqlx::migrate::Migrator {
+            migrations: Cow::Owned(migrations),
+            ..sqlx::migrate::Migrator::DEFAULT
+        }
+        .run(&db)
+        .await
+        .unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn upgrading_a_released_library_keeps_every_row_and_only_adds_structure() {
+        // Every shipped installer up to v0.7.6 embedded only migrations 1-4, so
+        // that is the state an upgrading user actually brings. Rebuilding it
+        // here from the same SQL keeps the checksums identical to theirs.
+        let root = fixture();
+        let path = root.join("galgame.db");
+        let old = library_at_version(&path, 4).await;
+        sqlx::query(
+            "INSERT INTO games(title,install_path,status,favorite,play_time_seconds,description,created_at,updated_at) \
+             VALUES('Existing','E:/games/existing','completed',1,3600,'简介','2026-01-01','2026-01-01')",
+        )
+        .execute(&old)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tags(name) VALUES('已有标签')")
+            .execute(&old)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO game_tags(game_id,tag_id) VALUES(1,1)")
+            .execute(&old)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO play_sessions(game_id,started_at,ended_at,duration_seconds) \
+             VALUES(1,'2026-01-01T00:00:00Z','2026-01-01T01:00:00Z',3600)",
+        )
+        .execute(&old)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('theme','light')")
+            .execute(&old)
+            .await
+            .unwrap();
+        old.close().await;
+
+        // This is exactly what the next launch does.
+        let upgraded = open_and_migrate(&path, false).await.unwrap();
+        verify(&upgraded).await.unwrap();
+
+        let games: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM games")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        let tags: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM game_tags")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM play_sessions")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        let theme: String = sqlx::query_scalar("SELECT value FROM settings WHERE key='theme'")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        let play_time: i64 = sqlx::query_scalar("SELECT play_time_seconds FROM games WHERE id=1")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        assert_eq!((games, tags, sessions), (1, 1, 1), "upgrading must not drop rows");
+        assert_eq!(theme, "light");
+        assert_eq!(play_time, 3600);
+
+        let versions: Vec<i64> =
+            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&upgraded)
+                .await
+                .unwrap();
+        let expected: Vec<i64> = super::super::migrations()
+            .into_iter()
+            .map(|migration| migration.version)
+            .collect();
+        assert_eq!(versions, expected, "every migration must be recorded");
+
+        // The columns and tables the new features read must exist afterwards.
+        let twodfan: Option<String> = sqlx::query_scalar("SELECT twodfan_id FROM games WHERE id=1")
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+        assert_eq!(twodfan, None);
+        for table in ["twodfan_topic_list", "twodfan_topic", "vndb_relation"] {
+            let found: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .bind(table)
+            .fetch_one(&upgraded)
+            .await
+            .unwrap();
+            assert_eq!(found, 1, "{table} must exist after the upgrade");
+        }
+        upgraded.close().await;
+
+        // Reopening the upgraded file must be a no-op, not a second migration.
+        let reopened = open_and_migrate(&path, false).await.unwrap();
+        let games: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM games")
+            .fetch_one(&reopened)
+            .await
+            .unwrap();
+        assert_eq!(games, 1);
+        reopened.close().await;
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn a_library_migrated_by_a_newer_build_is_reported_in_words_not_sqlx_codes() {
+        let root = fixture();
+        let path = root.join("galgame.db");
+        let db = open_and_migrate(&path, true).await.unwrap();
+        // Pretend a future build applied a migration this binary has never seen.
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) \
+             VALUES(999,'from the future',TRUE,x'00',0)",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        db.close().await;
+        let failure = open_and_migrate(&path, false).await.unwrap_err();
+        let message = failure.to_string();
+        assert!(
+            message.contains("更新版本") && message.contains("999"),
+            "expected an actionable message, got: {message}"
+        );
+        // The refusal must not have touched the file.
+        let retained = open_existing(&path).await.unwrap();
+        let newest: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
+            .fetch_one(&retained)
+            .await
+            .unwrap();
+        assert_eq!(newest, 999);
+        retained.close().await;
+        cleanup(&root);
+    }
+
     #[tokio::test]
     async fn frozen_database_snapshot_keeps_wal_commits_descriptions_and_migration_checksums() {
         let root = fixture();

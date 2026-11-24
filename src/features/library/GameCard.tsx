@@ -31,6 +31,9 @@ export interface GameCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelected?: (gameId: number) => void;
+  /** Roving keyboard focus: exactly one card in the grid is tabbable. */
+  focused?: boolean;
+  onFocusEntry?: () => void;
   dragInteraction?:HTMLAttributes<HTMLElement>;
   onOpenContextMenu?: (game: Game, event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => void;
 }
@@ -43,6 +46,8 @@ export function GameCard({
   selectable = false,
   selected = false,
   onToggleSelected,
+  focused = false,
+  onFocusEntry,
   dragInteraction,
   onOpenContextMenu,
 }: GameCardProps) {
@@ -63,11 +68,12 @@ export function GameCard({
       data-game-entry={game.id}
       {...dragInteraction}
       data-game-context-trigger={onOpenContextMenu ? '' : undefined}
-      tabIndex={-1}
+      tabIndex={focused ? 0 : -1}
+      onFocus={onFocusEntry}
       onContextMenu={event => onOpenContextMenu?.(game, event)}
       onKeyDown={event => { if (isContextMenuKey(event)) onOpenContextMenu?.(game, event); }}
       className={cn(
-        "lift group relative flex flex-col overflow-hidden rounded-lg border bg-card",
+        "lift group relative flex flex-col overflow-hidden rounded-lg border bg-card outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
         selected
           ? "border-primary ring-2 ring-primary/60"
           : "border-border hover:border-primary/60",
@@ -104,6 +110,7 @@ export function GameCard({
           <CoverImage
             gameId={game.id}
             path={game.coverPath}
+            thumbnail
             crop={effectiveCoverCrop(game.coverPath, coverPreferences)}
             alt={game.title}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"

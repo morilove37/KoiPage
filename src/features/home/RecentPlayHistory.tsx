@@ -115,7 +115,7 @@ export function RecentPlayHistory({ games, refreshKey }: { games: Game[]; refres
     const timelineExpanded = expandedGroups.has(groupKey);
     const totalSeconds = group.sessions.reduce((total, session) => total + session.durationSeconds, 0);
     const header = <>
-      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game?.id} path={game?.coverPath ?? null} alt={title} className="h-full w-full object-cover" fallbackText="" /></div>
+      <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted"><CoverImage gameId={game?.id} path={game?.coverPath ?? null} thumbnail alt={title} className="h-full w-full object-cover" fallbackText="" /></div>
       <div className="min-w-0 flex-1">
         <h3 className="truncate text-sm font-medium">{title}</h3>
         <p className="mt-1 text-[11px] text-muted-foreground">{group.sessions.length > 1 ? `连续游玩 ${group.sessions.length} 次` : "游玩 1 次"} · 合计 {duration(totalSeconds)}</p>

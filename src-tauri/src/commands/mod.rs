@@ -16,9 +16,11 @@ pub mod resource_storage;
 pub mod data_storage;
 pub mod downloader;
 pub mod games;
+pub mod library_health;
 pub mod metadata;
 pub mod metadata_refresh;
 pub mod model;
+pub mod network;
 pub mod play_sessions;
 pub mod scan_roots;
 pub mod settings;
@@ -26,6 +28,7 @@ pub mod tags;
 pub mod util;
 pub mod updater;
 pub mod share;
+pub mod twodfan_topics;
 pub mod window;
 
 // `CmdError` / `CmdResult` are used by the sibling modules via `super::error`;
@@ -80,6 +83,21 @@ pub fn migrations() -> Vec<tauri_plugin_sql::Migration> {
         version: 4,
         description: "Bangumi collection sync",
         sql: include_str!("../../migrations/0004_bangumi_sync.sql"),
+        kind: MigrationKind::Up,
+    }, tauri_plugin_sql::Migration {
+        version: 5,
+        description: "2DFan guide cache",
+        sql: include_str!("../../migrations/0005_twodfan_topics.sql"),
+        kind: MigrationKind::Up,
+    }, tauri_plugin_sql::Migration {
+        version: 6,
+        description: "VNDB related works cache",
+        sql: include_str!("../../migrations/0006_vndb_relations.sql"),
+        kind: MigrationKind::Up,
+    }, tauri_plugin_sql::Migration {
+        version: 7,
+        description: "list ordering indexes",
+        sql: include_str!("../../migrations/0007_indexes.sql"),
         kind: MigrationKind::Up,
     }]
 }

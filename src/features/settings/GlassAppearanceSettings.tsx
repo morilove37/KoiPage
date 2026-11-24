@@ -2,10 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { settingsGet, settingsSet } from '@/lib/db';
 import { applyGlassAppearance, DEFAULT_GLASS_APPEARANCE, GLASS_BLUR_KEY, GLASS_OPACITY_KEY, parseGlassAppearance } from '@/lib/glass-appearance';
 import type { GlassAppearance } from '@/lib/glass-appearance';
+import { snapshotValue } from '@/lib/settings-snapshot';
+import type { SettingsSnapshot } from '@/lib/settings-snapshot';
 
-export async function initGlassAppearance(): Promise<GlassAppearance> {
-  const [opacity, blur] = await Promise.all([settingsGet(GLASS_OPACITY_KEY), settingsGet(GLASS_BLUR_KEY)]);
-  const appearance = parseGlassAppearance(opacity, blur);
+/**
+ * Apply the stored glass pane opacity/blur.
+ *
+ * `snapshot` is the startup settings read; passing it avoids two more
+ * `settings_get` calls before the first paint. Without it the keys are read
+ * directly, which is what the settings page does when it mounts.
+ */
+export async function initGlassAppearance(snapshot?: SettingsSnapshot): Promise<GlassAppearance> {
+  const [opacity, blur] = snapshot
+    ? [snapshotValue(snapshot, GLASS_OPACITY_KEY), snapshotValue(snapshot, GLASS_BLUR_KEY)]
+    : await Promise.all([settingsGet(GLASS_OPACITY_KEY), settingsGet(GLASS_BLUR_KEY)]);
+  const appearance = parseGlassAppearance(opacity ?? null, blur ?? null);
   applyGlassAppearance(appearance);
   return appearance;
 }

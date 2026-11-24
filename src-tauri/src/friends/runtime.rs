@@ -771,7 +771,7 @@ mod tests {
             ..Inner::default()
         };
         inner.failed(&CmdError(
-            "FRIENDS_NETWORK: 无法连接内测服务，请稍后重试".into(),
+            "FRIENDS_NETWORK: 无法连接好友服务，请稍后重试".into(),
         ));
         assert!(!inner.connected, "a transport failure is not connected");
         assert!(inner.tokens.is_some() && inner.account.is_some() && inner.config.enabled);

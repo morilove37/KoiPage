@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@/lib/logging";
 
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +56,8 @@ import type { GameDetail, GamePatch, GameStatus, PlaySession, Tag } from "@/type
 
 import { TagSelector } from "./TagSelector";
 import PlayHistoryPanel from "./PlayHistoryPanel";
+import { GuidePanel } from "./GuidePanel";
+import { RelationsPanel } from "./RelationsPanel";
 import { detailFields, detailPatchFor, launchPathUnavailable } from "./detail-edits";
 import type { DetailSection, GamePathState } from "./detail-edits";
 
@@ -74,6 +77,7 @@ interface FormState {
   savePath: string;
   notes: string;
   vndbId: string;
+  twodfanId: string;
 }
 
 function toForm(game: GameDetail): FormState {
@@ -92,6 +96,7 @@ function toForm(game: GameDetail): FormState {
     savePath: game.savePath ?? "",
     notes: game.notes ?? "",
     vndbId: game.vndbId ?? "",
+    twodfanId: game.twodfanId ?? "",
   };
 }
 
@@ -137,23 +142,33 @@ export default function GameDetailPage() {
   const [tagError, setTagError] = useState<string | null>(null);
   const [tab, setTab] = useState("info");
   const contentRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const moreActions = useRef<HTMLDetailsElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const [editingInfo, setEditingInfo] = useState(false);
   const [expandedDescription, setExpandedDescription] = useState(false);
+  const [expandedTags, setExpandedTags] = useState(false);
   const [pathCheck, setPathCheck] = useState<{ key: string; state?: GamePathState } | null>(null);
   const [choosingLauncher, setChoosingLauncher] = useState(false);
 
   useEffect(() => {
     setEditingInfo(false);
     setExpandedDescription(false);
+    setExpandedTags(false);
   }, [gameId]);
 
   useEffect(() => {
     const requested = searchParams.get("tab");
-    setTab(requested && ["info", "files", "tags", "history", "saves"].includes(requested) ? requested : "info");
+    setTab(requested && ["info", "guide", "files", "tags", "history", "saves"].includes(requested) ? requested : "info");
     contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }, [searchParams]);
+
+  useEffect(() => {
+    const tabs = tabsRef.current;
+    if (tabs && tabs.scrollWidth > tabs.clientWidth) {
+      tabs.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [game?.id, tab]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -455,6 +470,28 @@ export default function GameDetailPage() {
     contentRef.current?.scrollTo({ top: 0, behavior: "instant" });
   }
 
+  /** Open an external page (2DFan topic, VNDB entry) in the system browser. */
+  function openExternal(url: string) {
+    void openUrl(url).catch(cause => setError(errorMessage(cause)));
+  }
+
+  /** Bind a 2DFan subject to this game, then refresh so the guide list loads. */
+  const bindTwodfanSubject = useCallback(async (subjectId: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await gameUpdate(gameId, { twodfanId: subjectId });
+      setGame(current => current?.id === updated.id ? { ...current, ...updated } : current);
+      if (formBaseline.current) formBaseline.current = { ...formBaseline.current, twodfanId: subjectId };
+      setForm(current => current ? { ...current, twodfanId: subjectId } : current);
+      toast("已绑定 2DFan 作品。");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setSaving(false);
+    }
+  }, [gameId, toast]);
+
   async function chooseLaunchFile() {
     if (!game || choosingLauncher) return;
     selectTab("files");
@@ -598,6 +635,12 @@ export default function GameDetailPage() {
   const needsLauncher = !installation.archived && launchPathUnavailable(game.exePath, pathState, running);
   const description = game.description?.trim() || "";
   const longDescription = description.length > 180 || description.split("\n").length > 4;
+  const previewTags = game.tags
+    .map(id => tagById.get(id))
+    .filter((tag): tag is Tag => tag !== undefined);
+  const tagPreviewLimit = 8;
+  const hiddenTagCount = previewTags.length - tagPreviewLimit;
+  const visibleTags = expandedTags ? previewTags : previewTags.slice(0, tagPreviewLimit);
   const draftPatch = buildPatch() ?? {};
   const sectionActions = (section: DetailSection, label: string) => {
     const changed = Object.keys(detailPatchFor(draftPatch, section)).length > 0;
@@ -611,25 +654,33 @@ export default function GameDetailPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 p-5" data-game-detail data-game-id={game.id}>
+    <div className="flex h-full min-h-0 flex-col gap-3 px-3 py-4 sm:px-5" data-game-detail data-game-id={game.id}>
       {/* Header ---------------------------------------------------------- */}
-      <div className="flex shrink-0 flex-col gap-2" data-detail-header>
-        <div className="flex items-center justify-between gap-3" data-detail-toolbar>
-          <div className="flex shrink-0 items-center gap-2">
-            <BackButton
-              onClick={goBack}
-              title="返回上一页"
-              aria-label="返回"
-            />
-            <Link
-              to="/library"
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              游戏库
-            </Link>
-          </div>
+      <div className="relative z-20 flex shrink-0 flex-col gap-2" data-detail-header>
+        <div className="flex shrink-0 items-center gap-2">
+          <BackButton
+            onClick={goBack}
+            title="返回上一页"
+            aria-label="返回"
+          />
+          <Link
+            to="/library"
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            游戏库
+          </Link>
+        </div>
 
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div className="detail-hero rounded-xl border border-border bg-card px-4 py-3 sm:px-5" data-detail-toolbar>
+          <div className="min-w-0 space-y-1">
+            <h1 className="line-clamp-2 break-words text-xl font-semibold leading-tight tracking-tight sm:text-2xl" title={game.title}>
+              {game.title}
+            </h1>
+            {game.originalTitle && game.originalTitle !== game.title ? (
+              <p className="truncate text-xs text-muted-foreground sm:text-sm" title={game.originalTitle}>{game.originalTitle}</p>
+            ) : null}
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Select
               aria-label="游戏状态"
               className="w-24 shrink-0"
@@ -640,14 +691,6 @@ export default function GameDetailPage() {
             />
             <Button variant="outline" aria-pressed={favorite} onClick={() => void toggleFavorite()}>
               {favorite ? "★ 已收藏" : "☆ 收藏"}
-            </Button>
-            <Button
-              loading={launching || choosingLauncher}
-              disabled={!installation.loaded || installation.archived || saving}
-              onClick={() => void (needsLauncher ? chooseLaunchFile() : launcher.launch(game))}
-              title={installation.archived ? "请在「路径与启动」恢复为已安装" : undefined}
-            >
-              {installation.archived ? "已卸载" : launching ? "启动中…" : running ? "运行中" : needsLauncher ? "选择启动文件" : "启动游戏"}
             </Button>
             <details ref={moreActions} className="group relative z-20" onBlur={event => {
               if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
@@ -679,28 +722,40 @@ export default function GameDetailPage() {
                 }}>删除条目</Button>
               </div>
             </details>
+            <Button
+              className="min-w-[6rem]"
+              loading={launching || choosingLauncher}
+              disabled={!installation.loaded || installation.archived || saving}
+              onClick={() => void (needsLauncher ? chooseLaunchFile() : launcher.launch(game))}
+              title={installation.archived ? "请在「路径与启动」恢复为已安装" : undefined}
+            >
+              {installation.archived ? "已卸载" : launching ? "启动中…" : running ? "运行中" : needsLauncher ? "选择启动文件" : "启动游戏"}
+            </Button>
           </div>
         </div>
-        <h1 className="min-w-0 truncate text-2xl font-semibold tracking-tight sm:text-3xl" title={game.title}>
-          {game.title}
-        </h1>
       </div>
 
-      <Tabs
-        className="shrink-0"
-        label="游戏详情分区"
-        value={tab}
-        onValueChange={selectTab}
-        items={[
-          { value: "info", label: "基本信息" },
-          { value: "history", label: "游玩历史" },
-          { value: "files", label: "路径与启动" },
-          { value: "saves", label: "存档备份" },
-          { value: "tags", label: "标签" },
-        ]}
-      />
+      <div
+        className="shrink-0 overflow-x-auto rounded-xl p-0.5"
+        ref={tabsRef}
+      >
+        <Tabs
+          className="min-w-[26rem]"
+          label="游戏详情分区"
+          value={tab}
+          onValueChange={selectTab}
+          items={[
+            { value: "info", label: "基本信息" },
+            { value: "guide", label: "攻略与关联" },
+            { value: "history", label: "游玩历史" },
+            { value: "files", label: "路径与启动" },
+            { value: "saves", label: "存档备份" },
+            { value: "tags", label: "标签" },
+          ]}
+        />
+      </div>
 
-      <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
+      <div ref={contentRef} className={`flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto pb-3 [scrollbar-gutter:stable]${sharedOpening.current ? "" : " detail-content-enter"}`} data-detail-scroll>
       {installation.archived ? <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs">
         <span>已卸载并归档 · 游戏资料、游玩历史和存档备份保留。</span>
         <Button size="sm" variant="outline" onClick={() => selectTab("files")}>重新指定路径与安装状态</Button>
@@ -717,55 +772,51 @@ export default function GameDetailPage() {
         </div>
       ) : null}
 
-      <div className="detail-layout grid items-start gap-3 grid-cols-[112px_minmax(0,1fr)] md:grid-cols-[160px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)]"
+      <div className="detail-layout grid items-start gap-3"
         data-detail-layout={landscape ? "landscape" : "portrait"}
         style={{ "--detail-cover-ratio": dimensions ? dimensions.width / dimensions.height : 3 / 4 } as CSSProperties}>
         {/* Cover --------------------------------------------------------- */}
-        <Card className="detail-summary-card h-fit min-w-0">
-          <CardContent className="detail-summary-content p-3">
-            <div data-detail-cover className="detail-cover-frame relative w-full overflow-hidden rounded bg-muted">
-              <CoverImage
-                gameId={game.id}
-                loading="eager"
-                path={game.coverPath}
-                alt={game.title}
-                className="h-full w-full object-contain"
-                onDimensions={size => setCoverSize(size ? { path: displayCoverPath, ...size } : null)}
-              />
-              {cropEditor.overlay}
+        <Card className="h-fit min-w-0 rounded-xl">
+          <CardContent className="detail-summary-content p-3 sm:p-4">
+            <div className="min-w-0">
+              <div data-detail-cover className="detail-cover-frame relative w-full overflow-hidden rounded-lg bg-muted">
+                <CoverImage
+                  gameId={game.id}
+                  loading="eager"
+                  path={game.coverPath}
+                  alt={game.title}
+                  className="h-full w-full object-contain"
+                  onDimensions={size => setCoverSize(size ? { path: displayCoverPath, ...size } : null)}
+                />
+                {cropEditor.overlay}
+              </div>
+              <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
             </div>
-            <div className="detail-summary-information min-w-0">
-            <CoverControls gameId={game.id} sourcePath={game.coverPath} title={game.title} cropControls={cropEditor.controls} />
-            <dl data-detail-metadata className="mt-3 grid grid-cols-[3rem_minmax(0,1fr)] items-start gap-x-2 gap-y-2 text-xs">
-              <dt className="text-muted-foreground">评分</dt>
-              <dd className="min-w-0 break-words text-right font-semibold tabular-nums text-primary">{game.rating === null ? "未评分" : formatRating(game.rating)}</dd>
-              <dt className="text-muted-foreground">发售日</dt>
-              <dd className="min-w-0 break-words text-right">{game.releaseDate || "未填写"}</dd>
-              <dt className="text-muted-foreground">开发商</dt>
-              <dd className="min-w-0 break-words text-right">{game.developer || "未填写"}</dd>
-              <dt className="text-muted-foreground">原名</dt>
-              <dd className="min-w-0 break-words text-right">{game.originalTitle || "未填写"}</dd>
-              <dt className="text-muted-foreground">状态</dt>
-              <dd className="min-w-0 text-right">{GAME_STATUS_LABELS[game.status]}</dd>
-            </dl>
-            <dl data-detail-records className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
-              <div className="flex justify-between gap-2">
-                <dt className="shrink-0 whitespace-nowrap text-muted-foreground">游玩时长</dt>
-                <dd>{formatPlayTime(game.playTimeSeconds)}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="shrink-0 whitespace-nowrap text-muted-foreground">最近游玩</dt>
-                <dd className="text-right">{formatDateTime(game.lastPlayedAt)}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">创建于</dt>
-                <dd className="text-right">{formatDateTime(game.createdAt)}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">更新于</dt>
-                <dd className="text-right">{formatDateTime(game.updatedAt)}</dd>
-              </div>
-            </dl>
+            <div className="min-w-0 space-y-3">
+              <dl data-detail-records className="detail-stats grid gap-2">
+                <div>
+                  <dt>游玩时长</dt>
+                  <dd>{formatPlayTime(game.playTimeSeconds)}</dd>
+                </div>
+                <div>
+                  <dt>评分</dt>
+                  <dd className={game.rating === null ? undefined : "text-primary"}>{game.rating === null ? "未评分" : formatRating(game.rating)}</dd>
+                </div>
+                <div>
+                  <dt>最近游玩</dt>
+                  <dd>{formatDateTime(game.lastPlayedAt)}</dd>
+                </div>
+              </dl>
+              <dl data-detail-metadata className="detail-metadata grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 border-t border-border pt-3 text-xs">
+                <dt>开发商</dt>
+                <dd>{game.developer || "未填写"}</dd>
+                <dt>发售日</dt>
+                <dd>{game.releaseDate || "未填写"}</dd>
+                <dt>创建于</dt>
+                <dd>{formatDateTime(game.createdAt)}</dd>
+                <dt>更新于</dt>
+                <dd>{formatDateTime(game.updatedAt)}</dd>
+              </dl>
             </div>
           </CardContent>
         </Card>
@@ -774,16 +825,16 @@ export default function GameDetailPage() {
         <div className="min-w-0 space-y-3" data-detail-panel>
         {tab === "info" ? (
           <>
-            <Card className="min-w-0">
-              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-                <CardTitle>{editingInfo ? "编辑资料" : "作品简介"}</CardTitle>
+            <Card className="min-w-0 rounded-xl">
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 sm:px-5">
+                <CardTitle className="text-base">{editingInfo ? "编辑资料" : "作品简介"}</CardTitle>
                 {!editingInfo ? <Button ref={editButton} size="sm" variant="outline" onClick={() => {
                   setError(null);
                   resetDraft("info", game);
                   setEditingInfo(true);
                 }}>编辑资料</Button> : null}
               </CardHeader>
-              <CardContent>
+              <CardContent className="sm:px-5 sm:pb-5">
                 {editingInfo ? (
                   <fieldset disabled={saving} className="min-w-0 space-y-4">
                     <div data-detail-editor className="grid gap-3 sm:grid-cols-2">
@@ -797,6 +848,9 @@ export default function GameDetailPage() {
                       <Field label="简介" className="sm:col-span-2"><Textarea className="min-h-40" value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></Field>
                       <Field label="原封面路径"><Input value={form.coverPath} onChange={event => setForm({ ...form, coverPath: event.target.value })} placeholder="本地绝对路径" /></Field>
                       <Field label="VNDB ID"><Input value={form.vndbId} onChange={event => setForm({ ...form, vndbId: event.target.value })} /></Field>
+                      <Field label="2DFan 作品 ID" hint="在「攻略与关联」分区搜索绑定，也可直接填数字 ID">
+                        <Input value={form.twodfanId} onChange={event => setForm({ ...form, twodfanId: event.target.value })} placeholder="例如 21" />
+                      </Field>
                       <Field label="备注" className="sm:col-span-2"><Textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} /></Field>
                     </div>
                     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
@@ -805,15 +859,21 @@ export default function GameDetailPage() {
                 ) : (
                   <div className="space-y-3">
                     {description ? <>
-                      <p id="game-description" className={cn("whitespace-pre-wrap break-words text-sm leading-7", longDescription && !expandedDescription && "line-clamp-6")}>{description}</p>
+                      <p id="game-description" className={cn("max-w-[72ch] whitespace-pre-wrap break-words text-sm leading-7", longDescription && !expandedDescription && "line-clamp-6")}>{description}</p>
                       {longDescription ? <Button size="sm" variant="ghost" className="px-0 text-primary" aria-expanded={expandedDescription} aria-controls="game-description" onClick={() => setExpandedDescription(value => !value)}>{expandedDescription ? "收起简介" : "展开简介"}</Button> : null}
                     </> : <p className="text-sm text-muted-foreground">暂无简介。可编辑资料，或在更多操作中联网获取。</p>}
-                    {game.tags.length ? <div className="flex flex-wrap gap-1.5" aria-label="作品标签">
-                      {game.tags.map(id => {
-                        const tag = tagById.get(id);
-                        return tag ? <Badge key={id} color={tag.color} variant="outline">{t(tag.name)}</Badge> : null;
-                      })}
-                    </div> : null}
+                    {previewTags.length > 0 ? (
+                      <div className="space-y-2 border-t border-border pt-3">
+                        <div id="game-tag-preview" className="flex flex-wrap gap-1.5" aria-label="作品标签">
+                          {visibleTags.map(tag => <Badge key={tag.id} color={tag.color} variant="outline" className="max-w-full whitespace-normal [overflow-wrap:anywhere]">{t(tag.name)}</Badge>)}
+                        </div>
+                        {hiddenTagCount > 0 ? (
+                          <Button size="sm" variant="ghost" className="px-0 text-primary" aria-expanded={expandedTags} aria-controls="game-tag-preview" onClick={() => setExpandedTags(value => !value)}>
+                            {expandedTags ? "收起标签" : `另有 ${hiddenTagCount} 个标签`}
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </CardContent>
@@ -823,6 +883,24 @@ export default function GameDetailPage() {
               <CardContent><p className="whitespace-pre-wrap break-words text-sm leading-6">{game.notes}</p></CardContent>
             </Card> : null}
             <BangumiSyncProfilePanel key={game.id} gameId={game.id} />
+          </>
+        ) : null}
+
+        {tab === "guide" ? (
+          <>
+            <GuidePanel
+              key={`guide:${game.id}`}
+              gameId={game.id}
+              twodfanId={game.twodfanId}
+              onBindSubject={subjectId => { void bindTwodfanSubject(subjectId); }}
+              onOpenUrl={openExternal}
+            />
+            <RelationsPanel
+              key={`relations:${game.id}:${game.vndbId ?? ""}`}
+              vndbId={game.vndbId}
+              onOpenUrl={openExternal}
+              onOpenGame={id => navigate(`/library/${id}`)}
+            />
           </>
         ) : null}
 

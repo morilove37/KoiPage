@@ -22,6 +22,8 @@
 
 import { settingsGet, settingsSet } from './db';
 import { applyAccent, initAccent } from './accent';
+import { snapshotValue } from './settings-snapshot';
+import type { SettingsSnapshot } from './settings-snapshot';
 
 /** Settings key holding the persisted choice. */
 export const THEME_SETTING_KEY = 'theme';
@@ -178,10 +180,14 @@ export function watchSystemTheme(theme: Theme): () => void {
  *
  * A database failure is swallowed: a missing theme must never stop the app
  * from rendering, and the fallback (`system`) is always valid.
+ *
+ * `snapshot` is the startup settings read. When the caller already has one, the
+ * theme comes out of it instead of costing another IPC round trip; without one
+ * this behaves exactly as before.
  */
-export async function loadTheme(): Promise<Theme> {
+export async function loadTheme(snapshot?: SettingsSnapshot): Promise<Theme> {
   try {
-    const stored = await settingsGet(THEME_SETTING_KEY);
+    const stored = snapshot ? snapshotValue(snapshot, THEME_SETTING_KEY) : await settingsGet(THEME_SETTING_KEY);
     return isTheme(stored) ? stored : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
@@ -205,9 +211,13 @@ export async function setTheme(theme: Theme): Promise<void> {
  * the choice is `system` or `glass`. Returns the applied choice.
  *
  * Safe to call once at startup; it never throws.
+ *
+ * `snapshot` is the settings read the caller already performed, so startup can
+ * apply the theme without a second database round trip. Omitting it keeps the
+ * original behaviour (read both keys directly).
  */
-export async function initTheme(): Promise<Theme> {
-  const [theme] = await Promise.all([loadTheme(), initAccent()]);
+export async function initTheme(snapshot?: SettingsSnapshot): Promise<Theme> {
+  const [theme] = await Promise.all([loadTheme(snapshot), initAccent(snapshot)]);
   applyTheme(theme);
   watchSystemTheme(theme);
   return theme;

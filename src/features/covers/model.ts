@@ -33,6 +33,22 @@ export function effectiveCoverPath(path: string | null, preferences: CoverPrefer
   return preferences.customPath ?? path;
 }
 
+/**
+ * Map a managed cover to its cached 320px thumbnail.
+ *
+ * Only files the app stored itself (`covers/<sha>.<ext>`) have one; remote
+ * URLs, `custom-covers/` files and anything else return null so callers keep
+ * the original source.
+ */
+export function coverThumbnailPath(path: string | null | undefined): string | null {
+  const trimmed = path?.trim();
+  if (!trimmed || /^(https?:|data:|blob:)/i.test(trimmed)) return null;
+  const match = /^(.*[\\/]covers)[\\/]([^\\/]+)\.[A-Za-z0-9]+$/.exec(trimmed);
+  if (!match) return null;
+  const separator = match[1].includes('\\') ? '\\' : '/';
+  return `${match[1]}${separator}thumbs${separator}${match[2]}.jpg`;
+}
+
 export function effectiveCoverCrop(path: string | null, preferences: CoverPreferences): CoverCrop | null {
   return preferences.crop?.path === effectiveCoverPath(path, preferences) ? preferences.crop : null;
 }

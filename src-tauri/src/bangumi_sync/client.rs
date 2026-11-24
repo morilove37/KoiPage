@@ -41,20 +41,22 @@ impl Client {
         authorization.set_sensitive(true);
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, authorization);
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
-            .user_agent(concat!(
-                "KoiPage/",
-                env!("CARGO_PKG_VERSION"),
-                " (https://github.com/morilove37/KoiPage)"
-            ))
-            // Reject all redirects so credentials cannot reach another origin.
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| error("BGM_CLIENT", "无法创建 Bangumi 连接"))?;
+        let http = crate::net::proxy::apply(
+            reqwest::Client::builder()
+                .default_headers(headers)
+                .user_agent(concat!(
+                    "KoiPage/",
+                    env!("CARGO_PKG_VERSION"),
+                    " (https://github.com/morilove37/KoiPage)"
+                ))
+                // Reject all redirects so credentials cannot reach another origin.
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30)),
+        )
+        .build()
+        .map_err(|_| error("BGM_CLIENT", "无法创建 Bangumi 连接"))?;
         Ok(Self {
             http,
             base: Url::parse("https://api.bgm.tv/v0/").map_err(|_| invalid())?,

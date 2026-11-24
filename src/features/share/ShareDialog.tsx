@@ -127,7 +127,7 @@ export default function ShareDialog({ games, onClose }: { games: Game[]; onClose
               {listed.length ? listed.map(game => (
                 <div key={game.id} className={`flex items-center gap-2.5 border-b border-border p-2.5 last:border-0 ${hidden.has(game.id) ? "bg-muted/30" : ""}`} data-share-game-id={game.id}>
                   <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-muted">
-                    {replaced.has(game.id) ? <img src={replacementCover} alt="已替换封面" className="h-full w-full object-contain" /> : <CoverImage gameId={game.id} path={game.coverPath} alt="" className="h-full w-full object-cover" fallbackText="" />}
+                    {replaced.has(game.id) ? <img src={replacementCover} alt="已替换封面" className="h-full w-full object-contain" /> : <CoverImage gameId={game.id} path={game.coverPath} thumbnail alt="" className="h-full w-full object-cover" fallbackText="" />}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium" title={game.title}>{game.title}</p>

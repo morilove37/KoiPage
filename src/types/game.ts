@@ -57,6 +57,7 @@ export interface Game {
   notes: string | null;
   vndbId: string | null;
   bangumiId: string | null;
+  twodfanId: string | null;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
 }
@@ -127,6 +128,7 @@ export interface GameInput {
   notes?: string | null;
   vndbId?: string | null;
   bangumiId?: string | null;
+  twodfanId?: string | null;
   /** Optional initial tag set. */
   tags?: number[];
   /** Tag names created and attached atomically when importing a new game. */
@@ -159,6 +161,7 @@ export type GamePatch = Partial<{
   notes: string | null;
   vndbId: string | null;
   bangumiId: string | null;
+  twodfanId: string | null;
   /** Replaces the game's tag set wholesale when present. */
   tags: number[];
   /** Creates or reuses these names and attaches them in the same save transaction. */

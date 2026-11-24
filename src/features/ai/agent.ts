@@ -1,5 +1,7 @@
 /** Pure, testable agent protocol. Never dispatch model-supplied IPC names. */
 import type { TokenUsage } from './pricing';
+import { assignFolder, createFolder, removeFolderTree, renameFolder } from '../library/folders.ts';
+import type { LibraryFolder } from '../library/folders.ts';
 export interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 export interface Message { role: 'user' | 'assistant' | 'tool'; content?: string | null; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: TokenUsage }
 export interface AgentEvent { kind: 'text' | 'tool' | 'thinking' | 'usage'; text: string; ok?: boolean; name?: string; detail?: string; usage?: TokenUsage }
@@ -13,6 +15,25 @@ function toolDetail(name: string, args: Record<string, unknown>, result: unknown
     return typeof record.total === 'number' ? `${record.total} 部游戏` : undefined;
   }
   if (name === 'get_stats') return undefined;
+  if (name === 'search_metadata') {
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    const count = Array.isArray(record.candidates) ? record.candidates.length : 0;
+    return query ? `搜索「${query.slice(0, 30)}」· ${count} 个候选` : undefined;
+  }
+  if (name === 'bulk_update') {
+    const count = typeof record.updated === 'number' ? record.updated : undefined;
+    return count === undefined ? undefined : `共 ${count} 部`;
+  }
+  if (name === 'manage_folder') {
+    const folder = typeof record.folder === 'string' ? record.folder : '';
+    if (folder) return folder.slice(0, 40);
+    const count = Array.isArray(record.folders) ? record.folders.length : 0;
+    return `${count} 个文件夹`;
+  }
+  if (name === 'create_tag') {
+    const tag = typeof record.tag === 'string' ? record.tag : '';
+    return tag ? tag.slice(0, 40) : undefined;
+  }
   const title = typeof record.title === 'string' ? record.title.trim() : '';
   return title ? title.slice(0, 40) : undefined;
 }
@@ -21,10 +42,16 @@ export function launchChecked(controller: { start: (id: number, before: () => Pr
   return controller.start(id, async () => !signal.aborted);
 }
 const statuses = ['unplayed', 'wishlist', 'playing', 'completed', 'on_hold', 'dropped'];
+const statusLabels: Record<string, string> = { unplayed: '未游玩', wishlist: '想玩', playing: '游玩中', completed: '已通关', on_hold: '搁置', dropped: '弃坑' };
+const fieldLabels: Record<string, string> = { title: '标题', original_title: '原名', developer: '开发商', release_date: '发售日', description: '简介', rating: '评分', vndb_id: 'VNDB 编号', bangumi_id: 'Bangumi 编号', tags: '标签' };
+const metadataProviders = ['nextmoe', 'vndb', 'bangumi', '2dfan'];
+const metadataFields = ['title', 'original_title', 'developer', 'release_date', 'description', 'rating', 'vndb_id', 'bangumi_id', 'tags'];
+const folderActions = ['list', 'create', 'rename', 'delete', 'assign', 'unassign'];
 const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[] = []) => ({
   type: 'function', function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } },
 });
 const idSchema = { type: 'integer', description: '必须使用本轮 list_games 返回的游戏 ID' };
+const idListSchema = { type: 'array', items: idSchema, minItems: 1, maxItems: 200, description: '必须全部来自本轮 list_games 返回的游戏 ID' };
 export const TOOLS = [
   tool('list_games', '搜索游戏库。修改、打开、启动之前必须先查询目标。返回有限页，可用 nextOffset 继续。', {
     search: { type: 'string' }, status: { type: 'string', enum: statuses }, favoriteOnly: { type: 'boolean' },
@@ -47,9 +74,37 @@ export const TOOLS = [
   }, ['id']),
   tool('open_game', '在软件中打开已查询游戏的详情页面。', { id: idSchema }, ['id']),
   tool('launch_game', '启动已查询游戏，软件会要求用户确认。不要在用户拒绝后重试。', { id: idSchema }, ['id']),
+  tool('bulk_update', '批量修改多部已查询游戏的共同字段。软件会先显示变更清单要求用户确认，用户拒绝后不要重试。只传需要修改的字段。', {
+    ids: idListSchema, status: { type: 'string', enum: statuses }, favorite: { type: 'boolean' },
+    addTags: { type: 'array', items: { type: 'string' }, maxItems: 20, description: '按名称追加标签，标签不存在会报错，请先用 create_tag' },
+    removeTags: { type: 'array', items: { type: 'string' }, maxItems: 20, description: '按名称移除标签' },
+  }, ['ids']),
+  tool('search_metadata', '在资料源搜索候选条目，只返回候选列表，不写入任何内容。选定候选后再用 apply_metadata。', {
+    query: { type: 'string', minLength: 1, maxLength: 200 },
+    sources: { type: 'array', items: { type: 'string', enum: metadataProviders }, maxItems: 4 },
+  }, ['query']),
+  tool('apply_metadata', '把选定资料源条目写入已查询游戏。软件会先显示将写入的字段要求用户确认，用户拒绝后不要重试。', {
+    id: idSchema,
+    provider: { type: 'string', enum: metadataProviders },
+    externalId: { type: 'string', minLength: 1, maxLength: 200, description: 'search_metadata 返回的 externalId' },
+    fields: { type: 'array', items: { type: 'string', enum: metadataFields }, maxItems: 9, description: '不传则使用该条目的全部可用字段' },
+    tagMode: { type: 'string', enum: ['merge', 'replace'], description: '默认 merge 合并标签' },
+  }, ['id', 'provider', 'externalId']),
+  tool('manage_folder', '管理自定义文件夹。list 只列出文件夹不写入；create 需要 name；rename 需要 folderId 与 name；delete 需要 folderId；assign 与 unassign 需要 folderId 与 ids。写操作都会先要求用户确认。', {
+    action: { type: 'string', enum: folderActions },
+    name: { type: 'string', minLength: 1, maxLength: 40 },
+    folderId: { type: 'string', minLength: 1, maxLength: 100, description: '已有文件夹 ID，可用 action=list 查看' },
+    ids: { type: 'array', items: idSchema, maxItems: 200 },
+  }, ['action']),
+  tool('create_tag', '创建新标签。同名标签已存在时直接复用，不重复创建。软件会先要求用户确认。', {
+    name: { type: 'string', minLength: 1, maxLength: 80 },
+    color: { type: 'string', maxLength: 40 },
+  }, ['name']),
 ];
 
 type GameData = { id: number; title: string; [key: string]: unknown };
+/** What the user is asked to approve before a write is executed. */
+export interface ConfirmationPreview { title: string; detail?: string; items?: string[] }
 export interface ToolDependencies {
   list: (filter: { search?: string; status?: string; favoriteOnly?: boolean }) => Promise<GameData[]>;
   get: (id: number) => Promise<GameData>;
@@ -59,6 +114,15 @@ export interface ToolDependencies {
   open: (id: number) => Promise<void>;
   launch: (id: number) => Promise<{ kind: string }>;
   confirmLaunch: (title: string) => Promise<boolean>;
+  /** Approve a batch write; resolves false when the user declines or stops. */
+  confirm: (preview: ConfirmationPreview) => Promise<boolean>;
+  batchUpdate: (ids: number[], patch: Record<string, unknown>) => Promise<number>;
+  searchMetadata: (query: string, sources?: string[]) => Promise<unknown>;
+  metadataDetail: (provider: string, externalId: string) => Promise<Record<string, unknown>>;
+  applyMetadata: (id: number, detail: Record<string, unknown>, fields: string[], tagMode?: string) => Promise<unknown>;
+  folders: () => Promise<LibraryFolder[]>;
+  saveFolders: (folders: LibraryFolder[]) => Promise<boolean>;
+  createTag: (name: string, color?: string) => Promise<{ id: number; name: string }>;
   changed: () => void;
 }
 function project(game: GameData) {
@@ -72,8 +136,39 @@ function integer(value: unknown, name: string, min: number, max: number): number
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) throw new ToolInputError(`${name} 参数无效`);
   return value;
 }
+/** Accept only ids from the current session's list_games results. */
+function knownIds(value: unknown, known: Set<number>, name: string): number[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) throw new ToolInputError(`${name} 参数无效`);
+  const ids = [...new Set(value.map(item => integer(item, name, 1, Number.MAX_SAFE_INTEGER)))];
+  for (const id of ids) if (!known.has(id)) throw new ToolInputError('请先查询游戏，使用查询结果中的 ID');
+  return ids;
+}
+function nameList(value: unknown, name: string, max = 20): string[] {
+  if (!Array.isArray(value) || value.length > max) throw new ToolInputError(`${name} 参数无效`);
+  const names = value.map(item => {
+    if (typeof item !== 'string' || !item.trim() || item.length > 80) throw new ToolInputError(`${name} 参数无效`);
+    return item.trim();
+  });
+  return [...new Set(names)];
+}
+function singleLine(value: unknown, name: string, max: number): string {
+  if (typeof value !== 'string') throw new ToolInputError(`${name} 参数无效`);
+  const text = value.trim();
+  if (!text || text.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\r\n\t]/.test(text)) throw new ToolInputError(`${name} 内容无效或超过 ${max} 字符`);
+  return text;
+}
+/** Stable-enough folder id without touching the model-supplied data. */
+function newFolderId(existing: LibraryFolder[]): string {
+  const taken = new Set(existing.map(folder => folder.id));
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const id = `folder-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    if (!taken.has(id)) return id;
+  }
+  throw new ToolInputError('无法生成新的文件夹标识，请重试');
+}
 export function createToolExecutor(deps: ToolDependencies, signal?: AbortSignal) {
   const known = new Set<number>();
+  const titles = new Map<number, string>();
   const descriptionReads = new Map<number, { source: string; until: number }>();
   return async (call: ToolCall): Promise<Record<string, unknown>> => {
     signal?.throwIfAborted();
@@ -99,10 +194,152 @@ export function createToolExecutor(deps: ToolDependencies, signal?: AbortSignal)
         return Number(b[sort as string] ?? -1) - Number(a[sort as string] ?? -1) || a.id - b.id;
       });
       const page = games.slice(offset, offset + limit);
-      for (const g of page) known.add(g.id);
+      for (const g of page) { known.add(g.id); titles.set(g.id, String(g.title)); }
       return { total: games.length, games: page.map(project), nextOffset: offset + limit < games.length ? offset + limit : null };
     }
     if (name === 'get_stats') return { stats: await deps.stats() };
+    if (name === 'search_metadata') {
+      const query = singleLine(args.query, 'query', 200);
+      if ('sources' in args) {
+        if (!Array.isArray(args.sources) || args.sources.length > 4 || args.sources.some(s => !metadataProviders.includes(s as string))) throw new ToolInputError('资料源参数无效');
+      }
+      const result = await deps.searchMetadata(query, args.sources as string[] | undefined) as Record<string, unknown>;
+      signal?.throwIfAborted();
+      const candidates = Array.isArray(result.candidates) ? result.candidates as Array<Record<string, unknown>> : [];
+      return {
+        query,
+        candidates: candidates.slice(0, 20).map(item => ({
+          provider: item.provider, externalId: item.externalId, title: item.title, originalTitle: item.originalTitle,
+          releaseDate: item.releaseDate, rating: item.rating, sourceLabel: item.sourceLabel,
+        })),
+        errors: Array.isArray(result.errors) ? result.errors : [],
+      };
+    }
+    if (name === 'create_tag') {
+      const tagName = singleLine(args.name, 'name', 80);
+      const color = 'color' in args ? singleLine(args.color, 'color', 40) : undefined;
+      const tags = await deps.tags();
+      const existing = tags.find(tag => tag.name.trim().toLowerCase() === tagName.toLowerCase());
+      if (existing) return { created: false, reused: true, tag: existing.name, id: existing.id };
+      if (!(await deps.confirm({ title: `创建标签「${tagName}」？`, detail: '标签会出现在标签页和筛选条件中。' }))) return { cancelled: true, tag: tagName };
+      signal?.throwIfAborted();
+      const created = await deps.createTag(tagName, color);
+      deps.changed();
+      return { created: true, tag: created.name, id: created.id };
+    }
+    if (name === 'manage_folder') {
+      const action = args.action as string;
+      if (!folderActions.includes(action)) throw new ToolInputError('文件夹操作无效');
+      const folders = await deps.folders();
+      const folderOf = (folderId: unknown) => {
+        const id = singleLine(folderId, 'folderId', 100);
+        const folder = folders.find(item => item.id === id);
+        if (!folder) throw new ToolInputError('文件夹不存在，请先用 action=list 查看');
+        return folder;
+      };
+      if (action === 'list') return { folders: folders.map(folder => ({ id: folder.id, name: folder.name, parentId: folder.parentId ?? null, gameCount: folder.gameIds.length })) };
+      let next: LibraryFolder[]; let preview: ConfirmationPreview;
+      if (action === 'create') {
+        const folderName = singleLine(args.name, 'name', 40);
+        next = createFolder(folders, folderName, newFolderId(folders));
+        preview = { title: `创建文件夹「${folderName}」？`, detail: '文件夹只保存在本机，不影响游戏文件。' };
+      } else if (action === 'rename') {
+        const folder = folderOf(args.folderId);
+        const folderName = singleLine(args.name, 'name', 40);
+        next = renameFolder(folders, folder.id, folderName);
+        preview = { title: `把文件夹「${folder.name}」改名为「${folderName}」？` };
+      } else if (action === 'delete') {
+        const folder = folderOf(args.folderId);
+        next = removeFolderTree(folders, folder.id);
+        preview = { title: `删除文件夹「${folder.name}」？`, detail: '只会删除文件夹分类，不会删除游戏，也不会删除硬盘上的文件。' };
+      } else {
+        const folder = folderOf(args.folderId);
+        const ids = knownIds(args.ids, known, 'ids');
+        next = assignFolder(folders, folder.id, ids, action === 'assign');
+        preview = {
+          title: action === 'assign' ? `把 ${ids.length} 部游戏加入「${folder.name}」？` : `把 ${ids.length} 部游戏移出「${folder.name}」？`,
+          items: ids.slice(0, 12).map(id => titles.get(id) ?? `#${id}`),
+        };
+      }
+      if (!(await deps.confirm(preview))) return { cancelled: true, action };
+      signal?.throwIfAborted();
+      if (!(await deps.saveFolders(next))) return { error: '保存文件夹失败，请稍后重试' };
+      deps.changed();
+      return { action, saved: true };
+    }
+    if (name === 'bulk_update') {
+      const ids = knownIds(args.ids, known, 'ids');
+      const patch: Record<string, unknown> = {};
+      if ('status' in args) patch.status = args.status;
+      if ('favorite' in args) {
+        if (typeof args.favorite !== 'boolean') throw new ToolInputError('收藏参数无效');
+        patch.favorite = args.favorite;
+      }
+      const addNames = 'addTags' in args ? nameList(args.addTags, 'addTags') : [];
+      const removeNames = 'removeTags' in args ? nameList(args.removeTags, 'removeTags') : [];
+      if (addNames.length || removeNames.length) {
+        const tags = await deps.tags();
+        const byName = new Map(tags.map(tag => [tag.name.trim().toLowerCase(), tag.id]));
+        const resolve = (names: string[], label: string) => names.map(tagName => {
+          const id = byName.get(tagName.toLowerCase());
+          if (id === undefined) throw new ToolInputError(`${label}中的标签「${tagName}」不存在，请先用 create_tag 创建`);
+          return id;
+        });
+        const addTagIds = resolve(addNames, 'addTags');
+        const removeTagIds = resolve(removeNames, 'removeTags');
+        if (addTagIds.some(id => removeTagIds.includes(id))) throw new ToolInputError('同一个标签不能同时添加和移除');
+        if (addTagIds.length) patch.addTagIds = addTagIds;
+        if (removeTagIds.length) patch.removeTagIds = removeTagIds;
+      }
+      if (!Object.keys(patch).length) throw new ToolInputError('没有需要修改的内容');
+      const changes: string[] = [];
+      if ('status' in patch) changes.push(`状态改为「${statusLabels[patch.status as string] ?? patch.status}」`);
+      if ('favorite' in patch) changes.push(patch.favorite ? '加入收藏' : '取消收藏');
+      if (addNames.length) changes.push(`追加标签 ${addNames.join('、')}`);
+      if (removeNames.length) changes.push(`移除标签 ${removeNames.join('、')}`);
+      if (!(await deps.confirm({
+        title: `批量修改 ${ids.length} 部游戏？`, detail: changes.join('；'),
+        items: ids.slice(0, 12).map(id => titles.get(id) ?? `#${id}`),
+      }))) return { cancelled: true };
+      signal?.throwIfAborted();
+      const updated = await deps.batchUpdate(ids, patch);
+      deps.changed();
+      return { updated, changes };
+    }
+    if (name === 'apply_metadata') {
+      const id = integer(args.id, 'id', 1, Number.MAX_SAFE_INTEGER);
+      if (!known.has(id)) throw new ToolInputError('请先查询游戏，使用查询结果中的 ID');
+      const provider = args.provider as string;
+      if (!metadataProviders.includes(provider)) throw new ToolInputError('资料源无效');
+      const externalId = singleLine(args.externalId, 'externalId', 200);
+      const tagMode = 'tagMode' in args ? args.tagMode as string : 'merge';
+      if (tagMode !== 'merge' && tagMode !== 'replace') throw new ToolInputError('标签模式无效');
+      const detail = await deps.metadataDetail(provider, externalId);
+      signal?.throwIfAborted();
+      const available = metadataFields.filter(field => {
+        const value = detail[field === 'original_title' ? 'titleOriginal' : field === 'release_date' ? 'releaseDate' : field === 'vndb_id' ? 'vndbId' : field === 'bangumi_id' ? 'bangumiId' : field];
+        if (field === 'tags') return Array.isArray(detail.tags) && detail.tags.length > 0;
+        return value !== undefined && value !== null && String(value).trim() !== '';
+      });
+      let fields = available;
+      if ('fields' in args) {
+        if (!Array.isArray(args.fields) || !args.fields.length || args.fields.some(f => !metadataFields.includes(f as string))) throw new ToolInputError('字段参数无效');
+        fields = [...new Set(args.fields as string[])];
+        const missing = fields.filter(field => !available.includes(field));
+        if (missing.length) throw new ToolInputError(`该条目没有这些字段：${missing.join('、')}`);
+      }
+      if (!fields.length) throw new ToolInputError('该条目没有可写入的字段');
+      const gameTitle = titles.get(id) ?? String((await deps.get(id)).title ?? '');
+      if (!(await deps.confirm({
+        title: `把资料写入「${gameTitle}」？`,
+        detail: `来源 ${provider} · 将写入 ${fields.length} 个字段`,
+        items: fields.map(field => fieldLabels[field] ?? field),
+      }))) return { cancelled: true, id };
+      signal?.throwIfAborted();
+      const applied = await deps.applyMetadata(id, detail, fields, tagMode);
+      deps.changed();
+      return { applied: true, id, title: gameTitle, fields, result: applied };
+    }
     const id = integer(args.id, 'id', 1, Number.MAX_SAFE_INTEGER);
     if (!known.has(id)) throw new ToolInputError('请先查询游戏，使用查询结果中的 ID');
     const game = await deps.get(id);

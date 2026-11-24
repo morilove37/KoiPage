@@ -52,6 +52,8 @@ pub struct Game {
     pub notes: Option<String>,
     pub vndb_id: Option<String>,
     pub bangumi_id: Option<String>,
+    /// 2DFan subject id this game is bound to, for the guide panel.
+    pub twodfan_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -137,6 +139,8 @@ pub struct GameInput {
     #[serde(default)]
     pub bangumi_id: Option<String>,
     #[serde(default)]
+    pub twodfan_id: Option<String>,
+    #[serde(default)]
     pub tags: Vec<i64>,
     /// Names submitted by the import wizard. Created and linked in the same
     /// transaction as the game, so cancelling a draft leaves no orphan tags.
@@ -190,6 +194,8 @@ pub struct GamePatch {
     pub vndb_id: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
     pub bangumi_id: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub twodfan_id: Option<Option<String>>,
     /// When present, replaces the game's tag set wholesale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<i64>>,
@@ -220,6 +226,7 @@ impl GamePatch {
             && self.notes.is_none()
             && self.vndb_id.is_none()
             && self.bangumi_id.is_none()
+            && self.twodfan_id.is_none()
             && self.tags.is_none()
             && self.tag_names.is_empty()
     }

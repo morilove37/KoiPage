@@ -3,17 +3,17 @@
 use super::{CmdError, CmdResult, MetadataCandidate, MetadataDetail, Provider, SourceRating};
 use scraper::{ElementRef, Html, Selector};
 
-const BASE: &str = "https://2dfan.com";
-const VERIFY_HINT: &str = "请点击「2DFan 登录 / 验证」，在恋页打开的站点窗口中完成登录或验证后，返回并点击「已完成，重试」。如仍受限，可使用其他数据源。";
+pub(super) const BASE: &str = "https://2dfan.com";
+pub(super) const VERIFY_HINT: &str = "请点击「2DFan 登录 / 验证」，在恋页打开的站点窗口中完成登录或验证后，返回并点击「已完成，重试」。如仍受限，可使用其他数据源。";
 
-fn selector(css: &str) -> Selector { Selector::parse(css).expect("static 2DFan selector") }
-fn text(element: ElementRef<'_>) -> String {
+pub(super) fn selector(css: &str) -> Selector { Selector::parse(css).expect("static 2DFan selector") }
+pub(super) fn text(element: ElementRef<'_>) -> String {
     element.text().collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
-fn first_text(root: ElementRef<'_>, css: &str) -> Option<String> {
+pub(super) fn first_text(root: ElementRef<'_>, css: &str) -> Option<String> {
     root.select(&selector(css)).map(text).find(|s| !s.is_empty())
 }
-fn absolute_url(value: &str) -> Option<String> {
+pub(super) fn absolute_url(value: &str) -> Option<String> {
     let url = reqwest::Url::parse(BASE).ok()?.join(value).ok()?;
     matches!(url.scheme(), "http" | "https").then(|| url.to_string())
 }
@@ -123,16 +123,20 @@ fn parse_detail(html: &str, id: &str) -> CmdResult<MetadataDetail> {
     })
 }
 
-async fn fetch(url: reqwest::Url) -> CmdResult<String> {
+pub(super) async fn fetch(url: reqwest::Url) -> CmdResult<String> {
     tokio::time::timeout(std::time::Duration::from_secs(20), fetch_page(url)).await
         .map_err(|_| CmdError("2DFan 请求超时，请稍后重试".into()))?
 }
 
-async fn fetch_page(mut url: reqwest::Url) -> CmdResult<String> {
-    let client = reqwest::Client::builder().user_agent(super::verification::user_agent())
-        .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build().map_err(|_| CmdError("无法创建 2DFan 网络客户端".into()))?;
+pub(super) async fn fetch_page(mut url: reqwest::Url) -> CmdResult<String> {
+    let client = crate::net::proxy::apply(
+        reqwest::Client::builder()
+            .user_agent(super::verification::user_agent())
+            .timeout(std::time::Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none()),
+    )
+    .build()
+    .map_err(|_| CmdError("无法创建 2DFan 网络客户端".into()))?;
     let mut followed = 0;
     let mut response = loop {
         // Native cookies are scoped afresh on every hop. reqwest deliberately
@@ -141,7 +145,14 @@ async fn fetch_page(mut url: reqwest::Url) -> CmdResult<String> {
         let mut request = client.get(url.clone()).header(reqwest::header::REFERER, BASE);
         if let Some(cookie) = session { request = request.header(reqwest::header::COOKIE, cookie); }
         let response = request.send().await
-            .map_err(|e| CmdError(if e.is_timeout() { "2DFan 请求超时，请稍后重试".into() } else { format!("2DFan 请求失败：{e}") }))?;
+            .map_err(|e| {
+                let hint = crate::net::proxy::failure_hint();
+                CmdError(if e.is_timeout() {
+                    format!("2DFan 请求超时，请稍后重试{hint}")
+                } else {
+                    format!("2DFan 请求失败：{e}{hint}")
+                })
+            })?;
         if response.status().is_redirection() {
             let location = response.headers().get(reqwest::header::LOCATION)
                 .ok_or_else(|| CmdError(format!("2DFan 返回无效重定向。{VERIFY_HINT}")))?;

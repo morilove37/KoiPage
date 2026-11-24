@@ -13,6 +13,7 @@ import { invoke, recordLog } from './logging';
 import Database from '@tauri-apps/plugin-sql';
 import { Channel } from '@tauri-apps/api/core';
 import { bootstrapDatabase } from './database-bootstrap';
+import { notifyLibraryDataChanged } from './library-signal';
 
 import type {
   Game,
@@ -93,6 +94,22 @@ async function withDb<T>(fn: (db: Database) => Promise<T>): Promise<T> {
 // Games
 // ---------------------------------------------------------------------------
 
+/**
+ * Run one write, then tell the shared library cache its rows are stale.
+ *
+ * 首页 / 游戏库 / 游戏文件夹 render the cached `games_list` rows, so a write
+ * from anywhere else (标签页, 详情页, 元数据, AI 助手) has to invalidate that
+ * cache — otherwise the next navigation would show pre-edit data until restart.
+ * Notifying only after the command resolved keeps a failed write from
+ * discarding good cached rows.
+ */
+function mutating<T>(run: () => Promise<T>): Promise<T> {
+  return run().then(result => {
+    notifyLibraryDataChanged();
+    return result;
+  });
+}
+
 export function gamesList(filter: GameListFilter = {}): Promise<Game[]> {
   return ready.then(() =>
     invoke<Game[]>('games_list', {
@@ -108,15 +125,15 @@ export function gameGet(id: number): Promise<GameDetail> {
 }
 
 export function gameCreate(input: GameInput): Promise<Game> {
-  return ready.then(() => invoke<Game>('game_create', { input }));
+  return mutating(() => ready.then(() => invoke<Game>('game_create', { input })));
 }
 
 export function gameUpdate(id: number, patch: GamePatch): Promise<Game> {
-  return ready.then(() => invoke<Game>('game_update', { id, patch }));
+  return mutating(() => ready.then(() => invoke<Game>('game_update', { id, patch })));
 }
 
 export function gameDelete(id: number): Promise<void> {
-  return ready.then(() => invoke<void>('game_delete', { id }));
+  return mutating(() => ready.then(() => invoke<void>('game_delete', { id })));
 }
 
 /** Outcome of {@link gamesDelete}. */
@@ -142,7 +159,7 @@ export interface DeleteGamesResult {
  * **files on disk are never touched**.
  */
 export function gamesDelete(ids: number[]): Promise<DeleteGamesResult> {
-  return ready.then(() => invoke<DeleteGamesResult>('games_delete', { ids }));
+  return mutating(() => ready.then(() => invoke<DeleteGamesResult>('games_delete', { ids })));
 }
 
 /** All `[gameId, tagId]` links, for rendering tag chips without N+1 queries. */
@@ -163,7 +180,7 @@ export function tagsList(): Promise<Tag[]> {
 }
 
 export function tagCreate(name: string, color?: string | null): Promise<Tag> {
-  return ready.then(() => invoke<Tag>('tag_create', { name, color: color ?? null }));
+  return mutating(() => ready.then(() => invoke<Tag>('tag_create', { name, color: color ?? null })));
 }
 
 export function tagUpdate(
@@ -171,22 +188,22 @@ export function tagUpdate(
   name?: string | null,
   color?: string | null,
 ): Promise<Tag> {
-  return ready.then(() =>
+  return mutating(() => ready.then(() =>
     invoke<Tag>('tag_update', {
       id,
       name: name ?? null,
       // `undefined` means "leave colour alone"; `null` clears it.
       color: color === undefined ? null : color,
     }),
-  );
+  ));
 }
 
 export function tagDelete(id: number): Promise<void> {
-  return ready.then(() => invoke<void>('tag_delete', { id }));
+  return mutating(() => ready.then(() => invoke<void>('tag_delete', { id })));
 }
 
 export function gameSetTags(gameId: number, tagIds: number[]): Promise<number[]> {
-  return ready.then(() => invoke<number[]>('game_set_tags', { gameId, tagIds }));
+  return mutating(() => ready.then(() => invoke<number[]>('game_set_tags', { gameId, tagIds })));
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +267,27 @@ export function settingsGetAll(): Promise<Setting[]> {
 
 export function settingsDelete(key: string): Promise<boolean> {
   return ready.then(() => invoke<boolean>('settings_delete', { key }));
+}
+
+/** The outbound proxy used by every metadata, AI and share request. */
+export interface ProxyConfig {
+  enabled: boolean;
+  /** Empty until the user fills it in; e.g. `http://127.0.0.1:7890`. */
+  url: string;
+}
+
+export function networkProxyGet(): Promise<ProxyConfig> {
+  return ready.then(() => invoke<ProxyConfig>('network_proxy_get'));
+}
+
+/** Persists and applies immediately — no restart needed. */
+export function networkProxySave(config: ProxyConfig): Promise<ProxyConfig> {
+  return ready.then(() => invoke<ProxyConfig>('network_proxy_save', { config }));
+}
+
+/** Sends one request through the given address and reports the round trip. */
+export function networkProxyTest(config: ProxyConfig): Promise<string> {
+  return ready.then(() => invoke<string>('network_proxy_test', { config }));
 }
 
 // ---------------------------------------------------------------------------
@@ -655,14 +693,14 @@ export function metadataApply(
   fields: MetadataField[],
   tagMode?: MetadataTagMode,
 ): Promise<AppliedMetadata> {
-  return ready.then(() =>
+  return mutating(() => ready.then(() =>
     invoke<AppliedMetadata>('metadata_apply', {
       gameId,
       detail,
       fields,
       tagMode: tagMode ?? null,
     }),
-  );
+  ));
 }
 
 /**
@@ -753,12 +791,12 @@ export function metadataAutofetch(
   gameIds: number[],
   options: { sources?: MetadataProvider[]; apply?: boolean; delayMs?: number } = {},
 ): Promise<AutofetchSummary> {
-  return ready.then(() =>
+  return mutating(() => ready.then(() =>
     invoke<AutofetchSummary>('metadata_autofetch', {
       gameIds,
       sources: options.sources ?? [],
       apply: options.apply ?? true,
       delayMs: options.delayMs ?? null,
     }),
-  );
+  ));
 }

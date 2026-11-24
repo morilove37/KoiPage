@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { create } from 'zustand';
 import { settingsGetAll, settingsSet, syncAssetScope } from '@/lib/db';
+import type { SettingsSnapshot } from '@/lib/settings-snapshot';
 import { COVER_SETTING_PREFIX, DEFAULT_COVER, parseCoverPreferences, mergeCoverPreferences } from './model';
 import type { CoverPreferences } from './model';
 
@@ -13,18 +14,40 @@ interface CoverState {
 export const useCoverStore = create<CoverState>(() => ({ loaded: false, error: null, preferences: {}, saving: {} }));
 let hydration: Promise<void> | null = null;
 
+/** A startup snapshot captured by `main.tsx`, consumed by the first hydration. */
+let seedSnapshot: SettingsSnapshot | null = null;
+
+/**
+ * Hand the startup settings read to the cover store.
+ *
+ * `main.tsx` already reads every setting once before the first paint; the
+ * preferences live in that same table under `game_cover:<id>`, so the first
+ * cover render can be seeded from it instead of issuing a second full dump.
+ */
+export function seedCoverPreferences(snapshot: SettingsSnapshot): void {
+  seedSnapshot = snapshot;
+}
+
+function preferencesFrom(settings: Iterable<{ key: string; value: string | null }>): Record<number, CoverPreferences> {
+  const preferences: Record<number, CoverPreferences> = {};
+  for (const setting of settings) {
+    if (!setting.key.startsWith(COVER_SETTING_PREFIX)) continue;
+    const id = Number(setting.key.slice(COVER_SETTING_PREFIX.length));
+    if (Number.isSafeInteger(id) && id > 0) preferences[id] = parseCoverPreferences(setting.value);
+  }
+  return preferences;
+}
+
 export function loadCoverPreferences(): Promise<void> {
   if (useCoverStore.getState().loaded) return Promise.resolve();
   if (!hydration) {
     hydration = (async () => {
-      const settings = await settingsGetAll();
+      const seed = seedSnapshot;
+      seedSnapshot = null;
+      const preferences = seed
+        ? preferencesFrom(Array.from(seed, ([key, value]) => ({ key, value })))
+        : preferencesFrom(await settingsGetAll());
       await syncAssetScope();
-      const preferences: Record<number, CoverPreferences> = {};
-      for (const setting of settings) {
-        if (!setting.key.startsWith(COVER_SETTING_PREFIX)) continue;
-        const id = Number(setting.key.slice(COVER_SETTING_PREFIX.length));
-        if (Number.isSafeInteger(id) && id > 0) preferences[id] = parseCoverPreferences(setting.value);
-      }
       useCoverStore.setState({ preferences, loaded: true, error: null });
     })().catch(cause => {
       useCoverStore.setState({ error: String(cause) });
